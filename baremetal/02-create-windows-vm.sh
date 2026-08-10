@@ -35,16 +35,18 @@ USB_ADDR=""
 MEMORY_GB=16
 CPUS=8
 CPUSET=""
+RESERVE_AT_BOOT=0
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --name)           VM_NAME="$2";   shift 2 ;;
-        --windows-disk)   WIN_DISK="$2";  shift 2 ;;
-        --gpu)            GPU_ADDR="$2";  shift 2 ;;
-        --usb-controller) USB_ADDR="$2";  shift 2 ;;
-        --memory)         MEMORY_GB="$2"; shift 2 ;;
-        --cpus)           CPUS="$2";      shift 2 ;;
-        --cpuset)         CPUSET="$2";    shift 2 ;;
+        --name)            VM_NAME="$2";   shift 2 ;;
+        --windows-disk)    WIN_DISK="$2";  shift 2 ;;
+        --gpu)             GPU_ADDR="$2";  shift 2 ;;
+        --usb-controller)  USB_ADDR="$2";  shift 2 ;;
+        --memory)          MEMORY_GB="$2"; shift 2 ;;
+        --cpus)            CPUS="$2";      shift 2 ;;
+        --cpuset)          CPUSET="$2";    shift 2 ;;
+        --reserve-at-boot) RESERVE_AT_BOOT=1; shift ;;
         *) echo "不明なオプション: $1" >&2; exit 1 ;;
     esac
 done
@@ -103,14 +105,21 @@ if virsh dominfo "$VM_NAME" >/dev/null 2>&1; then
     exit 1
 fi
 
-# --- HugePages の設定 (メモリを起動時に物理確保し、断片化・スワップの影響を排除) ---
-echo "==> HugePages を設定しています (${MEMORY_GB}GB 分)..."
+# --- HugePages (Windows 用メモリの物理確保) ---
+# 既定では Linux 起動時の常時予約はせず、Windows の起動時に確保・停止時に解放する
+# (03-start-windows.sh が自動処理)。Windows 停止中は全メモリを Linux が使える。
+# 常時予約したい場合 (確保の確実性を最優先) は --reserve-at-boot を指定。
 HUGEPAGES=$(( MEMORY_GB * 1024 / 2 ))   # 2MB ページ
-cat > /etc/sysctl.d/90-double-os-boot-hugepages.conf <<EOF
+if [[ $RESERVE_AT_BOOT -eq 1 ]]; then
+    echo "==> HugePages を常時予約に設定しています (${MEMORY_GB}GB 分)..."
+    cat > /etc/sysctl.d/90-double-os-boot-hugepages.conf <<EOF
 vm.nr_hugepages = $HUGEPAGES
 EOF
-sysctl -p /etc/sysctl.d/90-double-os-boot-hugepages.conf >/dev/null || \
-    echo "    注意: HugePages の即時確保に失敗しました (メモリ断片化)。再起動後に確保されます。"
+    sysctl -p /etc/sysctl.d/90-double-os-boot-hugepages.conf >/dev/null || \
+        echo "    注意: 即時確保に失敗しました (メモリ断片化)。Linux 再起動後に確保されます。"
+else
+    echo "==> メモリ (${MEMORY_GB}GB) は Windows 起動時に確保し、停止時に解放します。"
+fi
 
 # --- GPU の全ファンクションを収集 (本体 + HDMI オーディオ等) ---
 HOSTDEV_ARGS=()

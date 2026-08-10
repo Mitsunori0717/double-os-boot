@@ -117,16 +117,20 @@ if [[ -n "$MEMORY_GB" ]]; then
     virt-xml "$VM_NAME" --edit \
         --memory memory=$(( MEMORY_GB * 1024 )),currentMemory=$(( MEMORY_GB * 1024 ))
 
-    # HugePages の確保量も合わせて更新
-    HUGEPAGES=$(( MEMORY_GB * 1024 / 2 ))
-    cat > /etc/sysctl.d/90-double-os-boot-hugepages.conf <<EOF
+    # 常時予約モード (02 の --reserve-at-boot) の場合のみ、予約量も合わせて更新。
+    # 既定 (オンデマンド) では 03-start-windows.sh が起動時に新しい量を自動確保する。
+    BOOT_RESERVE_CONF=/etc/sysctl.d/90-double-os-boot-hugepages.conf
+    if [[ -f "$BOOT_RESERVE_CONF" ]]; then
+        HUGEPAGES=$(( MEMORY_GB * 1024 / 2 ))
+        cat > "$BOOT_RESERVE_CONF" <<EOF
 vm.nr_hugepages = $HUGEPAGES
 EOF
-    sysctl -p /etc/sysctl.d/90-double-os-boot-hugepages.conf >/dev/null || true
-    actual=$(grep HugePages_Total /proc/meminfo | awk '{print $2}')
-    if (( actual < HUGEPAGES )); then
-        echo "    注意: HugePages の即時確保が ${actual}/${HUGEPAGES} ページに留まりました"
-        echo "          (メモリ断片化)。増量分を確実に反映するには Linux を一度再起動してください。"
+        sysctl -p "$BOOT_RESERVE_CONF" >/dev/null || true
+        actual=$(grep HugePages_Total /proc/meminfo | awk '{print $2}')
+        if (( actual < HUGEPAGES )); then
+            echo "    注意: 常時予約の即時確保が ${actual}/${HUGEPAGES} ページに留まりました"
+            echo "          (メモリ断片化)。増量分を確実に反映するには Linux を一度再起動してください。"
+        fi
     fi
 fi
 
