@@ -129,16 +129,24 @@ sudo bash baremetal/02-create-windows-vm.sh \
 `--cpus` の代わりに `--cpuset` で **どの論理 CPU を Windows に渡すか明示** してください
 (番号は STEP 1 のチェック結果に表示されます)。
 
-例: i7-14700 (Pコア8個=論理0-15、Eコア12個=論理16-27) で、
-Linux 側の占有ソフトに Pコア6個 (論理0-11) を確保し、残りを Windows に渡す場合:
+推奨例: i7-14700 (Pコア8個=論理0-15、Eコア12個=論理16-27) で、
+**Windows 側がメインの重い作業、Linux 側は軽量な常駐ソフト (データロガー等)** の場合:
 
 ```bash
 sudo bash baremetal/02-create-windows-vm.sh \
     --windows-disk /dev/disk/by-id/... --gpu 0000:01:00.0 \
-    --memory 16 --cpuset 12-27
+    --memory 16 --cpuset 4-23
 ```
 
-Linux 側でソフトを特定コアに固定するには: `taskset -c 0-11 <起動コマンド>`
+| 側 | 割り当て | 論理 CPU |
+|---|---|---|
+| Windows (重い作業) | Pコア6個 + Eコア8個 = 20 スレッド | 4–23 |
+| Linux + ロガー等 | Pコア2個 + Eコア4個 = 8 スレッド | 0–3, 24–27 |
+
+Linux 側で常駐ソフトを特定コアに固定するには: `taskset -c 2-3 <起動コマンド>`
+(論理 0-1 はカーネル・割り込み処理が集まりやすいため空けておくと安定します)
+
+割り当ては後から `baremetal/06-tune-resources.sh` でいつでも変更できます (下記)。
 
 ### STEP 4: データ共有の設定
 
@@ -168,9 +176,29 @@ sudo bash baremetal/05-share-keyboard-mouse.sh
 | 同時起動中の Windows を終了 | Windows 内で通常通りシャットダウン |
 | ファイルを渡す | Windows: `Z:\` ⇔ Linux: `/srv/shared` |
 | キーボード/マウスの切替 | 左右 Ctrl 同時押し (STEP 5 設定時) |
+| 現在の割り当てと負荷の確認 | `bash baremetal/06-tune-resources.sh --show` |
+| CPU/メモリ配分の調整 | Windows を終了 → `sudo bash baremetal/06-tune-resources.sh --cpuset 2-27` 等 → Windows 再起動で反映 |
 
 **重要な運用ルール**: 同時起動中、Linux 側から C: ディスクを絶対にマウントしないでください
 (スクリプトが自動で保護設定を行いますが、手動マウントは破損の原因になります)。
+
+### 性能の様子見と調整
+
+割り当ては固定したら終わりではなく、**運用しながら何度でも変更できます**。
+変更に必要なのは Windows 側の再起動だけで、PC 全体の再起動や Linux 側 (ロガー等) の停止は不要です。
+
+```bash
+bash baremetal/06-tune-resources.sh --show          # 現状確認 (ピンニング・HugePages・観察のヒント)
+bash baremetal/03-start-windows.sh --stop           # Windows を終了
+sudo bash baremetal/06-tune-resources.sh --cpuset 2-27   # 例: Windows へ渡すコアを増やす
+sudo bash baremetal/06-tune-resources.sh --memory 20     # 例: メモリを 20GB に増やす
+bash baremetal/03-start-windows.sh                  # 再起動して反映
+```
+
+判断の目安:
+- Windows のタスクマネージャーで CPU が常時高止まり → Windows へ渡すコアを増やす
+- Linux 側 `htop` でロガーの処理が詰まる・取りこぼす → Windows 側を減らして Linux の Pコアを増やす
+- メモリ増量時は HugePages の再確保が必要になるため、断片化していると Linux の再起動を求められることがあります (スクリプトが検出して案内します)
 
 ## リポジトリ構成
 
@@ -181,6 +209,7 @@ baremetal/02-create-windows-vm.sh    物理ディスク/GPU/CPU 割り当て定�
 baremetal/03-start-windows.sh        同時起動モードで Windows を起動/停止
 baremetal/04-setup-file-sharing.sh   Samba によるデータ共有
 baremetal/05-share-keyboard-mouse.sh 1組のキーボード/マウスを両OSで共有
+baremetal/06-tune-resources.sh       CPU/メモリ配分の確認と調整 (運用しながら変更可)
 docs/DUAL-BOOT-SETUP.md              ネイティブ・デュアルブートの構築手順
 docs/ARCHITECTURE.md                 技術解説 (なぜこの設計か・何がどこまで可能か)
 docs/TROUBLESHOOTING.md              トラブルシューティング
