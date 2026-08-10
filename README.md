@@ -124,6 +124,22 @@ sudo bash baremetal/02-create-windows-vm.sh \
 物理 C: ディスク・実 GPU・CPU コア・メモリの割り当てを定義します。
 仮想ディスクは作成しません — C: の物理ディスクをそのまま起動します。
 
+#### P/E コア混成 CPU (Intel 12世代以降) の場合
+
+`--cpus` の代わりに `--cpuset` で **どの論理 CPU を Windows に渡すか明示** してください
+(番号は STEP 1 のチェック結果に表示されます)。
+
+例: i7-14700 (Pコア8個=論理0-15、Eコア12個=論理16-27) で、
+Linux 側の占有ソフトに Pコア6個 (論理0-11) を確保し、残りを Windows に渡す場合:
+
+```bash
+sudo bash baremetal/02-create-windows-vm.sh \
+    --windows-disk /dev/disk/by-id/... --gpu 0000:01:00.0 \
+    --memory 16 --cpuset 12-27
+```
+
+Linux 側でソフトを特定コアに固定するには: `taskset -c 0-11 <起動コマンド>`
+
 ### STEP 4: データ共有の設定
 
 ```bash

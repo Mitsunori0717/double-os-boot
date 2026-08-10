@@ -41,6 +41,15 @@ else
     FAIL=1
 fi
 
+# P/E コア混成 CPU (Intel 12世代以降) の場合はコア構成を表示
+if [[ -d /sys/devices/cpu_core && -d /sys/devices/cpu_atom ]]; then
+    echo
+    echo "この CPU は P コア / E コア混成です:"
+    echo "  P コア (高性能)   : 論理 CPU $(cat /sys/devices/cpu_core/cpus)"
+    echo "  E コア (高効率)   : 論理 CPU $(cat /sys/devices/cpu_atom/cpus)"
+    echo "  → 02-create-windows-vm.sh では --cpuset でどちらを Windows に渡すか明示してください。"
+fi
+
 echo
 echo "===================================================="
 echo " 2. IOMMU (VT-d / AMD-Vi)"

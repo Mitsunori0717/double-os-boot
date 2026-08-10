@@ -19,6 +19,12 @@
 #   --gpu          : Windows に専有させる GPU の PCI アドレス。同一カードの
 #                    付随ファンクション (.1 = HDMIオーディオ等) は自動で追加
 #   --usb-controller <PCIアドレス> : (任意) USB コントローラごと専有させる場合
+#   --cpuset <範囲> : (推奨) Windows に渡す論理 CPU 番号を明示指定 (例: "12-27")。
+#                    P コア/E コア混成 CPU (Intel 12世代以降) では必ずこちらを使い、
+#                    どちらのコアを渡すか意図的に決めること。
+#                    番号の確認: lscpu --all --extended (CORE 列が同じ 2 行 = 同一Pコアの
+#                    HT ペア、MAXMHZ が低いグループ = E コア)
+#                    指定時は --cpus は不要 (個数は範囲から自動計算)
 #
 set -euo pipefail
 
@@ -28,6 +34,7 @@ GPU_ADDR=""
 USB_ADDR=""
 MEMORY_GB=16
 CPUS=8
+CPUSET=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -37,6 +44,7 @@ while [[ $# -gt 0 ]]; do
         --usb-controller) USB_ADDR="$2";  shift 2 ;;
         --memory)         MEMORY_GB="$2"; shift 2 ;;
         --cpus)           CPUS="$2";      shift 2 ;;
+        --cpuset)         CPUSET="$2";    shift 2 ;;
         *) echo "不明なオプション: $1" >&2; exit 1 ;;
     esac
 done
@@ -117,13 +125,55 @@ if [[ -n "$USB_ADDR" ]]; then
     echo "    パススルー対象 (USB): $USB_ADDR"
 fi
 
-# --- CPU ピンニング: 末尾の物理コアを Windows 専用に割り当てる ---
+# --- CPU ピンニング ---
 TOTAL_CPUS=$(nproc)
-if [[ $CPUS -ge $TOTAL_CPUS ]]; then
-    echo "エラー: --cpus は論理 CPU 総数 ($TOTAL_CPUS) より少なくしてください (Linux 側の分が必要)。" >&2
-    exit 1
+if [[ -n "$CPUSET" ]]; then
+    # --cpuset 指定時: 範囲を検証し、論理 CPU 数を範囲から算出
+    if ! [[ "$CPUSET" =~ ^[0-9]+(-[0-9]+)?(,[0-9]+(-[0-9]+)?)*$ ]]; then
+        echo "エラー: --cpuset の形式が不正です (例: 12-27 または 12-15,16-27)" >&2
+        exit 1
+    fi
+    CPUS=0
+    IFS=',' read -ra ranges <<< "$CPUSET"
+    for r in "${ranges[@]}"; do
+        if [[ "$r" == *-* ]]; then
+            lo="${r%-*}"; hi="${r#*-}"
+            if (( lo > hi || hi >= TOTAL_CPUS )); then
+                echo "エラー: --cpuset の範囲 '$r' が不正です (論理 CPU は 0-$((TOTAL_CPUS-1)))" >&2
+                exit 1
+            fi
+            CPUS=$(( CPUS + hi - lo + 1 ))
+        else
+            (( r < TOTAL_CPUS )) || { echo "エラー: --cpuset の番号 '$r' が範囲外です" >&2; exit 1; }
+            CPUS=$(( CPUS + 1 ))
+        fi
+    done
+    if [[ $CPUS -ge $TOTAL_CPUS ]]; then
+        echo "エラー: 全論理 CPU を Windows に渡すことはできません (Linux 側の分が必要)。" >&2
+        exit 1
+    fi
+    PIN_RANGE="$CPUSET"
+    # 混成コアの可能性があるためトポロジは 1 コア 1 スレッドとして提示
+    TOPOLOGY="topology.sockets=1,topology.cores=${CPUS},topology.threads=1"
+else
+    # 既定: 末尾の論理 CPU を Windows 専用に割り当てる
+    # 注意: Intel 12世代以降の P/E コア混成 CPU では末尾 = E コアになるため、
+    #       どちらのコアを渡すか --cpuset での明示指定を推奨 (README 参照)
+    if [[ $CPUS -ge $TOTAL_CPUS ]]; then
+        echo "エラー: --cpus は論理 CPU 総数 ($TOTAL_CPUS) より少なくしてください (Linux 側の分が必要)。" >&2
+        exit 1
+    fi
+    PIN_START=$(( TOTAL_CPUS - CPUS ))
+    PIN_RANGE="$PIN_START-$((TOTAL_CPUS-1))"
+    TOPOLOGY="topology.sockets=1,topology.cores=$(( CPUS / 2 )),topology.threads=2"
+    # Intel ハイブリッド CPU は cpu_core (Pコア) と cpu_atom (Eコア) が sysfs に分かれて見える
+    if [[ -d /sys/devices/cpu_core && -d /sys/devices/cpu_atom ]]; then
+        echo "注意: この CPU は P/E コア混成です。既定の末尾割り当てでは Windows に"
+        echo "      E コアが渡ります。意図と違う場合は --cpuset で明示指定してください。"
+        echo "      Pコアの論理 CPU: $(cat /sys/devices/cpu_core/cpus 2>/dev/null)"
+        echo "      Eコアの論理 CPU: $(cat /sys/devices/cpu_atom/cpus 2>/dev/null)"
+    fi
 fi
-PIN_START=$(( TOTAL_CPUS - CPUS ))
 
 echo "==> Windows 起動定義 '$VM_NAME' を作成しています..."
 virt-install \
@@ -131,8 +181,8 @@ virt-install \
     --osinfo win11 \
     --memory $(( MEMORY_GB * 1024 )) \
     --memorybacking hugepages=yes \
-    --vcpus "$CPUS",cpuset="$PIN_START-$((TOTAL_CPUS-1))" \
-    --cpu host-passthrough,cache.mode=passthrough,topology.sockets=1,topology.cores=$(( CPUS / 2 )),topology.threads=2 \
+    --vcpus "$CPUS",cpuset="$PIN_RANGE" \
+    --cpu host-passthrough,cache.mode=passthrough,"$TOPOLOGY" \
     --boot uefi \
     --disk path="$WIN_DISK",format=raw,bus=sata,cache=none,io=native \
     --network network=default,model=e1000e \
@@ -152,7 +202,7 @@ echo "起動定義を作成しました。"
 echo "  名前       : $VM_NAME"
 echo "  ディスク   : $WIN_DISK (物理ディスク直接起動)"
 echo "  GPU        : $GPU_ADDR とその付随ファンクション (モニター出力は GPU から直接)"
-echo "  CPU        : ${CPUS} スレッド (論理 CPU $PIN_START-$((TOTAL_CPUS-1)) を専用割り当て)"
+echo "  CPU        : ${CPUS} スレッド (論理 CPU $PIN_RANGE を専用割り当て)"
 echo "  メモリ     : ${MEMORY_GB}GB (HugePages)"
 echo
 echo "次の手順:"
