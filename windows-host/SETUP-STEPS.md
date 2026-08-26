@@ -26,3 +26,28 @@ LAN ポート5つ / 工作機械との接続は Ethernet。
 - 朝: PC 電源 ON → 30秒後に FIELD system 自動起動 → 収集開始
 - 夕: `.\02-start-field-vm.ps1 -Stop` → Windows をシャットダウン
 - 切り分け: 問題発生時は F8 → KIOXIA を選択して FIELD system をネイティブ起動し、再現比較
+
+## 不具合時の切り分けフロー (Windows か / FsBP か / VM か)
+
+3つの切替スイッチで層を確定する:
+
+| スイッチ | 操作 | 意味 |
+|---|---|---|
+| ① FIELD ネイティブ起動 | 再起動 → F8 → KIOXIA を選択 | VM 層を外した素の FIELD system (ディスク同一・無改造のため完全比較) |
+| ② Hyper-V 一時停止 | `bcdedit /set hypervisorlaunchtype off` → 再起動 (復帰は `auto`) | 仮想化層ゼロの素の Windows |
+| ③ 管理画面直接アクセス | ブラウザで FIELD の IP | アプリを介さない到達確認 |
+
+- 収集が止まった → ①で再現するなら FsBP 側 (FANUC に相談可)。再現しないなら VM 層
+- アプリが繋がらない → ③で開けるならアプリ/Windows 側。開けないなら FIELD/VM 側 → ①へ
+- Windows が不調 → ②で再現するなら Windows/アプリ自体。再現しないなら Hyper-V との干渉
+
+どの切替も可逆でデータには触れない。再起動 1〜2 回で必ずどれかの層に確定する。
+
+## CPU の取り分保証 (任意)
+
+物理コア固定は Windows クライアント版 Hyper-V では不可のため、代わりに処理能力の予約で保証する:
+
+```powershell
+# VM 停止中に実行。割り当て vCPU 数ぶんの処理能力を常時確保
+Set-VMProcessor -VMName FIELDsystem -Reserve 100
+```
