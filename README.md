@@ -262,11 +262,18 @@ baremetal/04-setup-file-sharing.sh   Samba によるデータ共有
 baremetal/05-share-keyboard-mouse.sh 1組のキーボード/マウスを両OSで共有
 baremetal/06-tune-resources.sh       CPU/メモリ配分の確認と調整 (運用しながら変更可)
 baremetal/07-connect-app-network.sh  Windows アプリ ⇔ Linux Fsbp のネットワーク接続設定
+windows-host/                        構成B: Linux 側がメーカー専用機の場合 (Windows をホストに反転)
 docs/DUAL-BOOT-SETUP.md              ネイティブ・デュアルブートの構築手順
 docs/ARCHITECTURE.md                 技術解説 (なぜこの設計か・何がどこまで可能か)
 docs/TROUBLESHOOTING.md              トラブルシューティング
 alternatives/hyperv/                 (参考) Hyper-V による簡易構成。GPU 専有なし・要件が緩い
 ```
+
+**重要な分岐**: Linux 側が自分でインストールした Ubuntu ではなく、**メーカー製の専用機
+システム**(FANUC FIELD system / FsBP 等の署名検証付きイメージ)である場合、その Linux は
+ホスト役にできないため、本 README の主構成は適用できません。その場合は
+**[windows-host/README.md](windows-host/README.md)(構成B: Windows をホストに反転)** に
+従ってください。専用機ディスクを無改造のまま Hyper-V で同時起動します。
 
 ## 制約と注意点 (正直な列挙)
 
