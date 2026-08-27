@@ -335,6 +335,9 @@ public class Win32Api {
 }
 "@
     }
+    # コンソールは同時に1接続のみ。古い窓が残っていると新しい窓に切断ダイアログが出るため、先に閉じる
+    Get-Process vmconnect -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+    Start-Sleep -Seconds 1
     Start-Process "vmconnect.exe" -ArgumentList "localhost", $VMName
     $hwnd = [IntPtr]::Zero
     $csw = [System.Diagnostics.Stopwatch]::StartNew()
