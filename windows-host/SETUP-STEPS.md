@@ -51,3 +51,27 @@ LAN ポート5つ / 工作機械との接続は Ethernet。
 # VM 停止中に実行。割り当て vCPU 数ぶんの処理能力を常時確保
 Set-VMProcessor -VMName FIELDsystem -Reserve 100
 ```
+
+## 便利機能 (手順⑨の代わり/追加)
+
+### サブモニターへの FIELD 全画面自動表示 (03-field-display-kiosk.ps1)
+
+```powershell
+.\03-field-display-kiosk.ps1            # 動作確認 (今すぐ表示)
+.\03-field-display-kiosk.ps1 -Install   # ログオン時の自動表示を登録
+```
+
+VM の起動と Web 画面の応答を待ってから、サブモニターに Edge キオスクモード (枠なし全画面) で表示する。
+これと `Set-VM -AutomaticStartAction Start` の組み合わせで、電源 ON → ログオンだけで
+「モニター1 = Windows / モニター2 = FIELD system 全画面」になる。終了は Alt+F4。
+
+### ワンクリックで FIELD 単独起動 (04-reboot-to-field-native.ps1)
+
+```powershell
+.\04-reboot-to-field-native.ps1 -Setup   # 初回のみ: UEFI 起動エントリを選択・デスクトップにショートカット作成
+```
+
+以後はデスクトップの『FIELD system 単独起動』をダブルクリック → VM を安全停止 →
+再起動して FIELD system がネイティブ単独起動する (F8 連打は不要)。
+UEFI の「次回のみ起動先指定 (bootsequence)」を使うため 1 回で消費され、
+**FIELD 利用後に次へ電源を入れると自動的に Windows に戻る** (戻し操作なし)。
