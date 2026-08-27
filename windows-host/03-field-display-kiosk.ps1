@@ -37,9 +37,10 @@ $ConfigFile = Join-Path $PSScriptRoot "display-config.json"
 if (-not (Test-Path $ConfigFile)) {
     @"
 {
-  "_説明": "左右モニターに全画面表示する URL の設定。メモ帳で編集できます。空文字にするとそのモニターには表示しません。",
+  "_説明": "左右モニターに表示する内容。URL、console (FIELDのコンソール画面)、空文字 (表示しない) を指定。Kiosk: true で完全固定の全画面、false で最大化ウィンドウ (F11 や Win+矢印で自由に切替可)。",
   "RightUrl": "https://192.168.0.200/",
-  "LeftUrl": ""
+  "LeftUrl": "console",
+  "Kiosk": false
 }
 "@ | Set-Content -Path $ConfigFile -Encoding UTF8
     Write-Host "設定ファイルを作成しました: $ConfigFile" -ForegroundColor Cyan
@@ -54,7 +55,7 @@ if ($Settings) {
     Add-Type -AssemblyName System.Drawing
     $form = New-Object System.Windows.Forms.Form
     $form.Text = "FIELD 表示設定"
-    $form.Size = New-Object System.Drawing.Size(560, 260)
+    $form.Size = New-Object System.Drawing.Size(560, 300)
     $form.StartPosition = "CenterScreen"
     $form.FormBorderStyle = "FixedDialog"
     $form.MaximizeBox = $false
@@ -77,26 +78,33 @@ if ($Settings) {
     $tbL.Size = New-Object System.Drawing.Size(510, 24)
     $tbL.Text = [string]$cfg.LeftUrl
 
+    $cbK = New-Object System.Windows.Forms.CheckBox
+    $cbK.Text = "完全固定の全画面で表示する (チェックなし = 最大化ウィンドウ。F11 や Win+矢印キーで自由に切替可)"
+    $cbK.Location = New-Object System.Drawing.Point(15, 148)
+    $cbK.Size = New-Object System.Drawing.Size(520, 24)
+    $cbK.Checked = ($cfg.Kiosk -eq $true)
+
     $btnOK = New-Object System.Windows.Forms.Button
     $btnOK.Text = "保存"
-    $btnOK.Location = New-Object System.Drawing.Point(330, 160)
+    $btnOK.Location = New-Object System.Drawing.Point(330, 195)
     $btnOK.Size = New-Object System.Drawing.Size(90, 30)
     $btnOK.DialogResult = "OK"
     $btnCancel = New-Object System.Windows.Forms.Button
     $btnCancel.Text = "キャンセル"
-    $btnCancel.Location = New-Object System.Drawing.Point(435, 160)
+    $btnCancel.Location = New-Object System.Drawing.Point(435, 195)
     $btnCancel.Size = New-Object System.Drawing.Size(90, 30)
     $btnCancel.DialogResult = "Cancel"
 
-    $form.Controls.AddRange(@($lblR, $tbR, $lblL, $tbL, $btnOK, $btnCancel))
+    $form.Controls.AddRange(@($lblR, $tbR, $lblL, $tbL, $cbK, $btnOK, $btnCancel))
     $form.AcceptButton = $btnOK
     $form.CancelButton = $btnCancel
 
     if ($form.ShowDialog() -eq "OK") {
         $out = [ordered]@{
-            "_説明"    = "左右モニターに全画面表示する URL の設定。『FIELD表示設定』アイコンから編集できます。"
+            "_説明"    = "左右モニターに表示する内容。『FIELD表示設定』アイコンから編集できます。"
             "RightUrl" = $tbR.Text.Trim()
             "LeftUrl"  = $tbL.Text.Trim()
+            "Kiosk"    = $cbK.Checked
         }
         $out | ConvertTo-Json | Set-Content -Path $ConfigFile -Encoding UTF8
         [System.Windows.Forms.MessageBox]::Show("保存しました。次回の表示から反映されます。", "FIELD 表示設定") | Out-Null
@@ -185,13 +193,24 @@ $edge = @(
 ) | Where-Object { Test-Path $_ } | Select-Object -First 1
 if (-not $edge) { Write-Error "Microsoft Edge が見つかりません。"; exit 1 }
 
+$KioskMode = ($cfg.Kiosk -eq $true)
+
 function Open-Kiosk([string]$u, $screen, [string]$profile) {
     if (-not $u) { return }
     # --ignore-certificate-errors: FIELD の自己署名証明書の警告画面を出さない (この専用プロファイル内のみ)
-    & $edge --user-data-dir="$env:LOCALAPPDATA\$profile" --no-first-run --new-window `
-        --ignore-certificate-errors `
-        --window-position="$($screen.Bounds.X),$($screen.Bounds.Y)" `
-        --kiosk $u --edge-kiosk-type=fullscreen
+    if ($KioskMode) {
+        # 完全固定の全画面 (操作で解除できないキオスク)
+        & $edge --user-data-dir="$env:LOCALAPPDATA\$profile" --no-first-run --new-window `
+            --ignore-certificate-errors `
+            --window-position="$($screen.Bounds.X),$($screen.Bounds.Y)" `
+            --kiosk $u --edge-kiosk-type=fullscreen
+    } else {
+        # 最大化されたアプリウィンドウ (F11 で全画面⇔解除、Win+矢印で縮小など標準操作が可能)
+        & $edge --user-data-dir="$env:LOCALAPPDATA\$profile" --no-first-run `
+            --ignore-certificate-errors `
+            --window-position="$($screen.Bounds.X),$($screen.Bounds.Y)" `
+            --start-maximized --app=$u
+    }
     Start-Sleep -Seconds 2
 }
 
