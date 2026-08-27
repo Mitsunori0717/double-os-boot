@@ -60,7 +60,7 @@ if ($Settings) {
     $form.MaximizeBox = $false
 
     $lblR = New-Object System.Windows.Forms.Label
-    $lblR.Text = "右モニターに表示する URL (空欄 = 表示しない):"
+    $lblR.Text = "右モニターに表示する内容 (URL / console と入力=FIELDのコンソール画面 / 空欄=表示しない):"
     $lblR.Location = New-Object System.Drawing.Point(15, 20)
     $lblR.AutoSize = $true
     $tbR = New-Object System.Windows.Forms.TextBox
@@ -69,7 +69,7 @@ if ($Settings) {
     $tbR.Text = [string]$cfg.RightUrl
 
     $lblL = New-Object System.Windows.Forms.Label
-    $lblL.Text = "左モニターに表示する URL (空欄 = 表示しない):"
+    $lblL.Text = "左モニターに表示する内容 (URL / console と入力=FIELDのコンソール画面 / 空欄=表示しない):"
     $lblL.Location = New-Object System.Drawing.Point(15, 85)
     $lblL.AutoSize = $true
     $tbL = New-Object System.Windows.Forms.TextBox
@@ -166,8 +166,12 @@ function Wait-Url([string]$u) {
     }
     return $false
 }
-if (-not (Wait-Url $RightUrl)) { Write-Warning "右画面用 URL が応答しません: $RightUrl" }
-if (-not (Wait-Url $LeftUrl))  { Write-Warning "左画面用 URL が応答しません: $LeftUrl" }
+if ($RightUrl -and $RightUrl -notmatch '^(console|コンソール)$') {
+    if (-not (Wait-Url $RightUrl)) { Write-Warning "右画面用 URL が応答しません: $RightUrl" }
+}
+if ($LeftUrl -and $LeftUrl -notmatch '^(console|コンソール)$') {
+    if (-not (Wait-Url $LeftUrl)) { Write-Warning "左画面用 URL が応答しません: $LeftUrl" }
+}
 
 # --- モニターの位置を取得 (X座標で左右を判定) ---
 Add-Type -AssemblyName System.Windows.Forms
@@ -191,7 +195,42 @@ function Open-Kiosk([string]$u, $screen, [string]$profile) {
     Start-Sleep -Seconds 2
 }
 
-Open-Kiosk $RightUrl $rightScreen "FieldKioskR"
-Open-Kiosk $LeftUrl  $leftScreen  "FieldKioskL"
+# --- FIELD のコンソール画面 (vmconnect) を指定モニターに最大化表示 ---
+function Open-Console($screen) {
+    if (-not ([System.Management.Automation.PSTypeName]'Win32Api').Type) {
+        Add-Type -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+public class Win32Api {
+    [DllImport("user32.dll")] public static extern bool MoveWindow(IntPtr hWnd, int X, int Y, int nWidth, int nHeight, bool bRepaint);
+    [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+}
+"@
+    }
+    Start-Process "vmconnect.exe" -ArgumentList "localhost", $VMName
+    $hwnd = [IntPtr]::Zero
+    $csw = [System.Diagnostics.Stopwatch]::StartNew()
+    while ($csw.Elapsed.TotalSeconds -lt 30) {
+        Start-Sleep -Seconds 1
+        $p = Get-Process vmconnect -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object -First 1
+        if ($p) { $hwnd = $p.MainWindowHandle; break }
+    }
+    if ($hwnd -ne [IntPtr]::Zero) {
+        # 対象モニターへ移動してから最大化
+        [Win32Api]::MoveWindow($hwnd, $screen.Bounds.X, $screen.Bounds.Y, 900, 700, $true) | Out-Null
+        Start-Sleep -Milliseconds 400
+        [Win32Api]::ShowWindow($hwnd, 3) | Out-Null   # 3 = 最大化
+    } else {
+        Write-Warning "コンソール画面のウィンドウが見つかりませんでした。"
+    }
+}
 
-Write-Host "表示しました (ログインは画面上で行ってください)。閉じるには各画面で Alt+F4。"
+function Open-Display([string]$val, $screen, [string]$profile) {
+    if (-not $val) { return }
+    if ($val -match '^(console|コンソール)$') { Open-Console $screen } else { Open-Kiosk $val $screen $profile }
+}
+
+Open-Display $RightUrl $rightScreen "FieldKioskR"
+Open-Display $LeftUrl  $leftScreen  "FieldKioskL"
+
+Write-Host "表示しました (ログインは画面上で行ってください)。ブラウザは Alt+F4、コンソール窓は×で閉じられます。"
