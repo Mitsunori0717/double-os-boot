@@ -1,21 +1,14 @@
 ﻿<#
 .SYNOPSIS
-    起動時に、左右のモニターへ FIELD system の画面を全画面 (キオスクモード) で自動表示します。
-    証明書の警告は表示されず、ログイン画面まで自動で到達します (ログイン操作は手動)。
-
-.DESCRIPTION
-    - 表示する URL は同じフォルダの display-config.json で設定します (メモ帳で編集可)。
-      初回実行時に自動作成されます。編集後の再登録は不要で、次回表示から反映されます
-    - FIELD system VM の起動と Web 画面の応答を待ってから表示します
-    - -Install を付けて一度実行すると、ログオン時に自動実行されるタスクを登録します
+    FIELD system の画面表示を管理します (左右モニターへの自動表示・コンソール自動ログイン)。
+    すべての設定は『FIELD表示設定』の設定コンソール (-Settings) で変更できます。
 
 .EXAMPLE
-    .\03-field-display-kiosk.ps1              # display-config.json の内容で今すぐ表示
+    .\03-field-display-kiosk.ps1              # 設定内容で今すぐ表示
+    .\03-field-display-kiosk.ps1 -Settings    # 設定コンソールを開く
+    .\03-field-display-kiosk.ps1 -Setup       # デスクトップに『FIELD表示設定』アイコンを作成
     .\03-field-display-kiosk.ps1 -Install     # ログオン時の自動表示を登録
     .\03-field-display-kiosk.ps1 -Uninstall   # 自動表示を解除
-
-    # 一時的に URL を指定して試す場合 (設定ファイルより優先)
-    .\03-field-display-kiosk.ps1 -RightUrl "https://192.168.0.200/" -LeftUrl "https://192.168.0.205/boxsettings/"
 #>
 [CmdletBinding()]
 param(
@@ -30,7 +23,13 @@ param(
     [int]$TimeoutSec  = 420
 )
 
-# --- ESC 見張り役: ブラウザのキオスク窓が前面のときだけ ESC で最大化を解除する ---
+$ErrorActionPreference = "Stop"
+$TaskName = "FIELD-Display-Kiosk"
+$ConfigFile = Join-Path $PSScriptRoot "display-config.json"
+
+# ============================================================
+#  ESC 見張り役: FIELD 表示用ブラウザ窓が前面・最大化のときだけ ESC で解除
+# ============================================================
 if ($EscWatcher) {
     Add-Type -TypeDefinition @"
 using System;
@@ -46,7 +45,6 @@ public class EscApi {
     $edgePids = @()
     $lastScan = [datetime]::MinValue
     while ($true) {
-        # 対象プロセス (FieldKiosk プロファイルの Edge) を10秒ごとに再確認
         if (((Get-Date) - $lastScan).TotalSeconds -gt 10) {
             $edgePids = @(Get-CimInstance Win32_Process -Filter "Name='msedge.exe'" -ErrorAction SilentlyContinue |
                 Where-Object { $_.CommandLine -match 'FieldKiosk' } | Select-Object -ExpandProperty ProcessId)
@@ -72,82 +70,142 @@ function Stop-EscWatcher {
         ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
 }
 
-$ErrorActionPreference = "Stop"
-$TaskName = "FIELD-Display-Kiosk"
-$ConfigFile = Join-Path $PSScriptRoot "display-config.json"
-
-# --- 設定ファイル (無ければ既定値で自動作成) ---
-if (-not (Test-Path $ConfigFile)) {
-    @"
-{
-  "_説明": "左右モニターに表示する内容。URL、console (FIELDのコンソール画面)、空文字 (表示しない) を指定。Kiosk: true で完全固定の全画面、false で最大化ウィンドウ (F11 や Win+矢印で自由に切替可)。",
-  "RightUrl": "https://192.168.0.200/",
-  "LeftUrl": "console",
-  "Kiosk": false
+# ============================================================
+#  設定ファイル
+# ============================================================
+$DefaultConfig = [ordered]@{
+    "_説明"            = "FIELD 表示の設定。『FIELD表示設定』アイコンから編集できます。"
+    "RightUrl"         = "https://192.168.0.200/"
+    "LeftUrl"          = "console"
+    "Kiosk"            = $false
+    "EscEnabled"       = $true
+    "ConsoleAutoLogin" = $false
+    "ConsoleUser"      = ""
+    "ConsolePass"      = ""
 }
-"@ | Set-Content -Path $ConfigFile -Encoding UTF8
+if (-not (Test-Path $ConfigFile)) {
+    $DefaultConfig | ConvertTo-Json | Set-Content -Path $ConfigFile -Encoding UTF8
     Write-Host "設定ファイルを作成しました: $ConfigFile" -ForegroundColor Cyan
 }
 $cfg = Get-Content $ConfigFile -Raw -Encoding UTF8 | ConvertFrom-Json
 if (-not $PSBoundParameters.ContainsKey("RightUrl")) { $RightUrl = [string]$cfg.RightUrl }
 if (-not $PSBoundParameters.ContainsKey("LeftUrl"))  { $LeftUrl  = [string]$cfg.LeftUrl }
+$KioskMode = ($cfg.Kiosk -eq $true)
 
-# --- 設定 GUI: 左右の URL を入力ウィンドウで編集 ---
+# ============================================================
+#  設定コンソール (GUI)
+# ============================================================
 if ($Settings) {
     Add-Type -AssemblyName System.Windows.Forms
     Add-Type -AssemblyName System.Drawing
     $form = New-Object System.Windows.Forms.Form
     $form.Text = "FIELD 表示設定"
-    $form.Size = New-Object System.Drawing.Size(560, 300)
+    $form.Size = New-Object System.Drawing.Size(600, 470)
     $form.StartPosition = "CenterScreen"
     $form.FormBorderStyle = "FixedDialog"
     $form.MaximizeBox = $false
 
-    $lblR = New-Object System.Windows.Forms.Label
-    $lblR.Text = "右モニターに表示する内容 (URL / console と入力=FIELDのコンソール画面 / 空欄=表示しない):"
-    $lblR.Location = New-Object System.Drawing.Point(15, 20)
-    $lblR.AutoSize = $true
-    $tbR = New-Object System.Windows.Forms.TextBox
-    $tbR.Location = New-Object System.Drawing.Point(15, 45)
-    $tbR.Size = New-Object System.Drawing.Size(510, 24)
-    $tbR.Text = [string]$cfg.RightUrl
+    function New-Label($text, $x, $y) {
+        $l = New-Object System.Windows.Forms.Label
+        $l.Text = $text; $l.Location = New-Object System.Drawing.Point($x, $y); $l.AutoSize = $true
+        return $l
+    }
 
-    $lblL = New-Object System.Windows.Forms.Label
-    $lblL.Text = "左モニターに表示する内容 (URL / console と入力=FIELDのコンソール画面 / 空欄=表示しない):"
-    $lblL.Location = New-Object System.Drawing.Point(15, 85)
-    $lblL.AutoSize = $true
+    # --- モニター表示 ---
+    $grpMon = New-Object System.Windows.Forms.GroupBox
+    $grpMon.Text = "モニター表示 (URL を入力 / console = FIELDのコンソール画面 / 空欄 = 表示しない)"
+    $grpMon.Location = New-Object System.Drawing.Point(15, 15)
+    $grpMon.Size = New-Object System.Drawing.Size(555, 140)
+
+    $grpMon.Controls.Add((New-Label "左モニター:" 15 30))
     $tbL = New-Object System.Windows.Forms.TextBox
-    $tbL.Location = New-Object System.Drawing.Point(15, 110)
-    $tbL.Size = New-Object System.Drawing.Size(510, 24)
+    $tbL.Location = New-Object System.Drawing.Point(110, 27)
+    $tbL.Size = New-Object System.Drawing.Size(425, 24)
     $tbL.Text = [string]$cfg.LeftUrl
+    $grpMon.Controls.Add($tbL)
+
+    $grpMon.Controls.Add((New-Label "右モニター:" 15 65))
+    $tbR = New-Object System.Windows.Forms.TextBox
+    $tbR.Location = New-Object System.Drawing.Point(110, 62)
+    $tbR.Size = New-Object System.Drawing.Size(425, 24)
+    $tbR.Text = [string]$cfg.RightUrl
+    $grpMon.Controls.Add($tbR)
 
     $cbK = New-Object System.Windows.Forms.CheckBox
-    $cbK.Text = "完全固定の全画面で表示する (チェックなし = 最大化ウィンドウ。F11 や Win+矢印キーで自由に切替可)"
-    $cbK.Location = New-Object System.Drawing.Point(15, 148)
-    $cbK.Size = New-Object System.Drawing.Size(520, 24)
+    $cbK.Text = "完全固定の全画面 (チェックなし = 最大化ウィンドウ。F11/Win+矢印で切替可)"
+    $cbK.Location = New-Object System.Drawing.Point(15, 98)
+    $cbK.Size = New-Object System.Drawing.Size(530, 24)
     $cbK.Checked = ($cfg.Kiosk -eq $true)
+    $grpMon.Controls.Add($cbK)
+    $form.Controls.Add($grpMon)
 
+    # --- 操作 ---
+    $grpOp = New-Object System.Windows.Forms.GroupBox
+    $grpOp.Text = "操作"
+    $grpOp.Location = New-Object System.Drawing.Point(15, 165)
+    $grpOp.Size = New-Object System.Drawing.Size(555, 60)
+    $cbEsc = New-Object System.Windows.Forms.CheckBox
+    $cbEsc.Text = "ESC キーでブラウザの最大化を解除する (ブラウザ画面が前面のときのみ)"
+    $cbEsc.Location = New-Object System.Drawing.Point(15, 25)
+    $cbEsc.Size = New-Object System.Drawing.Size(530, 24)
+    $cbEsc.Checked = ($cfg.EscEnabled -ne $false)
+    $grpOp.Controls.Add($cbEsc)
+    $form.Controls.Add($grpOp)
+
+    # --- コンソール自動ログイン ---
+    $grpCon = New-Object System.Windows.Forms.GroupBox
+    $grpCon.Text = "コンソール画面の自動ログイン (VM 起動直後の login プロンプトに自動入力)"
+    $grpCon.Location = New-Object System.Drawing.Point(15, 235)
+    $grpCon.Size = New-Object System.Drawing.Size(555, 135)
+
+    $cbCon = New-Object System.Windows.Forms.CheckBox
+    $cbCon.Text = "自動ログインを有効にする"
+    $cbCon.Location = New-Object System.Drawing.Point(15, 25)
+    $cbCon.Size = New-Object System.Drawing.Size(300, 24)
+    $cbCon.Checked = ($cfg.ConsoleAutoLogin -eq $true)
+    $grpCon.Controls.Add($cbCon)
+
+    $grpCon.Controls.Add((New-Label "ユーザー名:" 15 60))
+    $tbCU = New-Object System.Windows.Forms.TextBox
+    $tbCU.Location = New-Object System.Drawing.Point(110, 57)
+    $tbCU.Size = New-Object System.Drawing.Size(240, 24)
+    $tbCU.Text = [string]$cfg.ConsoleUser
+    $grpCon.Controls.Add($tbCU)
+
+    $grpCon.Controls.Add((New-Label "パスワード:" 15 95))
+    $tbCP = New-Object System.Windows.Forms.TextBox
+    $tbCP.Location = New-Object System.Drawing.Point(110, 92)
+    $tbCP.Size = New-Object System.Drawing.Size(240, 24)
+    $tbCP.UseSystemPasswordChar = $true
+    $tbCP.Text = [string]$cfg.ConsolePass
+    $grpCon.Controls.Add($tbCP)
+    $form.Controls.Add($grpCon)
+
+    # --- ボタン ---
     $btnOK = New-Object System.Windows.Forms.Button
     $btnOK.Text = "保存"
-    $btnOK.Location = New-Object System.Drawing.Point(330, 195)
-    $btnOK.Size = New-Object System.Drawing.Size(90, 30)
+    $btnOK.Location = New-Object System.Drawing.Point(370, 385)
+    $btnOK.Size = New-Object System.Drawing.Size(90, 32)
     $btnOK.DialogResult = "OK"
     $btnCancel = New-Object System.Windows.Forms.Button
     $btnCancel.Text = "キャンセル"
-    $btnCancel.Location = New-Object System.Drawing.Point(435, 195)
-    $btnCancel.Size = New-Object System.Drawing.Size(90, 30)
+    $btnCancel.Location = New-Object System.Drawing.Point(475, 385)
+    $btnCancel.Size = New-Object System.Drawing.Size(90, 32)
     $btnCancel.DialogResult = "Cancel"
-
-    $form.Controls.AddRange(@($lblR, $tbR, $lblL, $tbL, $cbK, $btnOK, $btnCancel))
+    $form.Controls.AddRange(@($btnOK, $btnCancel))
     $form.AcceptButton = $btnOK
     $form.CancelButton = $btnCancel
 
     if ($form.ShowDialog() -eq "OK") {
         $out = [ordered]@{
-            "_説明"    = "左右モニターに表示する内容。『FIELD表示設定』アイコンから編集できます。"
-            "RightUrl" = $tbR.Text.Trim()
-            "LeftUrl"  = $tbL.Text.Trim()
-            "Kiosk"    = $cbK.Checked
+            "_説明"            = "FIELD 表示の設定。『FIELD表示設定』アイコンから編集できます。"
+            "RightUrl"         = $tbR.Text.Trim()
+            "LeftUrl"          = $tbL.Text.Trim()
+            "Kiosk"            = $cbK.Checked
+            "EscEnabled"       = $cbEsc.Checked
+            "ConsoleAutoLogin" = $cbCon.Checked
+            "ConsoleUser"      = $tbCU.Text.Trim()
+            "ConsolePass"      = $tbCP.Text
         }
         $out | ConvertTo-Json | Set-Content -Path $ConfigFile -Encoding UTF8
         [System.Windows.Forms.MessageBox]::Show("保存しました。次回の表示から反映されます。", "FIELD 表示設定") | Out-Null
@@ -155,7 +213,9 @@ if ($Settings) {
     exit 0
 }
 
-# --- デスクトップに『FIELD表示設定』アイコンを作成 ---
+# ============================================================
+#  デスクトップに『FIELD表示設定』アイコンを作成
+# ============================================================
 if ($Setup) {
     $lnkPath = Join-Path ([Environment]::GetFolderPath("Desktop")) "FIELD表示設定.lnk"
     $shell = New-Object -ComObject WScript.Shell
@@ -164,23 +224,24 @@ if ($Setup) {
     $lnk.Arguments  = "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$PSCommandPath`" -Settings"
     $lnk.WorkingDirectory = $PSScriptRoot
     $lnk.IconLocation = "shell32.dll,21"
-    $lnk.Description  = "左右モニターに表示する FIELD 画面の URL を設定"
+    $lnk.Description  = "FIELD 表示の設定コンソール"
     $lnk.Save()
     Write-Host "デスクトップに『FIELD表示設定』アイコンを作成しました。" -ForegroundColor Green
     exit 0
 }
 
+# ============================================================
+#  ログオン時自動実行の登録 / 解除
+# ============================================================
 if ($Install) {
-    # URL は焼き込まず、実行のたびに display-config.json を読む (編集だけで反映される)
     $arg = "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$PSCommandPath`" -VMName `"$VMName`""
     $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument $arg
     $trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
     $taskSettings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -ExecutionTimeLimit (New-TimeSpan -Hours 1)
     Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger `
         -Settings $taskSettings -RunLevel Highest -Force | Out-Null
-    Write-Host "登録しました。次回ログオンから自動で全画面表示されます。" -ForegroundColor Green
-    Write-Host "  表示内容の変更: $ConfigFile をメモ帳で編集 (再登録不要)"
-    Write-Host "  現在の設定 → 右: $(if ($RightUrl) { $RightUrl } else { '(表示なし)' }) / 左: $(if ($LeftUrl) { $LeftUrl } else { '(表示なし)' })"
+    Write-Host "登録しました。次回ログオンから自動で表示されます。" -ForegroundColor Green
+    Write-Host "  表示内容の変更: 『FIELD表示設定』アイコン (再登録不要)"
     exit 0
 }
 if ($Uninstall) {
@@ -190,10 +251,13 @@ if ($Uninstall) {
     exit 0
 }
 if (-not $RightUrl -and -not $LeftUrl) {
-    Write-Error "表示する URL がありません。$ConfigFile を編集するか、-RightUrl/-LeftUrl を指定してください。"
+    Write-Error "表示する内容がありません。『FIELD表示設定』(-Settings) で設定してください。"
     exit 1
 }
 
+# ============================================================
+#  表示処理
+# ============================================================
 # --- VM の起動を待つ ---
 $sw = [System.Diagnostics.Stopwatch]::StartNew()
 while ($sw.Elapsed.TotalSeconds -lt $TimeoutSec) {
@@ -202,7 +266,7 @@ while ($sw.Elapsed.TotalSeconds -lt $TimeoutSec) {
     Start-Sleep -Seconds 5
 }
 
-# --- 表示対象 URL の応答を待つ ---
+# --- Web 画面の応答を待つ (console 指定はスキップ) ---
 function Wait-Url([string]$u) {
     if (-not $u) { return $true }
     $uri = [Uri]$u
@@ -225,7 +289,7 @@ if ($LeftUrl -and $LeftUrl -notmatch '^(console|コンソール)$') {
     if (-not (Wait-Url $LeftUrl)) { Write-Warning "左画面用 URL が応答しません: $LeftUrl" }
 }
 
-# --- モニターの位置を取得 (X座標で左右を判定) ---
+# --- モニターの位置 (X座標で左右を判定) ---
 Add-Type -AssemblyName System.Windows.Forms
 $screens = [System.Windows.Forms.Screen]::AllScreens | Sort-Object { $_.Bounds.X }
 $leftScreen  = $screens | Select-Object -First 1
@@ -237,19 +301,14 @@ $edge = @(
 ) | Where-Object { Test-Path $_ } | Select-Object -First 1
 if (-not $edge) { Write-Error "Microsoft Edge が見つかりません。"; exit 1 }
 
-$KioskMode = ($cfg.Kiosk -eq $true)
-
 function Open-Kiosk([string]$u, $screen, [string]$profile) {
     if (-not $u) { return }
-    # --ignore-certificate-errors: FIELD の自己署名証明書の警告画面を出さない (この専用プロファイル内のみ)
     if ($KioskMode) {
-        # 完全固定の全画面 (操作で解除できないキオスク)
         & $edge --user-data-dir="$env:LOCALAPPDATA\$profile" --no-first-run --new-window `
             --ignore-certificate-errors `
             --window-position="$($screen.Bounds.X),$($screen.Bounds.Y)" `
             --kiosk $u --edge-kiosk-type=fullscreen
     } else {
-        # 最大化されたアプリウィンドウ (F11 で全画面⇔解除、Win+矢印で縮小など標準操作が可能)
         & $edge --user-data-dir="$env:LOCALAPPDATA\$profile" --no-first-run `
             --ignore-certificate-errors `
             --window-position="$($screen.Bounds.X),$($screen.Bounds.Y)" `
@@ -258,7 +317,12 @@ function Open-Kiosk([string]$u, $screen, [string]$profile) {
     Start-Sleep -Seconds 2
 }
 
-# --- FIELD のコンソール画面 (vmconnect) を指定モニターに最大化表示 ---
+# --- SendKeys 用の特殊文字エスケープ ---
+function Esc-SendKeys([string]$s) {
+    ($s.ToCharArray() | ForEach-Object { if ("$_" -match '[+^%~(){}\[\]]') { "{$_}" } else { "$_" } }) -join ""
+}
+
+# --- FIELD のコンソール画面 (vmconnect) を指定モニターに最大化 + 自動ログイン ---
 function Open-Console($screen) {
     if (-not ([System.Management.Automation.PSTypeName]'Win32Api').Type) {
         Add-Type -TypeDefinition @"
@@ -267,6 +331,7 @@ using System.Runtime.InteropServices;
 public class Win32Api {
     [DllImport("user32.dll")] public static extern bool MoveWindow(IntPtr hWnd, int X, int Y, int nWidth, int nHeight, bool bRepaint);
     [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+    [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
 }
 "@
     }
@@ -278,13 +343,28 @@ public class Win32Api {
         $p = Get-Process vmconnect -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object -First 1
         if ($p) { $hwnd = $p.MainWindowHandle; break }
     }
-    if ($hwnd -ne [IntPtr]::Zero) {
-        # 対象モニターへ移動してから最大化
-        [Win32Api]::MoveWindow($hwnd, $screen.Bounds.X, $screen.Bounds.Y, 900, 700, $true) | Out-Null
-        Start-Sleep -Milliseconds 400
-        [Win32Api]::ShowWindow($hwnd, 3) | Out-Null   # 3 = 最大化
-    } else {
-        Write-Warning "コンソール画面のウィンドウが見つかりませんでした。"
+    if ($hwnd -eq [IntPtr]::Zero) { Write-Warning "コンソール画面のウィンドウが見つかりませんでした。"; return }
+
+    [Win32Api]::MoveWindow($hwnd, $screen.Bounds.X, $screen.Bounds.Y, 900, 700, $true) | Out-Null
+    Start-Sleep -Milliseconds 400
+    [Win32Api]::ShowWindow($hwnd, 3) | Out-Null   # 最大化
+
+    # --- 自動ログイン (VM 起動から15分以内 = 新しい login プロンプトのときだけ) ---
+    if ($cfg.ConsoleAutoLogin -eq $true -and $cfg.ConsoleUser) {
+        $vm = Get-VM -Name $VMName -ErrorAction SilentlyContinue
+        if ($vm -and $vm.Uptime.TotalMinutes -lt 15) {
+            Start-Sleep -Seconds 3
+            [Win32Api]::SetForegroundWindow($hwnd) | Out-Null
+            Start-Sleep -Milliseconds 500
+            [System.Windows.Forms.SendKeys]::SendWait((Esc-SendKeys ([string]$cfg.ConsoleUser)))
+            [System.Windows.Forms.SendKeys]::SendWait("{ENTER}")
+            Start-Sleep -Seconds 2
+            [System.Windows.Forms.SendKeys]::SendWait((Esc-SendKeys ([string]$cfg.ConsolePass)))
+            [System.Windows.Forms.SendKeys]::SendWait("{ENTER}")
+            Write-Host "コンソールに自動ログインしました。"
+        } else {
+            Write-Host "コンソール自動ログインをスキップしました (VM 起動から時間が経過しているため。ログイン済みの画面に文字を打ち込まない安全策です)。"
+        }
     }
 }
 
@@ -296,14 +376,14 @@ function Open-Display([string]$val, $screen, [string]$profile) {
 Open-Display $RightUrl $rightScreen "FieldKioskR"
 Open-Display $LeftUrl  $leftScreen  "FieldKioskL"
 
-# --- ブラウザ表示があり、固定キオスクでない場合は ESC 見張り役を起動 ---
+# --- ESC 見張り役 (設定で有効・ブラウザ表示あり・固定キオスクでない場合) ---
 $hasBrowser = (($RightUrl -and $RightUrl -notmatch '^(console|コンソール)$') -or
                ($LeftUrl  -and $LeftUrl  -notmatch '^(console|コンソール)$'))
-if ($hasBrowser -and -not $KioskMode) {
-    Stop-EscWatcher   # 既存の見張り役がいれば入れ替え
+if ($hasBrowser -and -not $KioskMode -and ($cfg.EscEnabled -ne $false)) {
+    Stop-EscWatcher
     Start-Process powershell.exe -WindowStyle Hidden `
         -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" -EscWatcher"
-    Write-Host "ESC キーでブラウザの最大化を解除できます (ブラウザ画面が前面のときのみ有効)。"
+    Write-Host "ESC キーでブラウザの最大化を解除できます (ブラウザ画面が前面のときのみ)。"
 }
 
-Write-Host "表示しました (ログインは画面上で行ってください)。"
+Write-Host "表示しました。"
