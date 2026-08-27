@@ -23,6 +23,7 @@ param(
     [string]$LeftUrl,
     [switch]$Install,
     [switch]$Uninstall,
+    [switch]$LoginSetup,
     [int]$TimeoutSec  = 420
 )
 
@@ -68,6 +69,24 @@ if (-not $RightUrl -and -not $LeftUrl) {
     exit 1
 }
 
+# --- 初回ログイン設定モード: 通常ウィンドウで開き、ログインを記憶させる ---
+if ($LoginSetup) {
+    $edge = @(
+        "$env:ProgramFiles\Microsoft\Edge\Application\msedge.exe",
+        "${env:ProgramFiles(x86)}\Microsoft\Edge\Application\msedge.exe"
+    ) | Where-Object { Test-Path $_ } | Select-Object -First 1
+    Write-Host "初回ログイン設定モード" -ForegroundColor Cyan
+    Write-Host "開いた画面で次を行ってください:"
+    Write-Host "  1. ログイン画面で ユーザー名・パスワード を入力"
+    Write-Host "  2. 【ログイン状態を記憶】に必ずチェック"
+    Write-Host "  3. Edge が『パスワードを保存しますか?』と聞いたら【保存】"
+    Write-Host "  4. ログインできたらウィンドウを閉じる"
+    Write-Host "これで以後のキオスク表示は、警告なし・ログイン済みの状態で開きます。" -ForegroundColor Green
+    if ($RightUrl) { & $edge --user-data-dir="$env:LOCALAPPDATA\FieldKioskR" --no-first-run --ignore-certificate-errors --new-window $RightUrl }
+    if ($LeftUrl)  { & $edge --user-data-dir="$env:LOCALAPPDATA\FieldKioskL" --no-first-run --ignore-certificate-errors --new-window $LeftUrl }
+    exit 0
+}
+
 # --- VM の起動を待つ ---
 $sw = [System.Diagnostics.Stopwatch]::StartNew()
 while ($sw.Elapsed.TotalSeconds -lt $TimeoutSec) {
@@ -109,7 +128,9 @@ if (-not $edge) { Write-Error "Microsoft Edge が見つかりません。"; exit
 
 function Open-Kiosk([string]$u, $screen, [string]$profile) {
     if (-not $u) { return }
+    # --ignore-certificate-errors: FIELD の自己署名証明書の警告画面を出さない (この専用プロファイル内のみ)
     & $edge --user-data-dir="$env:LOCALAPPDATA\$profile" --no-first-run --new-window `
+        --ignore-certificate-errors `
         --window-position="$($screen.Bounds.X),$($screen.Bounds.Y)" `
         --kiosk $u --edge-kiosk-type=fullscreen
     Start-Sleep -Seconds 2
