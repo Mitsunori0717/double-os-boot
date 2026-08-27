@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     FIELD system VM を起動し、コンソール画面を開きます。
 

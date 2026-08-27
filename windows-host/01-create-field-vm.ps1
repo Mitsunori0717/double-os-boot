@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     メーカー専用機 Linux (FANUC FIELD system 等) の物理ディスクを、
     Windows ホスト上の Hyper-V VM としてそのまま起動する定義を作成します。
