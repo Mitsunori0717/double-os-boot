@@ -1,44 +1,71 @@
 ﻿<#
 .SYNOPSIS
-    FIELD system の管理画面を、サブモニターに全画面 (キオスクモード) で自動表示します。
+    起動時に、左右のモニターへ FIELD system の画面を全画面 (キオスクモード) で自動表示します。
 
 .DESCRIPTION
-    - FIELD system VM の起動と Web 画面の応答を待ってから、Edge をキオスクモード
-      (枠なし全画面) でサブモニターに開きます
-    - -Install を付けて一度実行すると、ログオン時に自動実行されるタスクを登録します。
-      以後、PC の電源を入れてログオンするだけで「モニター1 = Windows、
-      モニター2 = FIELD system 全画面」の状態になります
+    - 表示する URL は同じフォルダの display-config.json で設定します (メモ帳で編集可)。
+      初回実行時に自動作成されます。編集後の再登録は不要で、次回表示から反映されます
+    - FIELD system VM の起動と Web 画面の応答を待ってから表示します
+    - -Install を付けて一度実行すると、ログオン時に自動実行されるタスクを登録します
 
 .EXAMPLE
-    .\03-field-display-kiosk.ps1            # 今すぐ表示 (動作確認用)
-    .\03-field-display-kiosk.ps1 -Install   # ログオン時の自動実行を登録
-    .\03-field-display-kiosk.ps1 -Uninstall # 自動実行を解除
+    .\03-field-display-kiosk.ps1              # display-config.json の内容で今すぐ表示
+    .\03-field-display-kiosk.ps1 -Install     # ログオン時の自動表示を登録
+    .\03-field-display-kiosk.ps1 -Uninstall   # 自動表示を解除
+
+    # 一時的に URL を指定して試す場合 (設定ファイルより優先)
+    .\03-field-display-kiosk.ps1 -RightUrl "https://192.168.0.200/" -LeftUrl "https://192.168.0.205/boxsettings/"
 #>
 [CmdletBinding()]
 param(
-    [string]$VMName = "FIELDsystem",
+    [string]$VMName   = "FIELDsystem",
+    [string]$RightUrl,
+    [string]$LeftUrl,
     [switch]$Install,
     [switch]$Uninstall,
-    [int]$TimeoutSec = 420
+    [int]$TimeoutSec  = 420
 )
 
 $ErrorActionPreference = "Stop"
 $TaskName = "FIELD-Display-Kiosk"
+$ConfigFile = Join-Path $PSScriptRoot "display-config.json"
+
+# --- 設定ファイル (無ければ既定値で自動作成) ---
+if (-not (Test-Path $ConfigFile)) {
+    @"
+{
+  "_説明": "左右モニターに全画面表示する URL の設定。メモ帳で編集できます。空文字にするとそのモニターには表示しません。",
+  "RightUrl": "https://192.168.0.200/",
+  "LeftUrl": ""
+}
+"@ | Set-Content -Path $ConfigFile -Encoding UTF8
+    Write-Host "設定ファイルを作成しました: $ConfigFile" -ForegroundColor Cyan
+}
+$cfg = Get-Content $ConfigFile -Raw -Encoding UTF8 | ConvertFrom-Json
+if (-not $PSBoundParameters.ContainsKey("RightUrl")) { $RightUrl = [string]$cfg.RightUrl }
+if (-not $PSBoundParameters.ContainsKey("LeftUrl"))  { $LeftUrl  = [string]$cfg.LeftUrl }
 
 if ($Install) {
-    $action = New-ScheduledTaskAction -Execute "powershell.exe" `
-        -Argument "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$PSCommandPath`" -VMName `"$VMName`""
+    # URL は焼き込まず、実行のたびに display-config.json を読む (編集だけで反映される)
+    $arg = "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$PSCommandPath`" -VMName `"$VMName`""
+    $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument $arg
     $trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
     $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -ExecutionTimeLimit (New-TimeSpan -Hours 1)
     Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger `
         -Settings $settings -RunLevel Highest -Force | Out-Null
-    Write-Host "登録しました。次回ログオンから、サブモニターに FIELD system が自動で全画面表示されます。" -ForegroundColor Green
+    Write-Host "登録しました。次回ログオンから自動で全画面表示されます。" -ForegroundColor Green
+    Write-Host "  表示内容の変更: $ConfigFile をメモ帳で編集 (再登録不要)"
+    Write-Host "  現在の設定 → 右: $(if ($RightUrl) { $RightUrl } else { '(表示なし)' }) / 左: $(if ($LeftUrl) { $LeftUrl } else { '(表示なし)' })"
     exit 0
 }
 if ($Uninstall) {
     Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue
     Write-Host "自動表示を解除しました。"
     exit 0
+}
+if (-not $RightUrl -and -not $LeftUrl) {
+    Write-Error "表示する URL がありません。$ConfigFile を編集するか、-RightUrl/-LeftUrl を指定してください。"
+    exit 1
 }
 
 # --- VM の起動を待つ ---
@@ -49,60 +76,46 @@ while ($sw.Elapsed.TotalSeconds -lt $TimeoutSec) {
     Start-Sleep -Seconds 5
 }
 
-# --- IP アドレスの取得を待つ ---
-$ip = $null
-while ($sw.Elapsed.TotalSeconds -lt $TimeoutSec) {
-    $ip = (Get-VMNetworkAdapter -VMName $VMName -ErrorAction SilentlyContinue).IPAddresses |
-        Where-Object { $_ -match "^\d+\.\d+\.\d+\.\d+$" -and $_ -notmatch "^169\.254\." } |
-        Select-Object -First 1
-    if ($ip) { break }
-    Start-Sleep -Seconds 5
-}
-if (-not $ip) {
-    Write-Warning "FIELD system の IP を取得できませんでした。VM の状態を確認してください。"
-    exit 1
-}
-
-# --- Web 画面の応答を待つ (https → http の順に試す) ---
-$url = $null
-while ($sw.Elapsed.TotalSeconds -lt $TimeoutSec -and -not $url) {
-    foreach ($cand in @("https://$ip", "http://$ip")) {
+# --- 表示対象 URL の応答を待つ ---
+function Wait-Url([string]$u) {
+    if (-not $u) { return $true }
+    $uri = [Uri]$u
+    $port = if ($uri.Port -gt 0) { $uri.Port } elseif ($uri.Scheme -eq "https") { 443 } else { 80 }
+    while ($script:sw.Elapsed.TotalSeconds -lt $TimeoutSec) {
         try {
-            $port = if ($cand.StartsWith("https")) { 443 } else { 80 }
             $tcp = New-Object Net.Sockets.TcpClient
-            if ($tcp.ConnectAsync($ip, $port).Wait(3000)) { $url = $cand }
+            $ok = $tcp.ConnectAsync($uri.Host, $port).Wait(3000)
             $tcp.Dispose()
-            if ($url) { break }
+            if ($ok) { return $true }
         } catch { }
+        Start-Sleep -Seconds 5
     }
-    if (-not $url) { Start-Sleep -Seconds 5 }
+    return $false
 }
-if (-not $url) {
-    Write-Warning "FIELD system の Web 画面 (80/443) が応答しません。"
-    exit 1
-}
+if (-not (Wait-Url $RightUrl)) { Write-Warning "右画面用 URL が応答しません: $RightUrl" }
+if (-not (Wait-Url $LeftUrl))  { Write-Warning "左画面用 URL が応答しません: $LeftUrl" }
 
-# --- サブモニターの位置を取得 ---
+# --- モニターの位置を取得 (X座標で左右を判定) ---
 Add-Type -AssemblyName System.Windows.Forms
-$sub = [System.Windows.Forms.Screen]::AllScreens | Where-Object { -not $_.Primary } | Select-Object -First 1
-if ($sub) {
-    $posX = $sub.Bounds.X; $posY = $sub.Bounds.Y
-} else {
-    $posX = 0; $posY = 0   # サブモニター未検出時はメインに表示
-}
+$screens = [System.Windows.Forms.Screen]::AllScreens | Sort-Object { $_.Bounds.X }
+$leftScreen  = $screens | Select-Object -First 1
+$rightScreen = $screens | Select-Object -Last 1
 
-# --- Edge をキオスクモードで起動 ---
 $edge = @(
     "$env:ProgramFiles\Microsoft\Edge\Application\msedge.exe",
     "${env:ProgramFiles(x86)}\Microsoft\Edge\Application\msedge.exe"
 ) | Where-Object { Test-Path $_ } | Select-Object -First 1
-if (-not $edge) {
-    Write-Warning "Microsoft Edge が見つかりません。"
-    exit 1
+if (-not $edge) { Write-Error "Microsoft Edge が見つかりません。"; exit 1 }
+
+function Open-Kiosk([string]$u, $screen, [string]$profile) {
+    if (-not $u) { return }
+    & $edge --user-data-dir="$env:LOCALAPPDATA\$profile" --no-first-run --new-window `
+        --window-position="$($screen.Bounds.X),$($screen.Bounds.Y)" `
+        --kiosk $u --edge-kiosk-type=fullscreen
+    Start-Sleep -Seconds 2
 }
 
-& $edge --user-data-dir="$env:LOCALAPPDATA\FieldKiosk" --no-first-run --new-window `
-    --window-position="$posX,$posY" --kiosk $url --edge-kiosk-type=fullscreen
+Open-Kiosk $RightUrl $rightScreen "FieldKioskR"
+Open-Kiosk $LeftUrl  $leftScreen  "FieldKioskL"
 
-Write-Host "FIELD system ($url) をサブモニターに全画面表示しました。"
-Write-Host "(終了するには Alt+F4)"
+Write-Host "表示しました。閉じるには各画面で Alt+F4。"
