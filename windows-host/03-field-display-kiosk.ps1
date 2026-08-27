@@ -24,6 +24,7 @@ param(
     [switch]$Install,
     [switch]$Uninstall,
     [switch]$LoginSetup,
+    [switch]$SaveLogin,
     [int]$TimeoutSec  = 420
 )
 
@@ -37,10 +38,24 @@ if (-not (Test-Path $ConfigFile)) {
 {
   "_説明": "左右モニターに全画面表示する URL の設定。メモ帳で編集できます。空文字にするとそのモニターには表示しません。",
   "RightUrl": "https://192.168.0.200/",
-  "LeftUrl": ""
+  "LeftUrl": "",
+  "AutoLogin": true,
+  "LoginDelaySec": 12
 }
 "@ | Set-Content -Path $ConfigFile -Encoding UTF8
     Write-Host "設定ファイルを作成しました: $ConfigFile" -ForegroundColor Cyan
+}
+$CredFile = Join-Path $PSScriptRoot "kiosk-login.xml"
+
+# --- ログイン情報の保存 (DPAPI 暗号化。このPC・このユーザーでのみ復号可能) ---
+if ($SaveLogin) {
+    $cred = Get-Credential -Message "FIELD system のログイン情報 (ユーザー名とパスワード)"
+    if (-not $cred) { exit 0 }
+    $cred | Export-Clixml -Path $CredFile
+    Write-Host "保存しました: $CredFile" -ForegroundColor Green
+    Write-Host "(Windows の暗号化機能で保護されており、このPCのこのユーザー以外は復号できません)"
+    Write-Host "以後のキオスク表示で自動ログインが有効になります。無効化: display-config.json の AutoLogin を false に"
+    exit 0
 }
 $cfg = Get-Content $ConfigFile -Raw -Encoding UTF8 | ConvertFrom-Json
 if (-not $PSBoundParameters.ContainsKey("RightUrl")) { $RightUrl = [string]$cfg.RightUrl }
@@ -136,7 +151,36 @@ function Open-Kiosk([string]$u, $screen, [string]$profile) {
     Start-Sleep -Seconds 2
 }
 
+# --- 自動ログイン (保存済みログイン情報を、開いた直後の画面へ自動タイプ) ---
+$autoLogin  = ($cfg.AutoLogin -ne $false) -and (Test-Path $CredFile)
+$loginDelay = if ($cfg.LoginDelaySec) { [int]$cfg.LoginDelaySec } else { 12 }
+$loginCred  = if ($autoLogin) { Import-Clixml $CredFile } else { $null }
+
+function Send-Login($cred) {
+    if (-not $cred) { return }
+    # SendKeys の特殊文字 (+^%~(){}) をエスケープ
+    function Esc([string]$s) { ($s.ToCharArray() | ForEach-Object { if ("$_" -match '[+^%~(){}]') { "{$_}" } else { "$_" } }) -join "" }
+    $u = Esc $cred.UserName
+    $p = Esc $cred.GetNetworkCredential().Password
+    [System.Windows.Forms.SendKeys]::SendWait("^a")
+    [System.Windows.Forms.SendKeys]::SendWait($u)
+    [System.Windows.Forms.SendKeys]::SendWait("{TAB}")
+    [System.Windows.Forms.SendKeys]::SendWait("^a")
+    [System.Windows.Forms.SendKeys]::SendWait($p)
+    Start-Sleep -Milliseconds 300
+    [System.Windows.Forms.SendKeys]::SendWait("{ENTER}")
+}
+
 Open-Kiosk $RightUrl $rightScreen "FieldKioskR"
+if ($RightUrl -and $loginCred) {
+    Start-Sleep -Seconds $loginDelay   # ログイン画面の表示完了を待つ (遅い場合は LoginDelaySec を増やす)
+    Send-Login $loginCred
+}
+
 Open-Kiosk $LeftUrl  $leftScreen  "FieldKioskL"
+if ($LeftUrl -and $loginCred) {
+    Start-Sleep -Seconds $loginDelay
+    Send-Login $loginCred
+}
 
 Write-Host "表示しました。閉じるには各画面で Alt+F4。"

@@ -1,0 +1,4 @@
+# 端末固有の設定・暗号化ログイン情報はリポジトリに含めない
+display-config.json
+kiosk-login.xml
+field-boot-entry.conf
