@@ -26,8 +26,51 @@ param(
     [switch]$Uninstall,
     [switch]$Settings,
     [switch]$Setup,
+    [switch]$EscWatcher,
     [int]$TimeoutSec  = 420
 )
+
+# --- ESC 見張り役: ブラウザのキオスク窓が前面のときだけ ESC で最大化を解除する ---
+if ($EscWatcher) {
+    Add-Type -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+public class EscApi {
+    [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+    [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint pid);
+    [DllImport("user32.dll")] public static extern short GetAsyncKeyState(int vKey);
+    [DllImport("user32.dll")] public static extern bool IsZoomed(IntPtr hWnd);
+    [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+}
+"@
+    $edgePids = @()
+    $lastScan = [datetime]::MinValue
+    while ($true) {
+        # 対象プロセス (FieldKiosk プロファイルの Edge) を10秒ごとに再確認
+        if (((Get-Date) - $lastScan).TotalSeconds -gt 10) {
+            $edgePids = @(Get-CimInstance Win32_Process -Filter "Name='msedge.exe'" -ErrorAction SilentlyContinue |
+                Where-Object { $_.CommandLine -match 'FieldKiosk' } | Select-Object -ExpandProperty ProcessId)
+            $lastScan = Get-Date
+        }
+        if (([EscApi]::GetAsyncKeyState(0x1B) -band 0x8000) -ne 0) {
+            $h = [EscApi]::GetForegroundWindow()
+            $procId = [uint32]0
+            [EscApi]::GetWindowThreadProcessId($h, [ref]$procId) | Out-Null
+            if ($edgePids -contains $procId -and [EscApi]::IsZoomed($h)) {
+                [EscApi]::ShowWindow($h, 9) | Out-Null   # 9 = 元のサイズに戻す
+            }
+            while (([EscApi]::GetAsyncKeyState(0x1B) -band 0x8000) -ne 0) { Start-Sleep -Milliseconds 50 }
+        }
+        Start-Sleep -Milliseconds 100
+    }
+    exit 0
+}
+
+function Stop-EscWatcher {
+    Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" -ErrorAction SilentlyContinue |
+        Where-Object { $_.CommandLine -match '-EscWatcher' -and $_.ProcessId -ne $PID } |
+        ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+}
 
 $ErrorActionPreference = "Stop"
 $TaskName = "FIELD-Display-Kiosk"
@@ -142,6 +185,7 @@ if ($Install) {
 }
 if ($Uninstall) {
     Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue
+    Stop-EscWatcher
     Write-Host "自動表示を解除しました。"
     exit 0
 }
@@ -252,4 +296,14 @@ function Open-Display([string]$val, $screen, [string]$profile) {
 Open-Display $RightUrl $rightScreen "FieldKioskR"
 Open-Display $LeftUrl  $leftScreen  "FieldKioskL"
 
-Write-Host "表示しました (ログインは画面上で行ってください)。ブラウザは Alt+F4、コンソール窓は×で閉じられます。"
+# --- ブラウザ表示があり、固定キオスクでない場合は ESC 見張り役を起動 ---
+$hasBrowser = (($RightUrl -and $RightUrl -notmatch '^(console|コンソール)$') -or
+               ($LeftUrl  -and $LeftUrl  -notmatch '^(console|コンソール)$'))
+if ($hasBrowser -and -not $KioskMode) {
+    Stop-EscWatcher   # 既存の見張り役がいれば入れ替え
+    Start-Process powershell.exe -WindowStyle Hidden `
+        -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" -EscWatcher"
+    Write-Host "ESC キーでブラウザの最大化を解除できます (ブラウザ画面が前面のときのみ有効)。"
+}
+
+Write-Host "表示しました (ログインは画面上で行ってください)。"
