@@ -24,6 +24,8 @@ param(
     [string]$LeftUrl,
     [switch]$Install,
     [switch]$Uninstall,
+    [switch]$Settings,
+    [switch]$Setup,
     [int]$TimeoutSec  = 420
 )
 
@@ -45,6 +47,77 @@ if (-not (Test-Path $ConfigFile)) {
 $cfg = Get-Content $ConfigFile -Raw -Encoding UTF8 | ConvertFrom-Json
 if (-not $PSBoundParameters.ContainsKey("RightUrl")) { $RightUrl = [string]$cfg.RightUrl }
 if (-not $PSBoundParameters.ContainsKey("LeftUrl"))  { $LeftUrl  = [string]$cfg.LeftUrl }
+
+# --- 設定 GUI: 左右の URL を入力ウィンドウで編集 ---
+if ($Settings) {
+    Add-Type -AssemblyName System.Windows.Forms
+    Add-Type -AssemblyName System.Drawing
+    $form = New-Object System.Windows.Forms.Form
+    $form.Text = "FIELD 表示設定"
+    $form.Size = New-Object System.Drawing.Size(560, 260)
+    $form.StartPosition = "CenterScreen"
+    $form.FormBorderStyle = "FixedDialog"
+    $form.MaximizeBox = $false
+
+    $lblR = New-Object System.Windows.Forms.Label
+    $lblR.Text = "右モニターに表示する URL (空欄 = 表示しない):"
+    $lblR.Location = New-Object System.Drawing.Point(15, 20)
+    $lblR.AutoSize = $true
+    $tbR = New-Object System.Windows.Forms.TextBox
+    $tbR.Location = New-Object System.Drawing.Point(15, 45)
+    $tbR.Size = New-Object System.Drawing.Size(510, 24)
+    $tbR.Text = [string]$cfg.RightUrl
+
+    $lblL = New-Object System.Windows.Forms.Label
+    $lblL.Text = "左モニターに表示する URL (空欄 = 表示しない):"
+    $lblL.Location = New-Object System.Drawing.Point(15, 85)
+    $lblL.AutoSize = $true
+    $tbL = New-Object System.Windows.Forms.TextBox
+    $tbL.Location = New-Object System.Drawing.Point(15, 110)
+    $tbL.Size = New-Object System.Drawing.Size(510, 24)
+    $tbL.Text = [string]$cfg.LeftUrl
+
+    $btnOK = New-Object System.Windows.Forms.Button
+    $btnOK.Text = "保存"
+    $btnOK.Location = New-Object System.Drawing.Point(330, 160)
+    $btnOK.Size = New-Object System.Drawing.Size(90, 30)
+    $btnOK.DialogResult = "OK"
+    $btnCancel = New-Object System.Windows.Forms.Button
+    $btnCancel.Text = "キャンセル"
+    $btnCancel.Location = New-Object System.Drawing.Point(435, 160)
+    $btnCancel.Size = New-Object System.Drawing.Size(90, 30)
+    $btnCancel.DialogResult = "Cancel"
+
+    $form.Controls.AddRange(@($lblR, $tbR, $lblL, $tbL, $btnOK, $btnCancel))
+    $form.AcceptButton = $btnOK
+    $form.CancelButton = $btnCancel
+
+    if ($form.ShowDialog() -eq "OK") {
+        $out = [ordered]@{
+            "_説明"    = "左右モニターに全画面表示する URL の設定。『FIELD表示設定』アイコンから編集できます。"
+            "RightUrl" = $tbR.Text.Trim()
+            "LeftUrl"  = $tbL.Text.Trim()
+        }
+        $out | ConvertTo-Json | Set-Content -Path $ConfigFile -Encoding UTF8
+        [System.Windows.Forms.MessageBox]::Show("保存しました。次回の表示から反映されます。", "FIELD 表示設定") | Out-Null
+    }
+    exit 0
+}
+
+# --- デスクトップに『FIELD表示設定』アイコンを作成 ---
+if ($Setup) {
+    $lnkPath = Join-Path ([Environment]::GetFolderPath("Desktop")) "FIELD表示設定.lnk"
+    $shell = New-Object -ComObject WScript.Shell
+    $lnk = $shell.CreateShortcut($lnkPath)
+    $lnk.TargetPath = "powershell.exe"
+    $lnk.Arguments  = "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$PSCommandPath`" -Settings"
+    $lnk.WorkingDirectory = $PSScriptRoot
+    $lnk.IconLocation = "shell32.dll,21"
+    $lnk.Description  = "左右モニターに表示する FIELD 画面の URL を設定"
+    $lnk.Save()
+    Write-Host "デスクトップに『FIELD表示設定』アイコンを作成しました。" -ForegroundColor Green
+    exit 0
+}
 
 if ($Install) {
     # URL は焼き込まず、実行のたびに display-config.json を読む (編集だけで反映される)

@@ -39,11 +39,18 @@ if ($Setup) {
     exit 0
 }
 
+Add-Type -AssemblyName System.Windows.Forms
+$shutdownWindows = $true
 if (-not $NoConfirm) {
-    Write-Host "FIELD system を終了してから、Windows もシャットダウンします。" -ForegroundColor Yellow
-    Write-Host "作業中のファイルは保存してください。"
-    $ans = Read-Host "実行しますか? (y/N)"
-    if ($ans -ne "y") { exit 0 }
+    $msg = "FIELD system を終了します。`n`nWindows もシャットダウンしますか?`n`n" +
+           "[はい]      FIELD を終了 → Windows もシャットダウン`n" +
+           "[いいえ]    FIELD だけ終了 (Windows はこのまま使う)`n" +
+           "[キャンセル] 何もしない"
+    $res = [System.Windows.Forms.MessageBox]::Show($msg, "全部シャットダウン",
+        [System.Windows.Forms.MessageBoxButtons]::YesNoCancel,
+        [System.Windows.Forms.MessageBoxIcon]::Question)
+    if ($res -eq [System.Windows.Forms.DialogResult]::Cancel) { exit 0 }
+    $shutdownWindows = ($res -eq [System.Windows.Forms.DialogResult]::Yes)
 }
 
 $vm = Get-VM -Name $VMName -ErrorAction SilentlyContinue
@@ -65,5 +72,10 @@ if ($vm -and $vm.State -eq "Running") {
     Write-Host "FIELD system は既に停止しています。"
 }
 
-Write-Host "Windows をシャットダウンします..."
-shutdown /s /t 10 /c "FIELD system の終了を確認しました。Windows をシャットダウンします。"
+if ($shutdownWindows) {
+    Write-Host "Windows をシャットダウンします..."
+    shutdown /s /t 10 /c "FIELD system の終了を確認しました。Windows をシャットダウンします。"
+} else {
+    [System.Windows.Forms.MessageBox]::Show("FIELD system のみ終了しました。Windows はそのまま使えます。`n再開するには 02-start-field-vm.ps1 を実行してください。",
+        "全部シャットダウン") | Out-Null
+}
