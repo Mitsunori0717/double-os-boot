@@ -1,6 +1,6 @@
 ﻿<#
 .SYNOPSIS
-    FIELD system の画面表示を管理します (左右モニターへの自動表示・コンソール自動ログイン)。
+    FIELD system の画面表示を管理します (左右モニターへの自動表示)。
     すべての設定は『FIELD表示設定』の設定コンソール (-Settings) で変更できます。
 
 .EXAMPLE
@@ -79,9 +79,6 @@ $DefaultConfig = [ordered]@{
     "LeftUrl"          = "console"
     "Kiosk"            = $false
     "EscEnabled"       = $true
-    "ConsoleAutoLogin" = $false
-    "ConsoleUser"      = ""
-    "ConsolePass"      = ""
     "ConsoleFullScreen" = $true
 }
 if (-not (Test-Path $ConfigFile)) {
@@ -101,7 +98,7 @@ if ($Settings) {
     Add-Type -AssemblyName System.Drawing
     $form = New-Object System.Windows.Forms.Form
     $form.Text = "FIELD 表示設定"
-    $form.Size = New-Object System.Drawing.Size(600, 470)
+    $form.Size = New-Object System.Drawing.Size(600, 360)
     $form.StartPosition = "CenterScreen"
     $form.FormBorderStyle = "FixedDialog"
     $form.MaximizeBox = $false
@@ -144,60 +141,31 @@ if ($Settings) {
     $grpOp = New-Object System.Windows.Forms.GroupBox
     $grpOp.Text = "操作"
     $grpOp.Location = New-Object System.Drawing.Point(15, 165)
-    $grpOp.Size = New-Object System.Drawing.Size(555, 60)
+    $grpOp.Size = New-Object System.Drawing.Size(555, 90)
     $cbEsc = New-Object System.Windows.Forms.CheckBox
     $cbEsc.Text = "ESC キーでブラウザの最大化を解除する (ブラウザ画面が前面のときのみ)"
     $cbEsc.Location = New-Object System.Drawing.Point(15, 25)
     $cbEsc.Size = New-Object System.Drawing.Size(530, 24)
     $cbEsc.Checked = ($cfg.EscEnabled -ne $false)
     $grpOp.Controls.Add($cbEsc)
-    $form.Controls.Add($grpOp)
-
-    # --- コンソール自動ログイン ---
-    $grpCon = New-Object System.Windows.Forms.GroupBox
-    $grpCon.Text = "コンソール画面の自動ログイン (VM 起動直後の login プロンプトに自動入力)"
-    $grpCon.Location = New-Object System.Drawing.Point(15, 235)
-    $grpCon.Size = New-Object System.Drawing.Size(555, 135)
-
-    $cbCon = New-Object System.Windows.Forms.CheckBox
-    $cbCon.Text = "自動ログインを有効にする"
-    $cbCon.Location = New-Object System.Drawing.Point(15, 25)
-    $cbCon.Size = New-Object System.Drawing.Size(230, 24)
-    $cbCon.Checked = ($cfg.ConsoleAutoLogin -eq $true)
-    $grpCon.Controls.Add($cbCon)
 
     $cbCF = New-Object System.Windows.Forms.CheckBox
-    $cbCF.Text = "全画面モードで表示 (解除は Ctrl+Alt+Break)"
-    $cbCF.Location = New-Object System.Drawing.Point(255, 25)
-    $cbCF.Size = New-Object System.Drawing.Size(290, 24)
+    $cbCF.Text = "コンソールを全画面モードで表示 (解除/再開は Ctrl+Alt+Break)"
+    $cbCF.Location = New-Object System.Drawing.Point(15, 55)
+    $cbCF.Size = New-Object System.Drawing.Size(530, 24)
     $cbCF.Checked = ($cfg.ConsoleFullScreen -ne $false)
-    $grpCon.Controls.Add($cbCF)
-
-    $grpCon.Controls.Add((New-Label "ユーザー名:" 15 60))
-    $tbCU = New-Object System.Windows.Forms.TextBox
-    $tbCU.Location = New-Object System.Drawing.Point(110, 57)
-    $tbCU.Size = New-Object System.Drawing.Size(240, 24)
-    $tbCU.Text = [string]$cfg.ConsoleUser
-    $grpCon.Controls.Add($tbCU)
-
-    $grpCon.Controls.Add((New-Label "パスワード:" 15 95))
-    $tbCP = New-Object System.Windows.Forms.TextBox
-    $tbCP.Location = New-Object System.Drawing.Point(110, 92)
-    $tbCP.Size = New-Object System.Drawing.Size(240, 24)
-    $tbCP.UseSystemPasswordChar = $true
-    $tbCP.Text = [string]$cfg.ConsolePass
-    $grpCon.Controls.Add($tbCP)
-    $form.Controls.Add($grpCon)
+    $grpOp.Controls.Add($cbCF)
+    $form.Controls.Add($grpOp)
 
     # --- ボタン ---
     $btnOK = New-Object System.Windows.Forms.Button
     $btnOK.Text = "保存"
-    $btnOK.Location = New-Object System.Drawing.Point(370, 385)
+    $btnOK.Location = New-Object System.Drawing.Point(370, 270)
     $btnOK.Size = New-Object System.Drawing.Size(90, 32)
     $btnOK.DialogResult = "OK"
     $btnCancel = New-Object System.Windows.Forms.Button
     $btnCancel.Text = "キャンセル"
-    $btnCancel.Location = New-Object System.Drawing.Point(475, 385)
+    $btnCancel.Location = New-Object System.Drawing.Point(475, 270)
     $btnCancel.Size = New-Object System.Drawing.Size(90, 32)
     $btnCancel.DialogResult = "Cancel"
     $form.Controls.AddRange(@($btnOK, $btnCancel))
@@ -211,9 +179,6 @@ if ($Settings) {
             "LeftUrl"          = $tbL.Text.Trim()
             "Kiosk"            = $cbK.Checked
             "EscEnabled"       = $cbEsc.Checked
-            "ConsoleAutoLogin" = $cbCon.Checked
-            "ConsoleUser"      = $tbCU.Text.Trim()
-            "ConsolePass"      = $tbCP.Text
             "ConsoleFullScreen" = $cbCF.Checked
         }
         $out | ConvertTo-Json | Set-Content -Path $ConfigFile -Encoding UTF8
@@ -372,12 +337,7 @@ function Open-Kiosk([string]$u, $screen, [string]$profile) {
     Start-Sleep -Seconds 2
 }
 
-# --- SendKeys 用の特殊文字エスケープ ---
-function Esc-SendKeys([string]$s) {
-    ($s.ToCharArray() | ForEach-Object { if ("$_" -match '[+^%~(){}\[\]]') { "{$_}" } else { "$_" } }) -join ""
-}
-
-# --- FIELD のコンソール画面 (vmconnect) を指定モニターに最大化 + 自動ログイン ---
+# --- FIELD のコンソール画面 (vmconnect) を指定モニターに最大化 ---
 function Open-Console($screen) {
     # コンソールは同時に1接続のみ。古い窓が残っていると新しい窓に切断ダイアログが出るため、先に閉じる
     Get-Process vmconnect -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
@@ -401,23 +361,6 @@ function Open-Console($screen) {
         Force-Foreground $hwnd
         [System.Windows.Forms.SendKeys]::SendWait("^%{BREAK}")
         Start-Sleep -Milliseconds 800
-    }
-
-    # --- 自動ログイン (VM 起動から15分以内 = 新しい login プロンプトのときだけ) ---
-    if ($cfg.ConsoleAutoLogin -eq $true -and $cfg.ConsoleUser) {
-        $vm = Get-VM -Name $VMName -ErrorAction SilentlyContinue
-        if ($vm -and $vm.Uptime.TotalMinutes -lt 15) {
-            Start-Sleep -Seconds 3
-            Force-Foreground $hwnd
-            [System.Windows.Forms.SendKeys]::SendWait((Esc-SendKeys ([string]$cfg.ConsoleUser)))
-            [System.Windows.Forms.SendKeys]::SendWait("{ENTER}")
-            Start-Sleep -Seconds 2
-            [System.Windows.Forms.SendKeys]::SendWait((Esc-SendKeys ([string]$cfg.ConsolePass)))
-            [System.Windows.Forms.SendKeys]::SendWait("{ENTER}")
-            Write-Host "コンソールに自動ログインしました。"
-        } else {
-            Write-Host "コンソール自動ログインをスキップしました (VM 起動から時間が経過しているため。ログイン済みの画面に文字を打ち込まない安全策です)。"
-        }
     }
 }
 
