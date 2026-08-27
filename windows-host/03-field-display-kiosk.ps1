@@ -82,6 +82,7 @@ $DefaultConfig = [ordered]@{
     "ConsoleAutoLogin" = $false
     "ConsoleUser"      = ""
     "ConsolePass"      = ""
+    "ConsoleFullScreen" = $true
 }
 if (-not (Test-Path $ConfigFile)) {
     $DefaultConfig | ConvertTo-Json | Set-Content -Path $ConfigFile -Encoding UTF8
@@ -161,9 +162,16 @@ if ($Settings) {
     $cbCon = New-Object System.Windows.Forms.CheckBox
     $cbCon.Text = "自動ログインを有効にする"
     $cbCon.Location = New-Object System.Drawing.Point(15, 25)
-    $cbCon.Size = New-Object System.Drawing.Size(300, 24)
+    $cbCon.Size = New-Object System.Drawing.Size(230, 24)
     $cbCon.Checked = ($cfg.ConsoleAutoLogin -eq $true)
     $grpCon.Controls.Add($cbCon)
+
+    $cbCF = New-Object System.Windows.Forms.CheckBox
+    $cbCF.Text = "全画面モードで表示 (解除は Ctrl+Alt+Break)"
+    $cbCF.Location = New-Object System.Drawing.Point(255, 25)
+    $cbCF.Size = New-Object System.Drawing.Size(290, 24)
+    $cbCF.Checked = ($cfg.ConsoleFullScreen -ne $false)
+    $grpCon.Controls.Add($cbCF)
 
     $grpCon.Controls.Add((New-Label "ユーザー名:" 15 60))
     $tbCU = New-Object System.Windows.Forms.TextBox
@@ -206,6 +214,7 @@ if ($Settings) {
             "ConsoleAutoLogin" = $cbCon.Checked
             "ConsoleUser"      = $tbCU.Text.Trim()
             "ConsolePass"      = $tbCP.Text
+            "ConsoleFullScreen" = $cbCF.Checked
         }
         $out | ConvertTo-Json | Set-Content -Path $ConfigFile -Encoding UTF8
         [System.Windows.Forms.MessageBox]::Show("保存しました。次回の表示から反映されます。", "FIELD 表示設定") | Out-Null
@@ -351,6 +360,14 @@ public class Win32Api {
     [Win32Api]::MoveWindow($hwnd, $screen.Bounds.X, $screen.Bounds.Y, 900, 700, $true) | Out-Null
     Start-Sleep -Milliseconds 400
     [Win32Api]::ShowWindow($hwnd, 3) | Out-Null   # 最大化
+
+    # 全画面モード (メニューバーなし・余白は黒)。解除/再開は Ctrl+Alt+Break
+    if ($cfg.ConsoleFullScreen -ne $false) {
+        [Win32Api]::SetForegroundWindow($hwnd) | Out-Null
+        Start-Sleep -Milliseconds 500
+        [System.Windows.Forms.SendKeys]::SendWait("^%{BREAK}")
+        Start-Sleep -Milliseconds 800
+    }
 
     # --- 自動ログイン (VM 起動から15分以内 = 新しい login プロンプトのときだけ) ---
     if ($cfg.ConsoleAutoLogin -eq $true -and $cfg.ConsoleUser) {
