@@ -310,6 +310,44 @@ $edge = @(
 ) | Where-Object { Test-Path $_ } | Select-Object -First 1
 if (-not $edge) { Write-Error "Microsoft Edge が見つかりません。"; exit 1 }
 
+# --- ウィンドウ操作用 API ---
+if (-not ([System.Management.Automation.PSTypeName]'Win32Api').Type) {
+    Add-Type -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+public class Win32Api {
+    [DllImport("user32.dll")] public static extern bool MoveWindow(IntPtr hWnd, int X, int Y, int nWidth, int nHeight, bool bRepaint);
+    [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+    [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
+    [DllImport("user32.dll")] public static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, uint dwExtraInfo);
+}
+"@
+}
+
+# 前面化のブロック (フォアグラウンドロック) を ALT キー疑似押下で解除してから前面化する
+function Force-Foreground([IntPtr]$hwnd) {
+    [Win32Api]::keybd_event(0x12, 0, 0, 0)      # ALT down
+    [Win32Api]::SetForegroundWindow($hwnd) | Out-Null
+    [Win32Api]::keybd_event(0x12, 0, 2, 0)      # ALT up
+    Start-Sleep -Milliseconds 400
+}
+
+# 指定プロファイルの Edge ウィンドウを探す
+function Get-EdgeWindow([string]$profile) {
+    for ($i = 0; $i -lt 15; $i++) {
+        Start-Sleep -Milliseconds 800
+        $procIds = @(Get-CimInstance Win32_Process -Filter "Name='msedge.exe'" -ErrorAction SilentlyContinue |
+            Where-Object { $_.CommandLine -match [regex]::Escape($profile) } |
+            Select-Object -ExpandProperty ProcessId)
+        if ($procIds.Count -gt 0) {
+            $p = Get-Process -Id $procIds -ErrorAction SilentlyContinue |
+                Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object -First 1
+            if ($p) { return $p.MainWindowHandle }
+        }
+    }
+    return [IntPtr]::Zero
+}
+
 function Open-Kiosk([string]$u, $screen, [string]$profile) {
     if (-not $u) { return }
     if ($KioskMode) {
@@ -318,10 +356,18 @@ function Open-Kiosk([string]$u, $screen, [string]$profile) {
             --window-position="$($screen.Bounds.X),$($screen.Bounds.Y)" `
             --kiosk $u --edge-kiosk-type=fullscreen
     } else {
+        # --test-type: 「サポートされていないフラグ」警告バーを非表示にする
         & $edge --user-data-dir="$env:LOCALAPPDATA\$profile" --no-first-run `
-            --ignore-certificate-errors `
+            --ignore-certificate-errors --test-type `
             --window-position="$($screen.Bounds.X),$($screen.Bounds.Y)" `
-            --start-maximized --app=$u
+            --app=$u
+        # 起動したウィンドウを直接つかんで、対象モニターへ移動 + 最大化 (--start-maximized は app 窓では無視されるため)
+        $h = Get-EdgeWindow $profile
+        if ($h -ne [IntPtr]::Zero) {
+            [Win32Api]::MoveWindow($h, $screen.Bounds.X, $screen.Bounds.Y, 1000, 700, $true) | Out-Null
+            Start-Sleep -Milliseconds 300
+            [Win32Api]::ShowWindow($h, 3) | Out-Null   # 最大化
+        }
     }
     Start-Sleep -Seconds 2
 }
@@ -333,17 +379,6 @@ function Esc-SendKeys([string]$s) {
 
 # --- FIELD のコンソール画面 (vmconnect) を指定モニターに最大化 + 自動ログイン ---
 function Open-Console($screen) {
-    if (-not ([System.Management.Automation.PSTypeName]'Win32Api').Type) {
-        Add-Type -TypeDefinition @"
-using System;
-using System.Runtime.InteropServices;
-public class Win32Api {
-    [DllImport("user32.dll")] public static extern bool MoveWindow(IntPtr hWnd, int X, int Y, int nWidth, int nHeight, bool bRepaint);
-    [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
-    [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
-}
-"@
-    }
     # コンソールは同時に1接続のみ。古い窓が残っていると新しい窓に切断ダイアログが出るため、先に閉じる
     Get-Process vmconnect -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
     Start-Sleep -Seconds 1
@@ -363,8 +398,7 @@ public class Win32Api {
 
     # 全画面モード (メニューバーなし・余白は黒)。解除/再開は Ctrl+Alt+Break
     if ($cfg.ConsoleFullScreen -ne $false) {
-        [Win32Api]::SetForegroundWindow($hwnd) | Out-Null
-        Start-Sleep -Milliseconds 500
+        Force-Foreground $hwnd
         [System.Windows.Forms.SendKeys]::SendWait("^%{BREAK}")
         Start-Sleep -Milliseconds 800
     }
@@ -374,8 +408,7 @@ public class Win32Api {
         $vm = Get-VM -Name $VMName -ErrorAction SilentlyContinue
         if ($vm -and $vm.Uptime.TotalMinutes -lt 15) {
             Start-Sleep -Seconds 3
-            [Win32Api]::SetForegroundWindow($hwnd) | Out-Null
-            Start-Sleep -Milliseconds 500
+            Force-Foreground $hwnd
             [System.Windows.Forms.SendKeys]::SendWait((Esc-SendKeys ([string]$cfg.ConsoleUser)))
             [System.Windows.Forms.SendKeys]::SendWait("{ENTER}")
             Start-Sleep -Seconds 2
