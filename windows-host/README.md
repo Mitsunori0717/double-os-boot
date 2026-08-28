@@ -59,7 +59,14 @@ Windows 側の FsBP 専用アプリの接続先にも、この IP を設定し�
 
 ```powershell
 Set-VM -Name FIELDsystem -AutomaticStartAction Start -AutomaticStartDelay 30
+powercfg /h off                  # 高速スタートアップ無効 (自動起動を確実にする)
+.\06-auto-logon.ps1 -Setup       # サインイン画面を省略し、電源 ON で直接デスクトップへ
 ```
+
+`06-auto-logon.ps1` でロック画面とパスワード入力を省略すると、電源 ON だけで
+VM 起動 → サインイン → 左右モニターへの自動表示 (`03-field-display-kiosk.ps1`) まで
+人の操作なしにそろいます。アカウント名とパスワードはデスクトップの
+『自動サインイン設定』アイコンからいつでも変更できます (`-Disable` で元に戻せます)。
 
 ## ネイティブ起動に戻す(切り分け・撤退手順)
 
