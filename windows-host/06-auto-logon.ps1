@@ -157,9 +157,11 @@ function Remove-AutoLogonSecret {
         $k = New-LsaString "DefaultPassword"
         $st = [FieldLsa]::LsaDeletePrivateData($h, [ref]$k, [IntPtr]::Zero)
         [Runtime.InteropServices.Marshal]::FreeHGlobal($k.Buffer)
-        # 0xC0000034 = 元から保存されていない (解除としては成功扱い)
-        if ($st -ne 0 -and $st -ne 0xC0000034) {
-            Write-Warning "保存済みパスワードの削除に失敗しました (エラー $([FieldLsa]::LsaNtStatusToWinError($st)))。"
+        # Win32 エラー 2 (見つかりません) = 元から保存されていない。解除としては成功扱い
+        # ※ 0xC0000034 との直接比較は、PowerShell が 16 進数を符号付きで解釈するため使わない
+        $win32 = [FieldLsa]::LsaNtStatusToWinError($st)
+        if ($st -ne 0 -and $win32 -ne 2) {
+            Write-Warning "保存済みパスワードの削除に失敗しました (エラー $win32)。"
         }
     } finally { [FieldLsa]::LsaClose($h) | Out-Null }
 }
@@ -401,6 +403,8 @@ if ($Settings) {
     $tbPass.Location = New-Object System.Drawing.Point(125, 65)
     $tbPass.Size = New-Object System.Drawing.Size(355, 24)
     $tbPass.UseSystemPasswordChar = $true
+    # パスワードを入力し始めたら「有効にする」の意思表示とみなしてチェックを入れる
+    $tbPass.Add_TextChanged({ if ($tbPass.Text) { $cbOn.Checked = $true } })
     $grp.Controls.Add($tbPass)
 
     $note = New-Label "※ パスワード欄を空のまま保存すると、今保存されているパスワードをそのまま使います。" 15 100 470
@@ -453,6 +457,17 @@ if ($Settings) {
     if ($form.ShowDialog() -ne "OK") { exit 0 }
 
     if (-not $cbOn.Checked) {
+        # 解除は取り消しが効かない操作なので、意図を一度確認する
+        $r = [System.Windows.Forms.MessageBox]::Show(
+            "一番上のチェックが外れています。このまま保存すると`n" +
+            "自動サインインは『解除』され、起動時にサインイン画面が表示されます。`n`n" +
+            "自動サインインを有効にしたい場合は『いいえ』を押し、`n" +
+            "一番上のチェックを入れてから保存し直してください。`n`n" +
+            "解除でよろしいですか?",
+            "自動サインイン設定",
+            [System.Windows.Forms.MessageBoxButtons]::YesNo,
+            [System.Windows.Forms.MessageBoxIcon]::Warning)
+        if ($r -ne [System.Windows.Forms.DialogResult]::Yes) { exit 0 }
         Disable-AutoLogon
         [System.Windows.Forms.MessageBox]::Show(
             "自動サインインを解除しました。`n次回の起動からサインイン画面が表示されます。",
