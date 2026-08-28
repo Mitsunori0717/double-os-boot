@@ -154,15 +154,18 @@ if ($Backdrop) {
 #  ESC 見張り役: FIELD 表示用ブラウザ窓が前面・最大化のときだけ ESC で解除
 # ============================================================
 if ($EscWatcher) {
+    Add-Type -AssemblyName System.Windows.Forms
     Add-Type -TypeDefinition @"
 using System;
 using System.Runtime.InteropServices;
 public class EscApi {
+    [StructLayout(LayoutKind.Sequential)] public struct RECT { public int Left, Top, Right, Bottom; }
     [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
     [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint pid);
     [DllImport("user32.dll")] public static extern short GetAsyncKeyState(int vKey);
     [DllImport("user32.dll")] public static extern bool IsZoomed(IntPtr hWnd);
     [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+    [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hWnd, out RECT r);
 }
 "@
     $edgePids = @()
@@ -177,8 +180,18 @@ public class EscApi {
             $h = [EscApi]::GetForegroundWindow()
             $procId = [uint32]0
             [EscApi]::GetWindowThreadProcessId($h, [ref]$procId) | Out-Null
-            if ($edgePids -contains $procId -and [EscApi]::IsZoomed($h)) {
-                [EscApi]::ShowWindow($h, 9) | Out-Null   # 9 = 元のサイズに戻す
+            if ($edgePids -contains $procId) {
+                if ([EscApi]::IsZoomed($h)) {
+                    [EscApi]::ShowWindow($h, 9) | Out-Null   # 最大化 → 元のサイズに戻す
+                } else {
+                    # 全画面 (F11) 状態なら解除する。ウィンドウがモニター全体を覆っているかで判定
+                    $r = New-Object 'EscApi+RECT'
+                    [EscApi]::GetWindowRect($h, [ref]$r) | Out-Null
+                    $b = [System.Windows.Forms.Screen]::FromHandle($h).Bounds
+                    if ($r.Left -le $b.Left -and $r.Top -le $b.Top -and $r.Right -ge $b.Right -and $r.Bottom -ge $b.Bottom) {
+                        [System.Windows.Forms.SendKeys]::SendWait("{F11}")
+                    }
+                }
             }
             while (([EscApi]::GetAsyncKeyState(0x1B) -band 0x8000) -ne 0) { Start-Sleep -Milliseconds 50 }
         }
@@ -707,26 +720,27 @@ function Open-Kiosk([string]$u, $screen, [string]$profile, [bool]$fullScreen) {
     if (-not $u) { return }
     Log ("ブラウザを開きます: {0}  (モニター {1},{2} / {3})" -f $u, $screen.Bounds.X, $screen.Bounds.Y,
          $(if ($fullScreen) { "全画面" } else { "最大化ウィンドウ" }))
+    # --test-type: 「サポートされていないフラグ」警告バーを非表示にする
+    & $edge --user-data-dir="$env:LOCALAPPDATA\$profile" --no-first-run `
+        --ignore-certificate-errors --test-type `
+        --window-position="$($screen.Bounds.X),$($screen.Bounds.Y)" `
+        --app=$u
+    # 起動したウィンドウを直接つかんで、対象モニターへ移動 + 最大化 (--start-maximized は app 窓では無視されるため)
+    $h = Get-EdgeWindow $profile
+    if ($h -eq [IntPtr]::Zero) { Log "警告: ブラウザのウィンドウを見つけられませんでした。"; return }
+    [FieldWin]::MoveWindow($h, $screen.Bounds.X, $screen.Bounds.Y, 1000, 700, $true) | Out-Null
+    Start-Sleep -Milliseconds 300
+    [FieldWin]::ShowWindow($h, 3) | Out-Null   # 最大化
+    Log "ブラウザのウィンドウを配置しました。"
+
+    # 全画面指定なら F11 で全画面表示にする (ESC キーで解除できる)
     if ($fullScreen) {
-        & $edge --user-data-dir="$env:LOCALAPPDATA\$profile" --no-first-run --new-window `
-            --ignore-certificate-errors `
-            --window-position="$($screen.Bounds.X),$($screen.Bounds.Y)" `
-            --kiosk $u --edge-kiosk-type=fullscreen
-    } else {
-        # --test-type: 「サポートされていないフラグ」警告バーを非表示にする
-        & $edge --user-data-dir="$env:LOCALAPPDATA\$profile" --no-first-run `
-            --ignore-certificate-errors --test-type `
-            --window-position="$($screen.Bounds.X),$($screen.Bounds.Y)" `
-            --app=$u
-        # 起動したウィンドウを直接つかんで、対象モニターへ移動 + 最大化 (--start-maximized は app 窓では無視されるため)
-        $h = Get-EdgeWindow $profile
-        if ($h -ne [IntPtr]::Zero) {
-            [FieldWin]::MoveWindow($h, $screen.Bounds.X, $screen.Bounds.Y, 1000, 700, $true) | Out-Null
-            Start-Sleep -Milliseconds 300
-            [FieldWin]::ShowWindow($h, 3) | Out-Null   # 最大化
-            Log "ブラウザのウィンドウを配置しました。"
-        } else {
-            Log "警告: ブラウザのウィンドウを見つけられませんでした。"
+        for ($try = 1; $try -le 2; $try++) {
+            Force-Foreground $h | Out-Null
+            [System.Windows.Forms.SendKeys]::SendWait("{F11}")
+            Start-Sleep -Milliseconds 900
+            if (Test-CoversScreen $h $screen) { Log "ブラウザ: 全画面表示にしました。"; break }
+            if ($try -eq 2) { Log "ブラウザ: 全画面化できなかったため最大化ウィンドウのままにします。" }
         }
     }
     Start-Sleep -Seconds 2
@@ -917,14 +931,14 @@ function Open-Display([string]$val, $screen, [string]$profile, [bool]$fullScreen
 Open-Display $RightUrl $rightScreen "FieldKioskR" $RightFull
 Open-Display $LeftUrl  $leftScreen  "FieldKioskL" $LeftFull
 
-# --- ESC 見張り役 (最大化ウィンドウのブラウザがある場合のみ。全画面指定の側は対象外) ---
-$hasMaximizedBrowser = (($RightUrl -and $RightUrl -notmatch '^(console|コンソール)$' -and -not $RightFull) -or
-                        ($LeftUrl  -and $LeftUrl  -notmatch '^(console|コンソール)$' -and -not $LeftFull))
-if ($hasMaximizedBrowser -and ($cfg.EscEnabled -ne $false)) {
+# --- ESC 見張り役 (ブラウザ表示があれば起動。全画面→最大化→元のサイズ の順に ESC で戻せる) ---
+$hasBrowser = (($RightUrl -and $RightUrl -notmatch '^(console|コンソール)$') -or
+               ($LeftUrl  -and $LeftUrl  -notmatch '^(console|コンソール)$'))
+if ($hasBrowser -and ($cfg.EscEnabled -ne $false)) {
     Stop-EscWatcher
     Start-Process powershell.exe -WindowStyle Hidden `
         -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" -EscWatcher"
-    Log "ESC キーでブラウザの最大化を解除できます (ブラウザ画面が前面のときのみ)。"
+    Log "ESC キーでブラウザの全画面/最大化を解除できます (ブラウザ画面が前面のときのみ)。"
 }
 
 Log "===== 表示処理を完了 ====="
