@@ -120,6 +120,15 @@ if ($Splash) {
 if ($Backdrop) {
     Add-Type -AssemblyName System.Windows.Forms
     Add-Type -AssemblyName System.Drawing
+    if (-not ("BdApi" -as [type])) {
+        Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public class BdApi {
+    [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr hWnd, IntPtr after, int X, int Y, int cx, int cy, uint flags);
+}
+'@
+    }
     $p = $BackdropBounds -split ','
     $f = New-Object System.Windows.Forms.Form
     $f.FormBorderStyle = "None"
@@ -131,6 +140,13 @@ if ($Backdrop) {
     $f.Add_KeyDown({ param($s, $e)
         if ($e.KeyCode -eq [System.Windows.Forms.Keys]::Escape) { [System.Windows.Forms.Application]::Exit() }
     })
+    # 黒背景は常に「いちばん後ろ」に居させる (コンソールなど他の窓を隠さないため)
+    # 0x0013 = SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE / (-2) = HWND_BOTTOM
+    $f.Add_Shown({ param($s, $e) [BdApi]::SetWindowPos($s.Handle, [IntPtr](-2), 0, 0, 0, 0, 0x0013) | Out-Null })
+    $bt = New-Object System.Windows.Forms.Timer
+    $bt.Interval = 2000
+    $bt.Add_Tick({ if (-not $f.IsDisposed) { [BdApi]::SetWindowPos($f.Handle, [IntPtr](-2), 0, 0, 0, 0, 0x0013) | Out-Null } })
+    $bt.Start()
     $f.Show()
     [System.Windows.Forms.Application]::Run((New-Object System.Windows.Forms.ApplicationContext))
     exit 0
@@ -1018,55 +1034,54 @@ function Open-Console($screen, [bool]$fullScreen) {
         if (Test-CoversScreen $hwnd $screen) { $done = $true; Log "コンソール: 全画面モードになりました (キー送信 試行 $try)" }
     }
 
-    # 方法4: 黒背景を敷き、枠・メニュー・ツールバーを取り除いたコンソールを重ねる
+    # 方法4: 黒背景を敷き、枠を外したコンソールを「実際の映像サイズ」で中央に重ねる
     if (-not $done) {
         Log "コンソール: 全画面モードの切り替えが効きませんでした。代替表示に切り替えます。"
         if ($cfg.ConsoleStripFrame -ne $false) {
+            # VM がいま実際に出している映像の解像度を調べる (設定値ではなく実測)
+            $vw = 0; $vh = 0
+            try {
+                $vm2 = Get-VM -Name $VMName -ErrorAction SilentlyContinue
+                if ($vm2) {
+                    $head = Get-CimInstance -Namespace root\virtualization\v2 -ClassName Msvm_VideoHead -ErrorAction SilentlyContinue |
+                        Where-Object { $_.SystemName -eq $vm2.Id.ToString() } | Select-Object -First 1
+                    if ($head -and [int]$head.CurrentHorizontalResolution -gt 0) {
+                        $vw = [int]$head.CurrentHorizontalResolution
+                        $vh = [int]$head.CurrentVerticalResolution
+                        Log "コンソール: 現在の実映像サイズは ${vw}x${vh} です。"
+                    }
+                }
+            } catch { }
+            if ($vw -le 0) {
+                try {
+                    $vid = Get-VMVideo -VMName $VMName -ErrorAction SilentlyContinue
+                    $vw = [int]$vid.HorizontalResolution; $vh = [int]$vid.VerticalResolution
+                } catch { }
+            }
+            if ($vw -le 0 -or $vw -gt $screen.Bounds.Width)  { $vw = [Math]::Min(1024, $screen.Bounds.Width) }
+            if ($vh -le 0 -or $vh -gt $screen.Bounds.Height) { $vh = [Math]::Min(768,  $screen.Bounds.Height) }
+            if ($vw -lt $screen.Bounds.Width) {
+                Log "コンソール: 映像がモニターより小さいため余白は黒になります (FIELD の再起動後はモニターと同じ大きさになります)。"
+            }
+            $cx = $screen.Bounds.X + [int](($screen.Bounds.Width  - $vw) / 2)
+            $cy = $screen.Bounds.Y + [int](($screen.Bounds.Height - $vh) / 2)
+
+            # 黒背景を敷く (黒背景は自分で最背面に下がるので、コンソールを隠さない)
             Start-Process powershell.exe -WindowStyle Hidden -ArgumentList (
                 "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" -Backdrop " +
                 "-BackdropBounds `"$($screen.Bounds.X),$($screen.Bounds.Y),$($screen.Bounds.Width),$($screen.Bounds.Height)`"")
             Start-Sleep -Milliseconds 900
 
-            $vw = 0; $vh = 0
-            try {
-                $vid = Get-VMVideo -VMName $VMName -ErrorAction SilentlyContinue
-                $vw = [int]$vid.HorizontalResolution; $vh = [int]$vid.VerticalResolution
-            } catch { }
-            if ($vw -le 0 -or $vw -gt $screen.Bounds.Width)  { $vw = [Math]::Min(1024, $screen.Bounds.Width) }
-            if ($vh -le 0 -or $vh -gt $screen.Bounds.Height) { $vh = [Math]::Min(768,  $screen.Bounds.Height) }
-            $cx = $screen.Bounds.X + [int](($screen.Bounds.Width  - $vw) / 2)
-            $cy = $screen.Bounds.Y + [int](($screen.Bounds.Height - $vh) / 2)
-
-            # メニューが生きているうちに、メニューからツールバーを非表示に切り替える
-            $tbHidden = $false
-            $tbHit = Invoke-ConsoleMenuCommand $hwnd 'ツール ?バー|Toolbar'
-            if ($tbHit) {
-                Start-Sleep -Milliseconds 400
-                $tbHidden = $true
-                Log "コンソール: メニュー『$tbHit』でツールバーを切り替えました。"
-            }
-
-            # 枠とメニューを外し、ツールバー (子ウィンドウ) も非表示にする
+            # 枠とメニューを外して実映像サイズで中央に配置し、ステータスバー等も隠す
             Set-FramelessWindow $hwnd $cx $cy $vw $vh
             Start-Sleep -Milliseconds 400
-            foreach ($cls in "ToolbarWindow32", "msctls_toolbarwindow32") {
-                $tb = [FieldWin]::FindWindowEx($hwnd, [IntPtr]::Zero, $cls, $null)
-                if ($tb -ne [IntPtr]::Zero) { [FieldWin]::ShowWindow($tb, 0) | Out-Null; $tbHidden = $true }
+            foreach ($cls in "msctls_statusbar32", "ToolbarWindow32", "msctls_toolbarwindow32", "ReBarWindow32") {
+                $child = [FieldWin]::FindWindowEx($hwnd, [IntPtr]::Zero, $cls, $null)
+                if ($child -ne [IntPtr]::Zero) { [FieldWin]::ShowWindow($child, 0) | Out-Null }
             }
-            $menuGone = ([FieldWin]::GetMenu($hwnd) -eq [IntPtr]::Zero)
-
-            # 取り切れなかった分 (メニュー・ツールバーの列) は画面の上端の外へ押し出す
-            $chrome = 0
-            if ($hadWin32Menu -and $menuGone -and $tbHidden) {
-                $chrome = 0    # 全部取り除けたので押し出し不要
-            } else {
-                $chrome = Get-ConsoleChromeHeight $hwnd    # 実測 (できなければ 60px と仮定)
-            }
-            if ($chrome -gt 0) {
-                [FieldWin]::SetWindowPos($hwnd, [IntPtr]::Zero, $cx, ($cy - $chrome), $vw, ($vh + $chrome), 0x0060) | Out-Null
-                [FieldWin]::BringWindowToTop($hwnd) | Out-Null
-            }
-            Log "コンソール: 黒背景の上に ${vw}x${vh} で表示しました (メニュー除去=$menuGone / ツールバー除去=$tbHidden / 押し出し ${chrome}px)。"
+            [FieldWin]::SetWindowPos($hwnd, [IntPtr]::Zero, $cx, $cy, $vw, $vh, 0x0060) | Out-Null
+            [FieldWin]::BringWindowToTop($hwnd) | Out-Null
+            Log "コンソール: 黒背景の上に実映像サイズ ${vw}x${vh} で表示しました。"
         }
     }
 }
