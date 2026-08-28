@@ -88,10 +88,10 @@ function Stop-EscWatcher {
 $DefaultConfig = [ordered]@{
     "_説明"             = "FIELD 表示の設定。『FIELD表示設定』アイコンから編集できます。"
     "RightUrl"          = "https://192.168.0.200/"
+    "RightFullScreen"   = $false
     "LeftUrl"           = "console"
-    "Kiosk"             = $false
+    "LeftFullScreen"    = $true
     "EscEnabled"        = $true
-    "ConsoleFullScreen" = $true
     "ConsoleStripFrame" = $true
     "ConsoleResolution" = "自動 (モニターに合わせる)"
 }
@@ -102,7 +102,16 @@ if (-not (Test-Path $ConfigFile)) {
 $cfg = Get-Content $ConfigFile -Raw -Encoding UTF8 | ConvertFrom-Json
 if (-not $PSBoundParameters.ContainsKey("RightUrl")) { $RightUrl = [string]$cfg.RightUrl }
 if (-not $PSBoundParameters.ContainsKey("LeftUrl"))  { $LeftUrl  = [string]$cfg.LeftUrl }
-$KioskMode = ($cfg.Kiosk -eq $true)
+# 左右それぞれの全画面指定。設定が無い場合は旧バージョンの設定から引き継ぐ
+function Get-SideFullScreen([string]$side, [string]$url) {
+    $name = $side + "FullScreen"
+    $v = $cfg.$name
+    if ($null -ne $v) { return ($v -eq $true) }
+    if ($url -match '^(console|コンソール)$') { return ($cfg.ConsoleFullScreen -ne $false) }
+    return ($cfg.Kiosk -eq $true)
+}
+$LeftFull  = Get-SideFullScreen "Left"  $LeftUrl
+$RightFull = Get-SideFullScreen "Right" $RightUrl
 
 # ============================================================
 #  コンソール (仮想マシン) の画面解像度
@@ -173,7 +182,7 @@ if ($Settings) {
     Add-Type -AssemblyName System.Drawing
     $form = New-Object System.Windows.Forms.Form
     $form.Text = "FIELD 表示設定"
-    $form.Size = New-Object System.Drawing.Size(600, 515)
+    $form.Size = New-Object System.Drawing.Size(600, 475)
     $form.StartPosition = "CenterScreen"
     $form.FormBorderStyle = "FixedDialog"
     $form.MaximizeBox = $false
@@ -188,35 +197,46 @@ if ($Settings) {
     $grpMon = New-Object System.Windows.Forms.GroupBox
     $grpMon.Text = "モニター表示 (URL を入力 / console = FIELDのコンソール画面 / 空欄 = 表示しない)"
     $grpMon.Location = New-Object System.Drawing.Point(15, 15)
-    $grpMon.Size = New-Object System.Drawing.Size(555, 140)
+    $grpMon.Size = New-Object System.Drawing.Size(555, 130)
 
     $grpMon.Controls.Add((New-Label "左モニター:" 15 30))
     $tbL = New-Object System.Windows.Forms.TextBox
     $tbL.Location = New-Object System.Drawing.Point(110, 27)
-    $tbL.Size = New-Object System.Drawing.Size(425, 24)
+    $tbL.Size = New-Object System.Drawing.Size(330, 24)
     $tbL.Text = [string]$cfg.LeftUrl
     $grpMon.Controls.Add($tbL)
+
+    $cbLF = New-Object System.Windows.Forms.CheckBox
+    $cbLF.Text = "全画面"
+    $cbLF.Location = New-Object System.Drawing.Point(455, 29)
+    $cbLF.Size = New-Object System.Drawing.Size(85, 24)
+    $cbLF.Checked = $LeftFull
+    $grpMon.Controls.Add($cbLF)
 
     $grpMon.Controls.Add((New-Label "右モニター:" 15 65))
     $tbR = New-Object System.Windows.Forms.TextBox
     $tbR.Location = New-Object System.Drawing.Point(110, 62)
-    $tbR.Size = New-Object System.Drawing.Size(425, 24)
+    $tbR.Size = New-Object System.Drawing.Size(330, 24)
     $tbR.Text = [string]$cfg.RightUrl
     $grpMon.Controls.Add($tbR)
 
-    $cbK = New-Object System.Windows.Forms.CheckBox
-    $cbK.Text = "完全固定の全画面 (チェックなし = 最大化ウィンドウ。F11/Win+矢印で切替可)"
-    $cbK.Location = New-Object System.Drawing.Point(15, 98)
-    $cbK.Size = New-Object System.Drawing.Size(530, 24)
-    $cbK.Checked = ($cfg.Kiosk -eq $true)
-    $grpMon.Controls.Add($cbK)
+    $cbRF = New-Object System.Windows.Forms.CheckBox
+    $cbRF.Text = "全画面"
+    $cbRF.Location = New-Object System.Drawing.Point(455, 64)
+    $cbRF.Size = New-Object System.Drawing.Size(85, 24)
+    $cbRF.Checked = $RightFull
+    $grpMon.Controls.Add($cbRF)
+
+    $lblMon = New-Label "全画面 = 枠なしで画面全体 (タスクバーも隠れる) / チェックなし = 最大化ウィンドウ" 15 98
+    $lblMon.ForeColor = [System.Drawing.Color]::DimGray
+    $grpMon.Controls.Add($lblMon)
     $form.Controls.Add($grpMon)
 
     # --- 操作 ---
     $grpOp = New-Object System.Windows.Forms.GroupBox
     $grpOp.Text = "操作"
-    $grpOp.Location = New-Object System.Drawing.Point(15, 165)
-    $grpOp.Size = New-Object System.Drawing.Size(555, 120)
+    $grpOp.Location = New-Object System.Drawing.Point(15, 155)
+    $grpOp.Size = New-Object System.Drawing.Size(555, 90)
     $cbEsc = New-Object System.Windows.Forms.CheckBox
     $cbEsc.Text = "ESC キーでブラウザの最大化を解除する (ブラウザ画面が前面のときのみ)"
     $cbEsc.Location = New-Object System.Drawing.Point(15, 25)
@@ -224,16 +244,9 @@ if ($Settings) {
     $cbEsc.Checked = ($cfg.EscEnabled -ne $false)
     $grpOp.Controls.Add($cbEsc)
 
-    $cbCF = New-Object System.Windows.Forms.CheckBox
-    $cbCF.Text = "コンソールを全画面モードで表示 (解除/再開は Ctrl+Alt+Break)"
-    $cbCF.Location = New-Object System.Drawing.Point(15, 55)
-    $cbCF.Size = New-Object System.Drawing.Size(530, 24)
-    $cbCF.Checked = ($cfg.ConsoleFullScreen -ne $false)
-    $grpOp.Controls.Add($cbCF)
-
     $cbSF = New-Object System.Windows.Forms.CheckBox
-    $cbSF.Text = "全画面モードが効かないときは、枠とメニューを消して画面いっぱいに広げる"
-    $cbSF.Location = New-Object System.Drawing.Point(15, 85)
+    $cbSF.Text = "コンソールの全画面が効かないときは、枠とメニューを消して画面いっぱいに広げる"
+    $cbSF.Location = New-Object System.Drawing.Point(15, 55)
     $cbSF.Size = New-Object System.Drawing.Size(530, 24)
     $cbSF.Checked = ($cfg.ConsoleStripFrame -ne $false)
     $grpOp.Controls.Add($cbSF)
@@ -242,16 +255,19 @@ if ($Settings) {
     # --- コンソールの表示サイズ ---
     $grpRes = New-Object System.Windows.Forms.GroupBox
     $grpRes.Text = "コンソールの表示サイズ (FIELD system 側の画面解像度)"
-    $grpRes.Location = New-Object System.Drawing.Point(15, 295)
+    $grpRes.Location = New-Object System.Drawing.Point(15, 255)
     $grpRes.Size = New-Object System.Drawing.Size(555, 115)
 
-    # このチェック 1 つで「解像度をモニターに合わせる」+「全画面モード」がまとめて有効になる
+    # このチェック 1 つで「解像度をモニターに合わせる」+「コンソール側を全画面」がまとまる
     $cbFit = New-Object System.Windows.Forms.CheckBox
-    $cbFit.Text = "モニターいっぱいに全画面表示する (解像度をモニターに合わせ、全画面モードにする)"
+    $cbFit.Text = "モニターいっぱいに全画面表示する (解像度をモニターに合わせ、全画面にする)"
     $cbFit.Location = New-Object System.Drawing.Point(15, 25)
     $cbFit.Size = New-Object System.Drawing.Size(530, 24)
     $resCur = [string]$cfg.ConsoleResolution
-    $cbFit.Checked = (((-not $resCur) -or ($resCur -match '^(auto|自動)')) -and ($cfg.ConsoleFullScreen -ne $false))
+    $consoleFull = if ($LeftUrl -match '^(console|コンソール)$') { $LeftFull }
+                   elseif ($RightUrl -match '^(console|コンソール)$') { $RightFull }
+                   else { $false }
+    $cbFit.Checked = (((-not $resCur) -or ($resCur -match '^(auto|自動)')) -and $consoleFull)
     $grpRes.Controls.Add($cbFit)
 
     $grpRes.Controls.Add((New-Label "解像度:" 15 58))
@@ -272,16 +288,15 @@ if ($Settings) {
     $grpRes.Controls.Add($lblRes2)
     $form.Controls.Add($grpRes)
 
-    # チェックに合わせて、解像度欄と全画面モード欄の状態をそろえる
+    # チェックを入れたら、解像度は自動、コンソール側のモニターは全画面にそろえる
     $syncFit = {
         if ($cbFit.Checked) {
             $cmbRes.Text = $ResolutionChoices[0]
             $cmbRes.Enabled = $false
-            $cbCF.Checked = $true
-            $cbCF.Enabled = $false
+            if ($tbL.Text.Trim() -match '^(console|コンソール)$') { $cbLF.Checked = $true }
+            if ($tbR.Text.Trim() -match '^(console|コンソール)$') { $cbRF.Checked = $true }
         } else {
             $cmbRes.Enabled = $true
-            $cbCF.Enabled = $true
         }
     }
     $cbFit.Add_CheckedChanged($syncFit)
@@ -290,12 +305,12 @@ if ($Settings) {
     # --- ボタン ---
     $btnOK = New-Object System.Windows.Forms.Button
     $btnOK.Text = "保存"
-    $btnOK.Location = New-Object System.Drawing.Point(370, 425)
+    $btnOK.Location = New-Object System.Drawing.Point(370, 385)
     $btnOK.Size = New-Object System.Drawing.Size(90, 32)
     $btnOK.DialogResult = "OK"
     $btnCancel = New-Object System.Windows.Forms.Button
     $btnCancel.Text = "キャンセル"
-    $btnCancel.Location = New-Object System.Drawing.Point(475, 425)
+    $btnCancel.Location = New-Object System.Drawing.Point(475, 385)
     $btnCancel.Size = New-Object System.Drawing.Size(90, 32)
     $btnCancel.DialogResult = "Cancel"
     $form.Controls.AddRange(@($btnOK, $btnCancel))
@@ -322,10 +337,10 @@ if ($Settings) {
         $out = [ordered]@{
             "_説明"             = "FIELD 表示の設定。『FIELD表示設定』アイコンから編集できます。"
             "RightUrl"          = $tbR.Text.Trim()
+            "RightFullScreen"   = $cbRF.Checked
             "LeftUrl"           = $tbL.Text.Trim()
-            "Kiosk"             = $cbK.Checked
+            "LeftFullScreen"    = $cbLF.Checked
             "EscEnabled"        = $cbEsc.Checked
-            "ConsoleFullScreen" = $cbCF.Checked
             "ConsoleStripFrame" = $cbSF.Checked
             "ConsoleResolution" = $resText
         }
@@ -519,10 +534,11 @@ function Get-EdgeWindow([string]$profile) {
     return [IntPtr]::Zero
 }
 
-function Open-Kiosk([string]$u, $screen, [string]$profile) {
+function Open-Kiosk([string]$u, $screen, [string]$profile, [bool]$fullScreen) {
     if (-not $u) { return }
-    Log "ブラウザを開きます: $u  (モニター $($screen.Bounds.X),$($screen.Bounds.Y))"
-    if ($KioskMode) {
+    Log ("ブラウザを開きます: {0}  (モニター {1},{2} / {3})" -f $u, $screen.Bounds.X, $screen.Bounds.Y,
+         $(if ($fullScreen) { "全画面" } else { "最大化ウィンドウ" }))
+    if ($fullScreen) {
         & $edge --user-data-dir="$env:LOCALAPPDATA\$profile" --no-first-run --new-window `
             --ignore-certificate-errors `
             --window-position="$($screen.Bounds.X),$($screen.Bounds.Y)" `
@@ -582,8 +598,9 @@ function Expand-ConsoleWindow([IntPtr]$hwnd, $screen) {
 }
 
 # --- FIELD のコンソール画面 (vmconnect) を指定モニターに表示 ---
-function Open-Console($screen) {
-    Log "コンソールを開きます (モニター $($screen.Bounds.X),$($screen.Bounds.Y))"
+function Open-Console($screen, [bool]$fullScreen) {
+    Log ("コンソールを開きます (モニター {0},{1} / {2})" -f $screen.Bounds.X, $screen.Bounds.Y,
+         $(if ($fullScreen) { "全画面" } else { "最大化ウィンドウ" }))
     # コンソールは同時に1接続のみ。古い窓が残っていると新しい窓に切断ダイアログが出るため、先に閉じる
     Get-Process vmconnect -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
     Start-Sleep -Seconds 1
@@ -602,7 +619,7 @@ function Open-Console($screen) {
     [FieldWin]::ShowWindow($hwnd, 3) | Out-Null   # 最大化
     Start-Sleep -Milliseconds 600
 
-    if ($cfg.ConsoleFullScreen -eq $false) { Log "コンソール: 全画面モードは設定で無効です。"; return }
+    if (-not $fullScreen) { Log "コンソール: 最大化ウィンドウで表示します (全画面の指定なし)。"; return }
 
     # 全画面モード (メニューバーなし・余白は黒)。解除/再開は Ctrl+Alt+Break
     $done = $false
@@ -626,18 +643,19 @@ function Open-Console($screen) {
     }
 }
 
-function Open-Display([string]$val, $screen, [string]$profile) {
+function Open-Display([string]$val, $screen, [string]$profile, [bool]$fullScreen) {
     if (-not $val) { return }
-    if ($val -match '^(console|コンソール)$') { Open-Console $screen } else { Open-Kiosk $val $screen $profile }
+    if ($val -match '^(console|コンソール)$') { Open-Console $screen $fullScreen }
+    else { Open-Kiosk $val $screen $profile $fullScreen }
 }
 
-Open-Display $RightUrl $rightScreen "FieldKioskR"
-Open-Display $LeftUrl  $leftScreen  "FieldKioskL"
+Open-Display $RightUrl $rightScreen "FieldKioskR" $RightFull
+Open-Display $LeftUrl  $leftScreen  "FieldKioskL" $LeftFull
 
-# --- ESC 見張り役 (設定で有効・ブラウザ表示あり・固定キオスクでない場合) ---
-$hasBrowser = (($RightUrl -and $RightUrl -notmatch '^(console|コンソール)$') -or
-               ($LeftUrl  -and $LeftUrl  -notmatch '^(console|コンソール)$'))
-if ($hasBrowser -and -not $KioskMode -and ($cfg.EscEnabled -ne $false)) {
+# --- ESC 見張り役 (最大化ウィンドウのブラウザがある場合のみ。全画面指定の側は対象外) ---
+$hasMaximizedBrowser = (($RightUrl -and $RightUrl -notmatch '^(console|コンソール)$' -and -not $RightFull) -or
+                        ($LeftUrl  -and $LeftUrl  -notmatch '^(console|コンソール)$' -and -not $LeftFull))
+if ($hasMaximizedBrowser -and ($cfg.EscEnabled -ne $false)) {
     Stop-EscWatcher
     Start-Process powershell.exe -WindowStyle Hidden `
         -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" -EscWatcher"
