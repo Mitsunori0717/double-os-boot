@@ -759,28 +759,37 @@ function Test-CoversScreen([IntPtr]$hwnd, $screen) {
             ($r.Bottom - $r.Top) -ge ($screen.Bounds.Height - 4))
 }
 
-# Win32 メニューから項目名が一致するコマンドを探し、WM_COMMAND を直接送って実行する
-# (フォーカスもタイミングも関係ない、最も確実な方式。Win32 メニューを持つ窓のみ有効)
-function Invoke-ConsoleMenuCommand([IntPtr]$hwnd, [string]$pattern) {
-    $menu = [FieldWin]::GetMenu($hwnd)
-    if ($menu -eq [IntPtr]::Zero) { return $false }
+# Win32 メニューを再帰的にたどり、項目名が一致するコマンド (ID と表示名) を探す
+function Find-MenuCommand([IntPtr]$menu, [string]$pattern, [int]$depth) {
+    if ($depth -gt 3 -or $menu -eq [IntPtr]::Zero) { return $null }
     $sb = New-Object System.Text.StringBuilder 256
     for ($i = 0; $i -lt [FieldWin]::GetMenuItemCount($menu); $i++) {
+        [void]$sb.Clear()
+        [FieldWin]::GetMenuString($menu, [uint32]$i, $sb, 256, 0x400) | Out-Null   # 0x400 = MF_BYPOSITION
+        $text = $sb.ToString()
         $sub = [FieldWin]::GetSubMenu($menu, $i)
-        if ($sub -eq [IntPtr]::Zero) { continue }
-        for ($j = 0; $j -lt [FieldWin]::GetMenuItemCount($sub); $j++) {
-            [void]$sb.Clear()
-            [FieldWin]::GetMenuString($sub, [uint32]$j, $sb, 256, 0x400) | Out-Null   # 0x400 = MF_BYPOSITION
-            if ($sb.ToString() -match $pattern) {
-                $cmdId = [FieldWin]::GetMenuItemID($sub, $j)
-                if ($cmdId -ne [uint32]::MaxValue) {
-                    [FieldWin]::PostMessage($hwnd, 0x0111, [IntPtr][int64]$cmdId, [IntPtr]::Zero) | Out-Null   # WM_COMMAND
-                    return $true
-                }
+        if ($sub -ne [IntPtr]::Zero) {
+            $r = Find-MenuCommand $sub $pattern ($depth + 1)
+            if ($r) { return $r }
+        } elseif ($text -match $pattern) {
+            $cmdId = [FieldWin]::GetMenuItemID($menu, $i)
+            if ($cmdId -ne [uint32]::MaxValue) {
+                return [pscustomobject]@{ Id = $cmdId; Text = $text }
             }
         }
     }
-    return $false
+    return $null
+}
+
+# Win32 メニューから項目名が一致するコマンドを探し、WM_COMMAND を直接送って実行する。
+# 実行した項目の表示名を返す (見つからなければ $null)。フォーカス不要
+function Invoke-ConsoleMenuCommand([IntPtr]$hwnd, [string]$pattern) {
+    $menu = [FieldWin]::GetMenu($hwnd)
+    if ($menu -eq [IntPtr]::Zero) { return $null }
+    $hit = Find-MenuCommand $menu $pattern 0
+    if (-not $hit) { return $null }
+    [FieldWin]::PostMessage($hwnd, 0x0111, [IntPtr][int64]$hit.Id, [IntPtr]::Zero) | Out-Null   # WM_COMMAND
+    return $hit.Text
 }
 
 # vmconnect のメニュー『表示 → 全画面モード』を UI Automation で直接クリックする
@@ -878,21 +887,33 @@ function Close-ConsoleGracefully {
     $procs = @(Get-Process vmconnect -ErrorAction SilentlyContinue)
     if ($procs.Count -eq 0) { return }
     foreach ($p in $procs) { [void]$p.CloseMainWindow() }
-    Start-Sleep -Milliseconds 1500
+    # 設定ファイルの書き出しが終わるまで、最大8秒はプロセスの終了を待つ
+    $csw = [System.Diagnostics.Stopwatch]::StartNew()
+    while ($csw.Elapsed.TotalSeconds -lt 8) {
+        if (-not (Get-Process vmconnect -ErrorAction SilentlyContinue)) { break }
+        Start-Sleep -Milliseconds 500
+    }
     Get-Process vmconnect -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
     Start-Sleep -Milliseconds 500
 }
 
-# vmconnect が保存している「この VM の表示設定」ファイルの FullScreen を書き換える。
-# ここを True にしてから起動すると、切り替え操作なしで最初から全画面で開く
-function Set-ConsoleSavedFullScreen([bool]$on) {
+# vmconnect が保存している「この VM の表示設定」ファイルを探す
+function Get-ConsoleConfigFile {
     try {
         $vm = Get-VM -Name $VMName -ErrorAction SilentlyContinue
-        if (-not $vm) { return $false }
+        if (-not $vm) { return $null }
         $vmid = $vm.Id.ToString()
         $dir = Join-Path $env:APPDATA "Microsoft\Windows\Hyper-V\Client\1.0"
-        $file = Get-ChildItem -Path $dir -Filter "vmconnect.rdp.*.config" -ErrorAction SilentlyContinue |
+        return Get-ChildItem -Path $dir -Filter "vmconnect.rdp.*.config" -ErrorAction SilentlyContinue |
             Where-Object { $_.Name -match [regex]::Escape($vmid) } | Select-Object -First 1
+    } catch { return $null }
+}
+
+# 表示設定ファイルの FullScreen を書き換える。
+# True にしてから起動すると、切り替え操作なしで最初から全画面で開く
+function Set-ConsoleSavedFullScreen([bool]$on) {
+    try {
+        $file = Get-ConsoleConfigFile
         if (-not $file) { return $false }
         [xml]$x = Get-Content $file.FullName -Raw -Encoding UTF8
         $nodes = $x.SelectNodes("//setting[@name='FullScreen']")
@@ -901,6 +922,18 @@ function Set-ConsoleSavedFullScreen([bool]$on) {
         $x.Save($file.FullName)
         return $true
     } catch { return $false }
+}
+
+# vmconnect を起動してウィンドウハンドルを返す
+function Start-ConsoleWindow {
+    Start-Process "vmconnect.exe" -ArgumentList "localhost", $VMName
+    $csw = [System.Diagnostics.Stopwatch]::StartNew()
+    while ($csw.Elapsed.TotalSeconds -lt 30) {
+        Start-Sleep -Seconds 1
+        $p = Get-Process vmconnect -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object -First 1
+        if ($p) { return $p.MainWindowHandle }
+    }
+    return [IntPtr]::Zero
 }
 
 # --- FIELD のコンソール画面 (vmconnect) を指定モニターに表示 ---
@@ -912,20 +945,23 @@ function Open-Console($screen, [bool]$fullScreen) {
 
     # 保存設定を「全画面」に書き換えてから起動する (起動した瞬間から全画面になる)
     if ($fullScreen) {
+        if (-not (Get-ConsoleConfigFile)) {
+            # 初回のみ: 一度開いて正しく閉じ、vmconnect 自身に設定ファイルを作らせる
+            Log "コンソール: 設定ファイルが無いため、一度開いて作成させます..."
+            $tmp = Start-ConsoleWindow
+            if ($tmp -ne [IntPtr]::Zero) { Start-Sleep -Milliseconds 1500 }
+            Close-ConsoleGracefully
+            $cf = Get-ConsoleConfigFile
+            if ($cf) { Log "コンソール: 設定ファイルを作成しました ($($cf.Name))。" }
+            else     { Log "コンソール: 設定ファイルを作成できませんでした。" }
+        }
         if (Set-ConsoleSavedFullScreen $true) { Log "コンソール: 保存設定を全画面に書き換えました。" }
-        else { Log "コンソール: 保存設定ファイルが未作成のため、起動後に切り替えます (次回からは直接全画面)。" }
+        else { Log "コンソール: 保存設定を書き換えられなかったため、起動後に切り替えます。" }
     } else {
         Set-ConsoleSavedFullScreen $false | Out-Null
     }
 
-    Start-Process "vmconnect.exe" -ArgumentList "localhost", $VMName
-    $hwnd = [IntPtr]::Zero
-    $csw = [System.Diagnostics.Stopwatch]::StartNew()
-    while ($csw.Elapsed.TotalSeconds -lt 30) {
-        Start-Sleep -Seconds 1
-        $p = Get-Process vmconnect -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object -First 1
-        if ($p) { $hwnd = $p.MainWindowHandle; break }
-    }
+    $hwnd = Start-ConsoleWindow
     if ($hwnd -eq [IntPtr]::Zero) { Log "警告: コンソール画面のウィンドウが見つかりませんでした。"; return }
 
     # 保存設定が効いて、最初から目的のモニターで全画面になっているか確認
@@ -956,9 +992,11 @@ function Open-Console($screen, [bool]$fullScreen) {
 
     # 方法1: メニューの「全画面」コマンドを WM_COMMAND で直接実行 (フォーカス不要で最も確実)
     for ($try = 1; $try -le 2 -and -not $done; $try++) {
-        if (Invoke-ConsoleMenuCommand $hwnd '全画面|Full')  {
+        $hit = Invoke-ConsoleMenuCommand $hwnd '全画面|Full'
+        if ($hit) {
             Start-Sleep -Milliseconds 1000
-            if (Test-CoversScreen $hwnd $screen) { $done = $true; Log "コンソール: 全画面モードになりました (メニューコマンド)" }
+            if (Test-CoversScreen $hwnd $screen) { $done = $true; Log "コンソール: 全画面モードになりました (メニューコマンド『$hit』)" }
+            else { Log "コンソール: メニューコマンド『$hit』を実行しましたが全画面になりませんでした (試行 $try)" }
         } else { break }   # Win32 メニューが無い場合は方法2へ
     }
 
@@ -999,10 +1037,18 @@ function Open-Console($screen, [bool]$fullScreen) {
             $cx = $screen.Bounds.X + [int](($screen.Bounds.Width  - $vw) / 2)
             $cy = $screen.Bounds.Y + [int](($screen.Bounds.Height - $vh) / 2)
 
+            # メニューが生きているうちに、メニューからツールバーを非表示に切り替える
+            $tbHidden = $false
+            $tbHit = Invoke-ConsoleMenuCommand $hwnd 'ツール ?バー|Toolbar'
+            if ($tbHit) {
+                Start-Sleep -Milliseconds 400
+                $tbHidden = $true
+                Log "コンソール: メニュー『$tbHit』でツールバーを切り替えました。"
+            }
+
             # 枠とメニューを外し、ツールバー (子ウィンドウ) も非表示にする
             Set-FramelessWindow $hwnd $cx $cy $vw $vh
             Start-Sleep -Milliseconds 400
-            $tbHidden = $false
             foreach ($cls in "ToolbarWindow32", "msctls_toolbarwindow32") {
                 $tb = [FieldWin]::FindWindowEx($hwnd, [IntPtr]::Zero, $cls, $null)
                 if ($tb -ne [IntPtr]::Zero) { [FieldWin]::ShowWindow($tb, 0) | Out-Null; $tbHidden = $true }
