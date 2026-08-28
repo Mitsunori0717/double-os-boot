@@ -26,6 +26,8 @@ param(
     [switch]$EscWatcher,
     [switch]$Splash,
     [switch]$NoSplash,
+    [switch]$Backdrop,
+    [string]$BackdropBounds,
     [string]$ConsoleResolution,
     [int]$TimeoutSec  = 420
 )
@@ -122,6 +124,28 @@ if ($Splash) {
 
     Sync-SplashScreens
     $timer.Start()
+    [System.Windows.Forms.Application]::Run((New-Object System.Windows.Forms.ApplicationContext))
+    exit 0
+}
+
+# ============================================================
+#  黒背景: 指定モニターを黒いウィンドウで覆う (コンソールの余白を黒にする土台)
+# ============================================================
+if ($Backdrop) {
+    Add-Type -AssemblyName System.Windows.Forms
+    Add-Type -AssemblyName System.Drawing
+    $p = $BackdropBounds -split ','
+    $f = New-Object System.Windows.Forms.Form
+    $f.FormBorderStyle = "None"
+    $f.StartPosition = "Manual"
+    $f.Bounds = New-Object System.Drawing.Rectangle([int]$p[0], [int]$p[1], [int]$p[2], [int]$p[3])
+    $f.BackColor = [System.Drawing.Color]::Black
+    $f.ShowInTaskbar = $false
+    $f.KeyPreview = $true
+    $f.Add_KeyDown({ param($s, $e)
+        if ($e.KeyCode -eq [System.Windows.Forms.Keys]::Escape) { [System.Windows.Forms.Application]::Exit() }
+    })
+    $f.Show()
     [System.Windows.Forms.Application]::Run((New-Object System.Windows.Forms.ApplicationContext))
     exit 0
 }
@@ -332,7 +356,7 @@ if ($Settings) {
     $grpOp.Controls.Add($cbEsc)
 
     $cbSF = New-Object System.Windows.Forms.CheckBox
-    $cbSF.Text = "コンソールの全画面が効かないときは、枠とメニューを消して画面いっぱいに広げる"
+    $cbSF.Text = "コンソールの全画面が効かないときは、黒背景の上に中央表示する (代替の全画面)"
     $cbSF.Location = New-Object System.Drawing.Point(15, 55)
     $cbSF.Size = New-Object System.Drawing.Size(530, 24)
     $cbSF.Checked = ($cfg.ConsoleStripFrame -ne $false)
@@ -489,21 +513,32 @@ if ($ConsoleResolution) {
 #  ログオン時自動実行の登録 / 解除
 # ============================================================
 if ($Install) {
+    $taskSettings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -ExecutionTimeLimit (New-TimeSpan -Hours 1)
+
+    # 起動中画面 (スプラッシュ) は独立のタスクとして先に走らせる。
+    # メイン処理の読み込みを待たず、サインイン直後にできるだけ早く黒画面を出すため
+    $sAction = New-ScheduledTaskAction -Execute "powershell.exe" `
+        -Argument "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$PSCommandPath`" -Splash"
+    $sTrigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
+    Register-ScheduledTask -TaskName "$TaskName-Splash" -Action $sAction -Trigger $sTrigger `
+        -Settings $taskSettings -RunLevel Highest -Force | Out-Null
+
     $arg = "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$PSCommandPath`" -VMName `"$VMName`""
     $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument $arg
-    # 遅延なしで即開始する (起動中はスプラッシュ画面がデスクトップを覆い、
-    #  モニターの認識待ちはスクリプト側で行う)
     $trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
-    $taskSettings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -ExecutionTimeLimit (New-TimeSpan -Hours 1)
     Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger `
         -Settings $taskSettings -RunLevel Highest -Force | Out-Null
-    Write-Host "登録しました。次回ログオンから自動で表示されます。" -ForegroundColor Green
+    Write-Host "登録しました。次回ログオンから自動で表示されます (起動中は黒い画面で覆います)。" -ForegroundColor Green
     Write-Host "  表示内容の変更: 『FIELD表示設定』アイコン (再登録不要)"
     exit 0
 }
 if ($Uninstall) {
     Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue
+    Unregister-ScheduledTask -TaskName "$TaskName-Splash" -Confirm:$false -ErrorAction SilentlyContinue
     Stop-EscWatcher
+    Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" -ErrorAction SilentlyContinue |
+        Where-Object { $_.CommandLine -match '-(Splash|Backdrop)' -and $_.ProcessId -ne $PID } |
+        ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
     Write-Host "自動表示を解除しました。"
     exit 0
 }
@@ -520,11 +555,24 @@ if ((Test-Path $LogFile) -and ((Get-Item $LogFile).Length -gt 200KB)) { Remove-I
 Log "===== 表示処理を開始 (左=$LeftUrl / 右=$RightUrl) ====="
 
 # --- 起動中画面: 表示がそろうまでデスクトップを黒い画面で覆う ---
-$SplashProc = $null
-if (-not $NoSplash) {
-    $SplashProc = Start-Process powershell.exe -WindowStyle Hidden -PassThru `
-        -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" -Splash -TimeoutSec $TimeoutSec"
+function Stop-Splash {
+    Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" -ErrorAction SilentlyContinue |
+        Where-Object { $_.CommandLine -match '-Splash' -and $_.ProcessId -ne $PID } |
+        ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
 }
+if (-not $NoSplash) {
+    # ログオンタスク (FIELD-Display-Kiosk-Splash) が先に出していればそれを使い、無ければここで出す
+    $existing = @(Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" -ErrorAction SilentlyContinue |
+        Where-Object { $_.CommandLine -match '-Splash' -and $_.ProcessId -ne $PID })
+    if ($existing.Count -eq 0) {
+        Start-Process powershell.exe -WindowStyle Hidden `
+            -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" -Splash -TimeoutSec $TimeoutSec"
+    }
+}
+# 前回の黒背景が残っていれば片付ける
+Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" -ErrorAction SilentlyContinue |
+    Where-Object { $_.CommandLine -match '-Backdrop' -and $_.ProcessId -ne $PID } |
+    ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
 try {
 
 # --- VM の起動を待つ ---
@@ -699,19 +747,19 @@ function Send-CtrlAltBreak {
     [FieldWin]::keybd_event(0x11, 0, 2, 0)          # Ctrl up
 }
 
-# 全画面モードが効かない場合の代替: 枠・メニューを外してモニター全体に広げる
-function Expand-ConsoleWindow([IntPtr]$hwnd, $screen) {
+# 枠を外して指定位置・サイズに固定する
+function Set-FramelessWindow([IntPtr]$hwnd, [int]$x, [int]$y, [int]$w, [int]$h) {
     $GWL_STYLE = -16
     $WS_CAPTION = 0x00C00000; $WS_THICKFRAME = 0x00040000; $WS_BORDER = 0x00800000
-    $style = [FieldWin]::GetWindowLong($hwnd, $GWL_STYLE)
-    $style = $style -band (-bnot ($WS_CAPTION -bor $WS_THICKFRAME -bor $WS_BORDER))
     [FieldWin]::ShowWindow($hwnd, 1) | Out-Null       # 最大化を解除しないと大きさを変えられない
     Start-Sleep -Milliseconds 300
+    $style = [FieldWin]::GetWindowLong($hwnd, $GWL_STYLE)
+    $style = $style -band (-bnot ($WS_CAPTION -bor $WS_THICKFRAME -bor $WS_BORDER))
     [FieldWin]::SetWindowLong($hwnd, $GWL_STYLE, $style) | Out-Null
     if ([FieldWin]::GetMenu($hwnd) -ne [IntPtr]::Zero) { [FieldWin]::SetMenu($hwnd, [IntPtr]::Zero) | Out-Null }
     # 0x0020 = SWP_FRAMECHANGED, 0x0040 = SWP_SHOWWINDOW
-    [FieldWin]::SetWindowPos($hwnd, [IntPtr]::Zero, $screen.Bounds.X, $screen.Bounds.Y,
-        $screen.Bounds.Width, $screen.Bounds.Height, 0x0060) | Out-Null
+    [FieldWin]::SetWindowPos($hwnd, [IntPtr]::Zero, $x, $y, $w, $h, 0x0060) | Out-Null
+    [FieldWin]::BringWindowToTop($hwnd) | Out-Null
 }
 
 # --- FIELD のコンソール画面 (vmconnect) を指定モニターに表示 ---
@@ -753,10 +801,26 @@ function Open-Console($screen, [bool]$fullScreen) {
     }
 
     if (-not $done) {
-        Log "コンソール: 全画面モードの切り替えが効きませんでした。"
+        Log "コンソール: 全画面モードの切り替えが効きませんでした。代替表示に切り替えます。"
         if ($cfg.ConsoleStripFrame -ne $false) {
-            Expand-ConsoleWindow $hwnd $screen
-            Log "コンソール: 枠とメニューを外して画面いっぱいに広げました (閉じるときは Alt+F4)。"
+            # モニター全体を黒背景で覆い、その上にコンソールを実解像度のまま中央に置く
+            # (見た目は全画面モードとほぼ同じ: 余白は黒になる)
+            Start-Process powershell.exe -WindowStyle Hidden -ArgumentList (
+                "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" -Backdrop " +
+                "-BackdropBounds `"$($screen.Bounds.X),$($screen.Bounds.Y),$($screen.Bounds.Width),$($screen.Bounds.Height)`"")
+            Start-Sleep -Milliseconds 900
+
+            $vw = 0; $vh = 0
+            try {
+                $vid = Get-VMVideo -VMName $VMName -ErrorAction SilentlyContinue
+                $vw = [int]$vid.HorizontalResolution; $vh = [int]$vid.VerticalResolution
+            } catch { }
+            if ($vw -le 0 -or $vw -gt $screen.Bounds.Width)  { $vw = [Math]::Min(1024, $screen.Bounds.Width) }
+            if ($vh -le 0 -or $vh -gt $screen.Bounds.Height) { $vh = [Math]::Min(768,  $screen.Bounds.Height) }
+            $cx = $screen.Bounds.X + [int](($screen.Bounds.Width  - $vw) / 2)
+            $cy = $screen.Bounds.Y + [int](($screen.Bounds.Height - $vh) / 2)
+            Set-FramelessWindow $hwnd $cx $cy $vw $vh
+            Log "コンソール: 黒背景の上に ${vw}x${vh} で表示しました。"
         }
     }
 }
@@ -784,8 +848,6 @@ Log "===== 表示処理を完了 ====="
 
 } finally {
     # 表示がそろったので起動中画面を閉じる (エラーで中断した場合も必ず閉じる)
-    if ($SplashProc) {
-        Start-Sleep -Milliseconds 500
-        Stop-Process -Id $SplashProc.Id -Force -ErrorAction SilentlyContinue
-    }
+    Start-Sleep -Milliseconds 500
+    Stop-Splash
 }
