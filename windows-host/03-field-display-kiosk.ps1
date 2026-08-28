@@ -587,6 +587,10 @@ Log ("VM の状態: " + $(if ($vm) { $vm.State } else { "見つかりません" 
 # --- モニターの位置 (X座標で左右を判定) ---
 # サインイン直後はまだ 2 枚目が認識されていないことがあるため、そろうまで待つ
 Add-Type -AssemblyName System.Windows.Forms
+try {
+    Add-Type -AssemblyName UIAutomationClient
+    Add-Type -AssemblyName UIAutomationTypes
+} catch { Log "警告: UI Automation を読み込めませんでした (メニュー操作の代替は使えません)。" }
 $msw = [System.Diagnostics.Stopwatch]::StartNew()
 while ($msw.Elapsed.TotalSeconds -lt 90) {
     if (@([System.Windows.Forms.Screen]::AllScreens).Count -ge 2) { break }
@@ -736,6 +740,70 @@ function Test-CoversScreen([IntPtr]$hwnd, $screen) {
             ($r.Bottom - $r.Top) -ge ($screen.Bounds.Height - 4))
 }
 
+# vmconnect のメニュー『表示 → 全画面モード』を UI Automation で直接クリックする
+# (キー送信と違い、タイミングやフォーカスの影響を受けにくい)
+function Invoke-ConsoleFullScreenMenu([IntPtr]$hwnd) {
+    try {
+        $ae = [System.Windows.Automation.AutomationElement]::FromHandle($hwnd)
+        $condMi = New-Object System.Windows.Automation.PropertyCondition(
+            [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+            [System.Windows.Automation.ControlType]::MenuItem)
+
+        # メニューバーの「表示」を開く
+        $view = $null
+        foreach ($i in $ae.FindAll([System.Windows.Automation.TreeScope]::Descendants, $condMi)) {
+            if ($i.Current.Name -match '表示|View') { $view = $i; break }
+        }
+        if (-not $view) { return $false }
+        ($view.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern)).Expand()
+        Start-Sleep -Milliseconds 700
+
+        # 開いた項目から「全画面」を探す (まずメニュー配下、なければ vmconnect のポップアップから)
+        $full = $null
+        foreach ($i in $view.FindAll([System.Windows.Automation.TreeScope]::Descendants, $condMi)) {
+            if ($i.Current.Name -match '全画面|Full') { $full = $i; break }
+        }
+        if (-not $full) {
+            $procId = [uint32]0
+            [FieldWin]::GetWindowThreadProcessId($hwnd, [ref]$procId) | Out-Null
+            $pidCond = New-Object System.Windows.Automation.PropertyCondition(
+                [System.Windows.Automation.AutomationElement]::ProcessIdProperty, [int]$procId)
+            $rootEl = [System.Windows.Automation.AutomationElement]::RootElement
+            foreach ($w in $rootEl.FindAll([System.Windows.Automation.TreeScope]::Children, $pidCond)) {
+                foreach ($i in $w.FindAll([System.Windows.Automation.TreeScope]::Descendants, $condMi)) {
+                    if ($i.Current.Name -match '全画面|Full') { $full = $i; break }
+                }
+                if ($full) { break }
+            }
+        }
+        if (-not $full) {
+            [System.Windows.Forms.SendKeys]::SendWait("{ESC}")   # 開いたメニューを閉じる
+            return $false
+        }
+        ($full.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern)).Invoke()
+        Start-Sleep -Milliseconds 900
+        return $true
+    } catch { return $false }
+}
+
+# ウィンドウ上端からツールバー下端までの高さ (メニュー・ツールバー領域のサイズ)
+function Get-ConsoleChromeHeight([IntPtr]$hwnd) {
+    try {
+        $ae = [System.Windows.Automation.AutomationElement]::FromHandle($hwnd)
+        $condTb = New-Object System.Windows.Automation.PropertyCondition(
+            [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+            [System.Windows.Automation.ControlType]::ToolBar)
+        $tb = $ae.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $condTb)
+        $r = New-Object 'FieldWin+RECT'
+        [FieldWin]::GetWindowRect($hwnd, [ref]$r) | Out-Null
+        if ($tb) {
+            $h = [int]([Math]::Ceiling($tb.Current.BoundingRectangle.Bottom) - $r.Top)
+            if ($h -gt 0 -and $h -lt 200) { return $h }
+        }
+    } catch { }
+    return 60   # 取得できなければ標準的なメニュー+ツールバーの高さで近似
+}
+
 # Ctrl+Alt+Break (vmconnect の全画面モード切り替え)
 function Send-CtrlAltBreak {
     [FieldWin]::keybd_event(0x11, 0, 0, 0)          # Ctrl down
@@ -788,23 +856,30 @@ function Open-Console($screen, [bool]$fullScreen) {
 
     # 全画面モード (メニューバーなし・余白は黒)。解除/再開は Ctrl+Alt+Break
     $done = $false
-    for ($try = 1; $try -le 4; $try++) {
-        $fgOk = Force-Foreground $hwnd
-        if (-not $fgOk) { Log "コンソール: 前面化に失敗 (試行 $try)。キー送信が届かない可能性があります。" }
-        if ($try % 2 -eq 1) {
-            [System.Windows.Forms.SendKeys]::SendWait("^%{BREAK}")
-        } else {
-            Send-CtrlAltBreak
+
+    # 方法1: メニュー『表示 → 全画面モード』を直接クリック (最も確実)
+    for ($try = 1; $try -le 2 -and -not $done; $try++) {
+        Force-Foreground $hwnd | Out-Null
+        if (Invoke-ConsoleFullScreenMenu $hwnd) {
+            Start-Sleep -Milliseconds 700
+            if (Test-CoversScreen $hwnd $screen) { $done = $true; Log "コンソール: 全画面モードになりました (メニュー操作)" }
         }
-        Start-Sleep -Milliseconds 1500
-        if (Test-CoversScreen $hwnd $screen) { $done = $true; Log "コンソール: 全画面モードになりました (試行 $try)"; break }
     }
 
+    # 方法2: Ctrl+Alt+Break のキー送信
+    for ($try = 1; $try -le 2 -and -not $done; $try++) {
+        $fgOk = Force-Foreground $hwnd
+        if (-not $fgOk) { Log "コンソール: 前面化に失敗 (キー送信 試行 $try)" }
+        if ($try -eq 1) { [System.Windows.Forms.SendKeys]::SendWait("^%{BREAK}") } else { Send-CtrlAltBreak }
+        Start-Sleep -Milliseconds 1500
+        if (Test-CoversScreen $hwnd $screen) { $done = $true; Log "コンソール: 全画面モードになりました (キー送信 試行 $try)" }
+    }
+
+    # 方法3: 黒背景を敷き、枠を外したコンソールを重ねる。メニュー・ツールバーの列は
+    #        画面の上端より外側へ押し出し、映像だけが見えるようにする
     if (-not $done) {
         Log "コンソール: 全画面モードの切り替えが効きませんでした。代替表示に切り替えます。"
         if ($cfg.ConsoleStripFrame -ne $false) {
-            # モニター全体を黒背景で覆い、その上にコンソールを実解像度のまま中央に置く
-            # (見た目は全画面モードとほぼ同じ: 余白は黒になる)
             Start-Process powershell.exe -WindowStyle Hidden -ArgumentList (
                 "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" -Backdrop " +
                 "-BackdropBounds `"$($screen.Bounds.X),$($screen.Bounds.Y),$($screen.Bounds.Width),$($screen.Bounds.Height)`"")
@@ -819,8 +894,16 @@ function Open-Console($screen, [bool]$fullScreen) {
             if ($vh -le 0 -or $vh -gt $screen.Bounds.Height) { $vh = [Math]::Min(768,  $screen.Bounds.Height) }
             $cx = $screen.Bounds.X + [int](($screen.Bounds.Width  - $vw) / 2)
             $cy = $screen.Bounds.Y + [int](($screen.Bounds.Height - $vh) / 2)
+
+            # いったん枠を外して配置し、メニュー・ツールバー分の高さを測って上へ押し出す
             Set-FramelessWindow $hwnd $cx $cy $vw $vh
-            Log "コンソール: 黒背景の上に ${vw}x${vh} で表示しました。"
+            Start-Sleep -Milliseconds 400
+            $chrome = Get-ConsoleChromeHeight $hwnd
+            if ($chrome -gt 0) {
+                [FieldWin]::SetWindowPos($hwnd, [IntPtr]::Zero, $cx, ($cy - $chrome), $vw, ($vh + $chrome), 0x0060) | Out-Null
+                [FieldWin]::BringWindowToTop($hwnd) | Out-Null
+            }
+            Log "コンソール: 黒背景の上に ${vw}x${vh} で表示しました (メニュー分 ${chrome}px を画面外へ)。"
         }
     }
 }
