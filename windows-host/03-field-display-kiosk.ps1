@@ -653,8 +653,15 @@ if (-not $edge) { Log "エラー: Microsoft Edge が見つかりません。"; e
 if (-not ([System.Management.Automation.PSTypeName]'FieldWin').Type) {
     Add-Type -TypeDefinition @"
 using System;
+using System.Text;
 using System.Runtime.InteropServices;
 public class FieldWin {
+    [DllImport("user32.dll")] public static extern IntPtr GetSubMenu(IntPtr hMenu, int nPos);
+    [DllImport("user32.dll")] public static extern int GetMenuItemCount(IntPtr hMenu);
+    [DllImport("user32.dll")] public static extern uint GetMenuItemID(IntPtr hMenu, int nPos);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetMenuString(IntPtr hMenu, uint uIDItem, StringBuilder lpString, int cchMax, uint flags);
+    [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern IntPtr FindWindowEx(IntPtr parent, IntPtr after, string className, string windowName);
     [StructLayout(LayoutKind.Sequential)] public struct RECT { public int Left, Top, Right, Bottom; }
     [DllImport("user32.dll")] public static extern bool MoveWindow(IntPtr hWnd, int X, int Y, int nWidth, int nHeight, bool bRepaint);
     [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
@@ -721,19 +728,31 @@ function Open-Kiosk([string]$u, $screen, [string]$profile, [bool]$fullScreen) {
     Log ("ブラウザを開きます: {0}  (モニター {1},{2} / {3})" -f $u, $screen.Bounds.X, $screen.Bounds.Y,
          $(if ($fullScreen) { "全画面" } else { "最大化ウィンドウ" }))
     # --test-type: 「サポートされていないフラグ」警告バーを非表示にする
-    & $edge --user-data-dir="$env:LOCALAPPDATA\$profile" --no-first-run `
-        --ignore-certificate-errors --test-type `
-        --window-position="$($screen.Bounds.X),$($screen.Bounds.Y)" `
-        --app=$u
-    # 起動したウィンドウを直接つかんで、対象モニターへ移動 + 最大化 (--start-maximized は app 窓では無視されるため)
+    # 全画面指定は --start-fullscreen で最初から全画面にする (F11 と同じ状態 = ESC 見張りで解除可)
+    $eargs = @(
+        "--user-data-dir=$env:LOCALAPPDATA\$profile", "--no-first-run",
+        "--ignore-certificate-errors", "--test-type",
+        "--window-position=$($screen.Bounds.X),$($screen.Bounds.Y)",
+        "--app=$u"
+    )
+    if ($fullScreen) { $eargs += "--start-fullscreen" }
+    & $edge @eargs
     $h = Get-EdgeWindow $profile
     if ($h -eq [IntPtr]::Zero) { Log "警告: ブラウザのウィンドウを見つけられませんでした。"; return }
+
+    if ($fullScreen -and (Test-CoversScreen $h $screen)) {
+        Log "ブラウザ: 全画面表示で開きました。"
+        Start-Sleep -Seconds 2
+        return
+    }
+
+    # 対象モニターへ移動 + 最大化 (--start-maximized は app 窓では無視されるため直接操作する)
     [FieldWin]::MoveWindow($h, $screen.Bounds.X, $screen.Bounds.Y, 1000, 700, $true) | Out-Null
     Start-Sleep -Milliseconds 300
     [FieldWin]::ShowWindow($h, 3) | Out-Null   # 最大化
     Log "ブラウザのウィンドウを配置しました。"
 
-    # 全画面指定なら F11 で全画面表示にする (ESC キーで解除できる)
+    # 全画面指定なのに全画面になっていない場合 (別モニターで開いた等) は F11 で仕上げる
     if ($fullScreen) {
         for ($try = 1; $try -le 2; $try++) {
             Force-Foreground $h | Out-Null
@@ -752,6 +771,30 @@ function Test-CoversScreen([IntPtr]$hwnd, $screen) {
     if (-not [FieldWin]::GetWindowRect($hwnd, [ref]$r)) { return $false }
     return (($r.Right - $r.Left) -ge ($screen.Bounds.Width - 4) -and
             ($r.Bottom - $r.Top) -ge ($screen.Bounds.Height - 4))
+}
+
+# Win32 メニューから項目名が一致するコマンドを探し、WM_COMMAND を直接送って実行する
+# (フォーカスもタイミングも関係ない、最も確実な方式。Win32 メニューを持つ窓のみ有効)
+function Invoke-ConsoleMenuCommand([IntPtr]$hwnd, [string]$pattern) {
+    $menu = [FieldWin]::GetMenu($hwnd)
+    if ($menu -eq [IntPtr]::Zero) { return $false }
+    $sb = New-Object System.Text.StringBuilder 256
+    for ($i = 0; $i -lt [FieldWin]::GetMenuItemCount($menu); $i++) {
+        $sub = [FieldWin]::GetSubMenu($menu, $i)
+        if ($sub -eq [IntPtr]::Zero) { continue }
+        for ($j = 0; $j -lt [FieldWin]::GetMenuItemCount($sub); $j++) {
+            [void]$sb.Clear()
+            [FieldWin]::GetMenuString($sub, [uint32]$j, $sb, 256, 0x400) | Out-Null   # 0x400 = MF_BYPOSITION
+            if ($sb.ToString() -match $pattern) {
+                $cmdId = [FieldWin]::GetMenuItemID($sub, $j)
+                if ($cmdId -ne [uint32]::MaxValue) {
+                    [FieldWin]::PostMessage($hwnd, 0x0111, [IntPtr][int64]$cmdId, [IntPtr]::Zero) | Out-Null   # WM_COMMAND
+                    return $true
+                }
+            }
+        }
+    }
+    return $false
 }
 
 # vmconnect のメニュー『表示 → 全画面モード』を UI Automation で直接クリックする
@@ -870,8 +913,17 @@ function Open-Console($screen, [bool]$fullScreen) {
 
     # 全画面モード (メニューバーなし・余白は黒)。解除/再開は Ctrl+Alt+Break
     $done = $false
+    $hadWin32Menu = ([FieldWin]::GetMenu($hwnd) -ne [IntPtr]::Zero)
 
-    # 方法1: メニュー『表示 → 全画面モード』を直接クリック (最も確実)
+    # 方法1: メニューの「全画面」コマンドを WM_COMMAND で直接実行 (フォーカス不要で最も確実)
+    for ($try = 1; $try -le 2 -and -not $done; $try++) {
+        if (Invoke-ConsoleMenuCommand $hwnd '全画面|Full')  {
+            Start-Sleep -Milliseconds 1000
+            if (Test-CoversScreen $hwnd $screen) { $done = $true; Log "コンソール: 全画面モードになりました (メニューコマンド)" }
+        } else { break }   # Win32 メニューが無い場合は方法2へ
+    }
+
+    # 方法2: メニュー『表示 → 全画面モード』を UI Automation でクリック
     for ($try = 1; $try -le 2 -and -not $done; $try++) {
         Force-Foreground $hwnd | Out-Null
         if (Invoke-ConsoleFullScreenMenu $hwnd) {
@@ -880,7 +932,7 @@ function Open-Console($screen, [bool]$fullScreen) {
         }
     }
 
-    # 方法2: Ctrl+Alt+Break のキー送信
+    # 方法3: Ctrl+Alt+Break のキー送信
     for ($try = 1; $try -le 2 -and -not $done; $try++) {
         $fgOk = Force-Foreground $hwnd
         if (-not $fgOk) { Log "コンソール: 前面化に失敗 (キー送信 試行 $try)" }
@@ -889,8 +941,7 @@ function Open-Console($screen, [bool]$fullScreen) {
         if (Test-CoversScreen $hwnd $screen) { $done = $true; Log "コンソール: 全画面モードになりました (キー送信 試行 $try)" }
     }
 
-    # 方法3: 黒背景を敷き、枠を外したコンソールを重ねる。メニュー・ツールバーの列は
-    #        画面の上端より外側へ押し出し、映像だけが見えるようにする
+    # 方法4: 黒背景を敷き、枠・メニュー・ツールバーを取り除いたコンソールを重ねる
     if (-not $done) {
         Log "コンソール: 全画面モードの切り替えが効きませんでした。代替表示に切り替えます。"
         if ($cfg.ConsoleStripFrame -ne $false) {
@@ -909,15 +960,28 @@ function Open-Console($screen, [bool]$fullScreen) {
             $cx = $screen.Bounds.X + [int](($screen.Bounds.Width  - $vw) / 2)
             $cy = $screen.Bounds.Y + [int](($screen.Bounds.Height - $vh) / 2)
 
-            # いったん枠を外して配置し、メニュー・ツールバー分の高さを測って上へ押し出す
+            # 枠とメニューを外し、ツールバー (子ウィンドウ) も非表示にする
             Set-FramelessWindow $hwnd $cx $cy $vw $vh
             Start-Sleep -Milliseconds 400
-            $chrome = Get-ConsoleChromeHeight $hwnd
+            $tbHidden = $false
+            foreach ($cls in "ToolbarWindow32", "msctls_toolbarwindow32") {
+                $tb = [FieldWin]::FindWindowEx($hwnd, [IntPtr]::Zero, $cls, $null)
+                if ($tb -ne [IntPtr]::Zero) { [FieldWin]::ShowWindow($tb, 0) | Out-Null; $tbHidden = $true }
+            }
+            $menuGone = ([FieldWin]::GetMenu($hwnd) -eq [IntPtr]::Zero)
+
+            # 取り切れなかった分 (メニュー・ツールバーの列) は画面の上端の外へ押し出す
+            $chrome = 0
+            if ($hadWin32Menu -and $menuGone -and $tbHidden) {
+                $chrome = 0    # 全部取り除けたので押し出し不要
+            } else {
+                $chrome = Get-ConsoleChromeHeight $hwnd    # 実測 (できなければ 60px と仮定)
+            }
             if ($chrome -gt 0) {
                 [FieldWin]::SetWindowPos($hwnd, [IntPtr]::Zero, $cx, ($cy - $chrome), $vw, ($vh + $chrome), 0x0060) | Out-Null
                 [FieldWin]::BringWindowToTop($hwnd) | Out-Null
             }
-            Log "コンソール: 黒背景の上に ${vw}x${vh} で表示しました (メニュー分 ${chrome}px を画面外へ)。"
+            Log "コンソール: 黒背景の上に ${vw}x${vh} で表示しました (メニュー除去=$menuGone / ツールバー除去=$tbHidden / 押し出し ${chrome}px)。"
         }
     }
 }
