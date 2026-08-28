@@ -3,3 +3,4 @@ display-config.json
 kiosk-login.xml
 field-boot-entry.conf
 display-log.txt
+display-status.txt

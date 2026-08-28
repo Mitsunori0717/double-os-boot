@@ -72,6 +72,27 @@ if ($vm -and $vm.State -eq "Running") {
     Write-Host "FIELD system は既に停止しています。"
 }
 
+# --- 停止中のいまのうちに、『FIELD表示設定』のコンソール解像度を反映しておく ---
+# (VM は Windows 起動時に自動起動するため、解像度変更はここが唯一の機会)
+try {
+    $cfgFile = Join-Path $PSScriptRoot "display-config.json"
+    if ((Test-Path $cfgFile) -and ((Get-VM -Name $VMName -ErrorAction SilentlyContinue).State -eq "Off")) {
+        $resText = [string](Get-Content $cfgFile -Raw -Encoding UTF8 | ConvertFrom-Json).ConsoleResolution
+        $rw = 0; $rh = 0
+        if ($resText -match '^(auto|自動)' -or -not $resText) {
+            $b = (@([System.Windows.Forms.Screen]::AllScreens | Sort-Object { $_.Bounds.X })[0]).Bounds
+            $rw = $b.Width; $rh = $b.Height
+        } elseif ($resText -match '^(\d{3,5})\s*[xX×*]\s*(\d{3,5})$') {
+            $rw = [int]$Matches[1]; $rh = [int]$Matches[2]
+        }
+        if ($rw -gt 0) {
+            Set-VMVideo -VMName $VMName -ResolutionType Single `
+                -HorizontalResolution $rw -VerticalResolution $rh -ErrorAction SilentlyContinue
+            Write-Host "コンソールの解像度を ${rw}x${rh} に設定しました (次回起動時から)。"
+        }
+    }
+} catch { }
+
 if ($shutdownWindows) {
     Write-Host "Windows をシャットダウンします..."
     shutdown /s /t 10 /c "FIELD system の終了を確認しました。Windows をシャットダウンします。"

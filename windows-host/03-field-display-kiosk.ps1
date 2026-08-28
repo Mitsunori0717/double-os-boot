@@ -24,6 +24,8 @@ param(
     [switch]$Settings,
     [switch]$Setup,
     [switch]$EscWatcher,
+    [switch]$Splash,
+    [switch]$NoSplash,
     [string]$ConsoleResolution,
     [int]$TimeoutSec  = 420
 )
@@ -32,11 +34,96 @@ $ErrorActionPreference = "Stop"
 $TaskName = "FIELD-Display-Kiosk"
 $ConfigFile = Join-Path $PSScriptRoot "display-config.json"
 $LogFile    = Join-Path $PSScriptRoot "display-log.txt"
+$StatusFile = Join-Path $PSScriptRoot "display-status.txt"
 
 function Log([string]$m) {
     $line = "{0}  {1}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $m
     Write-Host $line
-    try { Add-Content -Path $LogFile -Value $line -Encoding UTF8 -ErrorAction SilentlyContinue } catch { }
+    try {
+        Add-Content -Path $LogFile -Value $line -Encoding UTF8 -ErrorAction SilentlyContinue
+        # 起動中画面 (スプラッシュ) がこのファイルを読んで進捗を表示する
+        Set-Content -Path $StatusFile -Value $m -Encoding UTF8 -ErrorAction SilentlyContinue
+    } catch { }
+}
+
+# ============================================================
+#  起動中画面: 表示準備が終わるまで、全モニターを黒い画面で覆う
+# ============================================================
+if ($Splash) {
+    Add-Type -AssemblyName System.Windows.Forms
+    Add-Type -AssemblyName System.Drawing
+    $script:SplashDeadline = (Get-Date).AddSeconds($TimeoutSec + 120)   # 万一のときは自動で閉じる
+    $script:SplashForms = @()
+    $script:SplashDots = 0
+
+    function New-SplashForm($bounds) {
+        $f = New-Object System.Windows.Forms.Form
+        $f.FormBorderStyle = "None"
+        $f.StartPosition = "Manual"
+        $f.Bounds = $bounds
+        $f.BackColor = [System.Drawing.Color]::Black
+        $f.TopMost = $true
+        $f.ShowInTaskbar = $false
+        $f.KeyPreview = $true
+        $f.Add_KeyDown({ param($s, $e)
+            if ($e.KeyCode -eq [System.Windows.Forms.Keys]::Escape) { [System.Windows.Forms.Application]::Exit() }
+        })
+        $sub = New-Object System.Windows.Forms.Label
+        $sub.Name = "sub"
+        $sub.Dock = "Bottom"; $sub.Height = 70
+        $sub.TextAlign = "MiddleCenter"
+        $sub.BackColor = [System.Drawing.Color]::Black
+        $sub.ForeColor = [System.Drawing.Color]::FromArgb(110, 110, 110)
+        $sub.Font = New-Object System.Drawing.Font("Meiryo UI", 10)
+        $main = New-Object System.Windows.Forms.Label
+        $main.Name = "main"
+        $main.Dock = "Fill"
+        $main.TextAlign = "MiddleCenter"
+        $main.BackColor = [System.Drawing.Color]::Black
+        $main.ForeColor = [System.Drawing.Color]::White
+        $main.Font = New-Object System.Drawing.Font("Meiryo UI", 26)
+        $main.Text = "FIELD system 起動中"
+        $f.Controls.Add($sub)
+        $f.Controls.Add($main)
+        $main.BringToFront()
+        return $f
+    }
+
+    # つながっている全モニターを覆う (あとから2枚目が認識されたらそこにも出す)
+    function Sync-SplashScreens {
+        foreach ($b in @([System.Windows.Forms.Screen]::AllScreens | ForEach-Object { $_.Bounds })) {
+            $covered = @($script:SplashForms | Where-Object { -not $_.IsDisposed -and $_.Bounds -eq $b })
+            if ($covered.Count -eq 0) {
+                $f = New-SplashForm $b
+                $f.Show()
+                $script:SplashForms += $f
+            }
+        }
+    }
+
+    $timer = New-Object System.Windows.Forms.Timer
+    $timer.Interval = 1000
+    $timer.Add_Tick({
+        if ((Get-Date) -gt $script:SplashDeadline) { [System.Windows.Forms.Application]::Exit(); return }
+        $script:SplashDots = ($script:SplashDots + 1) % 4
+        $status = ""
+        try {
+            if (Test-Path $StatusFile) { $status = [string](Get-Content $StatusFile -TotalCount 1 -ErrorAction SilentlyContinue) }
+        } catch { }
+        foreach ($f in $script:SplashForms) {
+            if ($f.IsDisposed) { continue }
+            foreach ($c in $f.Controls) {
+                if ($c.Name -eq "main") { $c.Text = "FIELD system 起動中" + ("." * $script:SplashDots) }
+                if ($c.Name -eq "sub")  { $c.Text = "$status`r`n(この画面は自動で閉じます。ESC で今すぐ閉じる)" }
+            }
+        }
+        Sync-SplashScreens
+    })
+
+    Sync-SplashScreens
+    $timer.Start()
+    [System.Windows.Forms.Application]::Run((New-Object System.Windows.Forms.ApplicationContext))
+    exit 0
 }
 
 # ============================================================
@@ -404,9 +491,9 @@ if ($ConsoleResolution) {
 if ($Install) {
     $arg = "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$PSCommandPath`" -VMName `"$VMName`""
     $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument $arg
+    # 遅延なしで即開始する (起動中はスプラッシュ画面がデスクトップを覆い、
+    #  モニターの認識待ちはスクリプト側で行う)
     $trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
-    # サインイン直後はモニターがまだ 1 枚しか見えないことがあるため、少し待ってから開始する
-    try { $trigger.Delay = "PT20S" } catch { Write-Warning "開始遅延を設定できませんでした (動作には影響しません)。" }
     $taskSettings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -ExecutionTimeLimit (New-TimeSpan -Hours 1)
     Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger `
         -Settings $taskSettings -RunLevel Highest -Force | Out-Null
@@ -431,6 +518,14 @@ if (-not $RightUrl -and -not $LeftUrl) {
 # ログが育ちすぎないように、大きくなったら作り直す
 if ((Test-Path $LogFile) -and ((Get-Item $LogFile).Length -gt 200KB)) { Remove-Item $LogFile -Force }
 Log "===== 表示処理を開始 (左=$LeftUrl / 右=$RightUrl) ====="
+
+# --- 起動中画面: 表示がそろうまでデスクトップを黒い画面で覆う ---
+$SplashProc = $null
+if (-not $NoSplash) {
+    $SplashProc = Start-Process powershell.exe -WindowStyle Hidden -PassThru `
+        -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" -Splash -TimeoutSec $TimeoutSec"
+}
+try {
 
 # --- VM の起動を待つ ---
 $sw = [System.Diagnostics.Stopwatch]::StartNew()
@@ -499,6 +594,11 @@ public class FieldWin {
     [DllImport("user32.dll")] public static extern bool MoveWindow(IntPtr hWnd, int X, int Y, int nWidth, int nHeight, bool bRepaint);
     [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
     [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
+    [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+    [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint pid);
+    [DllImport("user32.dll")] public static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool fAttach);
+    [DllImport("user32.dll")] public static extern bool BringWindowToTop(IntPtr hWnd);
+    [DllImport("kernel32.dll")] public static extern uint GetCurrentThreadId();
     [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hWnd, out RECT r);
     [DllImport("user32.dll")] public static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, uint dwExtraInfo);
     [DllImport("user32.dll")] public static extern int GetWindowLong(IntPtr hWnd, int nIndex);
@@ -510,12 +610,29 @@ public class FieldWin {
 "@
 }
 
-# 前面化のブロック (フォアグラウンドロック) を ALT キー疑似押下で解除してから前面化する
+# 前面化のブロック (フォアグラウンドロック) を回避して前面化する。
+# ALT キー疑似押下 → 駄目なら AttachThreadInput 方式。成功したかを返す
 function Force-Foreground([IntPtr]$hwnd) {
-    [FieldWin]::keybd_event(0x12, 0, 0, 0)      # ALT down
-    [FieldWin]::SetForegroundWindow($hwnd) | Out-Null
-    [FieldWin]::keybd_event(0x12, 0, 2, 0)      # ALT up
-    Start-Sleep -Milliseconds 400
+    for ($i = 0; $i -lt 3; $i++) {
+        [FieldWin]::keybd_event(0x12, 0, 0, 0)      # ALT down
+        [FieldWin]::SetForegroundWindow($hwnd) | Out-Null
+        [FieldWin]::keybd_event(0x12, 0, 2, 0)      # ALT up
+        Start-Sleep -Milliseconds 300
+        if ([FieldWin]::GetForegroundWindow() -eq $hwnd) { return $true }
+
+        # 前面ウィンドウのスレッドに入力を相乗りさせてから前面化する (確実性の高い方式)
+        $fg = [FieldWin]::GetForegroundWindow()
+        $procId = [uint32]0
+        $fgThread = [FieldWin]::GetWindowThreadProcessId($fg, [ref]$procId)
+        $myThread = [FieldWin]::GetCurrentThreadId()
+        [FieldWin]::AttachThreadInput($myThread, $fgThread, $true) | Out-Null
+        [FieldWin]::BringWindowToTop($hwnd) | Out-Null
+        [FieldWin]::SetForegroundWindow($hwnd) | Out-Null
+        [FieldWin]::AttachThreadInput($myThread, $fgThread, $false) | Out-Null
+        Start-Sleep -Milliseconds 300
+        if ([FieldWin]::GetForegroundWindow() -eq $hwnd) { return $true }
+    }
+    return ([FieldWin]::GetForegroundWindow() -eq $hwnd)
 }
 
 # 指定プロファイルの Edge ウィンドウを探す
@@ -623,14 +740,15 @@ function Open-Console($screen, [bool]$fullScreen) {
 
     # 全画面モード (メニューバーなし・余白は黒)。解除/再開は Ctrl+Alt+Break
     $done = $false
-    for ($try = 1; $try -le 3; $try++) {
-        Force-Foreground $hwnd
-        if ($try -eq 1) {
+    for ($try = 1; $try -le 4; $try++) {
+        $fgOk = Force-Foreground $hwnd
+        if (-not $fgOk) { Log "コンソール: 前面化に失敗 (試行 $try)。キー送信が届かない可能性があります。" }
+        if ($try % 2 -eq 1) {
             [System.Windows.Forms.SendKeys]::SendWait("^%{BREAK}")
         } else {
             Send-CtrlAltBreak
         }
-        Start-Sleep -Milliseconds 1200
+        Start-Sleep -Milliseconds 1500
         if (Test-CoversScreen $hwnd $screen) { $done = $true; Log "コンソール: 全画面モードになりました (試行 $try)"; break }
     }
 
@@ -663,3 +781,11 @@ if ($hasMaximizedBrowser -and ($cfg.EscEnabled -ne $false)) {
 }
 
 Log "===== 表示処理を完了 ====="
+
+} finally {
+    # 表示がそろったので起動中画面を閉じる (エラーで中断した場合も必ず閉じる)
+    if ($SplashProc) {
+        Start-Sleep -Milliseconds 500
+        Stop-Process -Id $SplashProc.Id -Force -ErrorAction SilentlyContinue
+    }
+}
