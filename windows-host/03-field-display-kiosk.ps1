@@ -70,13 +70,6 @@ if ($Splash) {
         $f.Add_KeyDown({ param($s, $e)
             if ($e.KeyCode -eq [System.Windows.Forms.Keys]::Escape) { [System.Windows.Forms.Application]::Exit() }
         })
-        $sub = New-Object System.Windows.Forms.Label
-        $sub.Name = "sub"
-        $sub.Dock = "Bottom"; $sub.Height = 70
-        $sub.TextAlign = "MiddleCenter"
-        $sub.BackColor = [System.Drawing.Color]::Black
-        $sub.ForeColor = [System.Drawing.Color]::FromArgb(110, 110, 110)
-        $sub.Font = New-Object System.Drawing.Font("Meiryo UI", 10)
         $main = New-Object System.Windows.Forms.Label
         $main.Name = "main"
         $main.Dock = "Fill"
@@ -85,9 +78,7 @@ if ($Splash) {
         $main.ForeColor = [System.Drawing.Color]::White
         $main.Font = New-Object System.Drawing.Font("Meiryo UI", 26)
         $main.Text = "FIELD system 起動中"
-        $f.Controls.Add($sub)
         $f.Controls.Add($main)
-        $main.BringToFront()
         return $f
     }
 
@@ -108,15 +99,10 @@ if ($Splash) {
     $timer.Add_Tick({
         if ((Get-Date) -gt $script:SplashDeadline) { [System.Windows.Forms.Application]::Exit(); return }
         $script:SplashDots = ($script:SplashDots + 1) % 4
-        $status = ""
-        try {
-            if (Test-Path $StatusFile) { $status = [string](Get-Content $StatusFile -TotalCount 1 -ErrorAction SilentlyContinue) }
-        } catch { }
         foreach ($f in $script:SplashForms) {
             if ($f.IsDisposed) { continue }
             foreach ($c in $f.Controls) {
                 if ($c.Name -eq "main") { $c.Text = "FIELD system 起動中" + ("." * $script:SplashDots) }
-                if ($c.Name -eq "sub")  { $c.Text = "$status`r`n(この画面は自動で閉じます。ESC で今すぐ閉じる)" }
             }
         }
         Sync-SplashScreens
