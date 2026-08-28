@@ -32,6 +32,7 @@
 param(
     [switch]$Setup,
     [switch]$Settings,
+    [switch]$Netplwiz,
     [switch]$Disable,
     [switch]$Status,
     [string]$UserName
@@ -191,6 +192,20 @@ function Get-AutoLogonState {
     }
 }
 
+# 今サインインしているアカウントが Microsoft アカウントかどうかを調べる
+# (Microsoft アカウントだと、メールアドレスが IdentityStore に記録される)
+function Get-MicrosoftAccountMail {
+    try {
+        $sid = ([Security.Principal.WindowsIdentity]::GetCurrent()).User.Value
+        $key = "HKLM:\SOFTWARE\Microsoft\IdentityStore\Cache\$sid\IdentityCache\$sid"
+        if (Test-Path $key) {
+            $mail = [string](Get-ItemProperty $key -ErrorAction SilentlyContinue).UserName
+            if ($mail -match '@') { return $mail }
+        }
+    } catch { }
+    return $null
+}
+
 # 「PC名\ユーザー名」形式にも対応して分解する
 function Split-Account([string]$text) {
     $t = $text.Trim()
@@ -263,6 +278,23 @@ if ($Setup) {
 }
 
 # ============================================================
+#  Windows 標準の設定画面 (netplwiz) を開く
+# ============================================================
+if ($Netplwiz) {
+    # Windows Hello 専用サインインの制限を外さないと、netplwiz にチェック欄が出ない
+    if (-not (Test-Path $PwdLessKey)) { New-Item -Path $PwdLessKey -Force | Out-Null }
+    Set-ItemProperty $PwdLessKey -Name DevicePasswordLessBuildVersion -Value 0 -Type DWord
+    Start-Process netplwiz.exe
+    Write-Host "Windows 標準の『ユーザー アカウント』画面を開きました。" -ForegroundColor Green
+    Write-Host "  1. 一覧から自動サインインさせたいアカウントを選ぶ"
+    Write-Host "  2.『ユーザーがこのコンピューターを使うには、ユーザー名とパスワードの入力が必要』のチェックを外す"
+    Write-Host "  3.『OK』を押し、パスワードを2回入力する"
+    Write-Host ""
+    Write-Host "Windows 自身が資格情報を保存するため、Microsoft アカウントでも通ることがあります。"
+    exit 0
+}
+
+# ============================================================
 #  状態表示
 # ============================================================
 if ($Status) {
@@ -270,6 +302,14 @@ if ($Status) {
     Write-Host ""
     Write-Host "自動サインイン: $(if ($s.Enabled) { '有効' } else { '無効' })" -ForegroundColor $(if ($s.Enabled) { "Green" } else { "Yellow" })
     Write-Host "  サインインするアカウント: $($s.Domain)\$($s.UserName)"
+    $mail = Get-MicrosoftAccountMail
+    if ($mail) {
+        Write-Host "  アカウントの種類: Microsoft アカウント ($mail)" -ForegroundColor Yellow
+        Write-Host "    Microsoft アカウントは自動サインインが通らないことがあります。"
+        Write-Host "    その場合は『Windows 標準の方法 (netplwiz)』か、ローカルアカウントの利用を検討してください。"
+    } else {
+        Write-Host "  アカウントの種類: ローカル アカウント"
+    }
     if ($s.HasPlainPwd) {
         Write-Warning "レジストリにパスワードが平文で保存されています。設定し直すと安全な保存方式に置き換わります。"
     }
@@ -347,8 +387,32 @@ if ($Settings) {
     $grp.Controls.Add($note)
     $form.Controls.Add($grp)
 
-    $info = New-Label "現在: $(if ($st.Enabled) { '有効' } else { '無効' })  ($($st.Domain)\$($st.UserName))" 20 210 500
+    $mail = Get-MicrosoftAccountMail
+    $info = New-Label ("現在: {0}  ({1}\{2}){3}" -f
+        $(if ($st.Enabled) { '有効' } else { '無効' }), $st.Domain, $st.UserName,
+        $(if ($mail) { "  ― Microsoft アカウント ($mail)" } else { "  ― ローカル アカウント" })) 20 210 500
+    if ($mail) { $info.ForeColor = [System.Drawing.Color]::FromArgb(180, 90, 0) }
     $form.Controls.Add($info)
+
+    # Microsoft アカウントなどで保存がうまくいかない場合の逃げ道 (Windows 純正の設定画面)
+    $btnNet = New-Object System.Windows.Forms.Button
+    $btnNet.Text = "Windows 標準の方法 (netplwiz)"
+    $btnNet.Location = New-Object System.Drawing.Point(20, 245)
+    $btnNet.Size = New-Object System.Drawing.Size(230, 32)
+    $btnNet.Add_Click({
+        if (-not (Test-Path $PwdLessKey)) { New-Item -Path $PwdLessKey -Force | Out-Null }
+        Set-ItemProperty $PwdLessKey -Name DevicePasswordLessBuildVersion -Value 0 -Type DWord
+        Start-Process netplwiz.exe
+        [System.Windows.Forms.MessageBox]::Show(
+            "Windows 標準の『ユーザー アカウント』画面を開きました。`n`n" +
+            "1. 一覧から自動サインインさせたいアカウントを選ぶ`n" +
+            "2.『ユーザーがこのコンピューターを使うには、ユーザー名とパスワードの入力が必要』のチェックを外す`n" +
+            "3.『OK』を押し、パスワードを2回入力する`n`n" +
+            "この方法は Windows 自身が資格情報を保存するため、Microsoft アカウントでも通ることがあります。`n" +
+            "設定できたら、この画面は『キャンセル』で閉じてください。",
+            "自動サインイン設定") | Out-Null
+    })
+    $form.Controls.Add($btnNet)
 
     $btnOK = New-Object System.Windows.Forms.Button
     $btnOK.Text = "保存"
@@ -399,8 +463,10 @@ if ($Settings) {
         if (-not (Test-Password $acct.User $acct.Domain $pass)) {
             $r = [System.Windows.Forms.MessageBox]::Show(
                 "このアカウント名とパスワードでのサインインを確認できませんでした。`n`n" +
-                "間違ったまま保存すると、起動のたびにサインイン画面で止まります (PC は壊れません)。`n" +
-                "Microsoft アカウントの場合は、確認できなくても実際には成功することがあります。`n`n" +
+                "パスワードが合っているのにこう出る場合、Microsoft アカウントの可能性が高いです。`n" +
+                "その場合でも保存すれば動くことがあるので、まず『はい』で試してください。`n" +
+                "(効かなくても PC は壊れません。サインイン画面が出るだけです)`n`n" +
+                "効かなかったときは『Windows 標準の方法 (netplwiz)』ボタンをお試しください。`n`n" +
                 "それでもこの内容で保存しますか?",
                 "自動サインイン設定",
                 [System.Windows.Forms.MessageBoxButtons]::YesNo,
