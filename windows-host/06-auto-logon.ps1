@@ -164,15 +164,37 @@ function Remove-AutoLogonSecret {
     } finally { [FieldLsa]::LsaClose($h) | Out-Null }
 }
 
+# パスワードを照合する。ログオン種別やドメイン表記の違いで弾かれることがあるので、
+# 組み合わせを一通り試し、駄目だった理由 (Win32 エラー) も返す
 function Test-Password([string]$user, [string]$domain, [string]$password) {
     $tok = [IntPtr]::Zero
-    foreach ($logonType in 2, 3) {   # 2=対話ログオン 3=ネットワークログオン
-        if ([FieldLsa]::LogonUser($user, $domain, $password, $logonType, 0, [ref]$tok)) {
-            [FieldLsa]::CloseHandle($tok) | Out-Null
-            return $true
+    $lastErr = 0
+    $domains = @($domain, ".", $env:COMPUTERNAME) | Where-Object { $_ } | Select-Object -Unique
+    foreach ($d in $domains) {
+        foreach ($t in 2, 3, 8) {   # 2=対話 3=ネットワーク 8=ネットワーク(平文)
+            if ([FieldLsa]::LogonUser($user, $d, $password, $t, 0, [ref]$tok)) {
+                [FieldLsa]::CloseHandle($tok) | Out-Null
+                return [pscustomobject]@{ Ok = $true; Error = 0 }
+            }
+            $e = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
+            if ($e -ne 0) { $lastErr = $e }
+            if ($e -eq 1326) { break }   # 資格情報そのものが違う。種別を変えても同じ
         }
     }
-    return $false
+    return [pscustomobject]@{ Ok = $false; Error = $lastErr }
+}
+
+# 照合に失敗した理由と、パスワード自体が正しそうかどうか
+function Get-LogonErrorInfo([int]$code) {
+    switch ($code) {
+        1326 { return [pscustomobject]@{ Text = "ユーザー名またはパスワードが違います。"; PasswordLikelyOk = $false } }
+        1327 { return [pscustomobject]@{ Text = "アカウントに制限がかかっています (パスワードが空、または使用時間の制限など)。"; PasswordLikelyOk = $true } }
+        1331 { return [pscustomobject]@{ Text = "アカウントが無効になっています。"; PasswordLikelyOk = $true } }
+        1385 { return [pscustomobject]@{ Text = "このアカウントには、この種類のログオンが許可されていません。"; PasswordLikelyOk = $true } }
+        1907 { return [pscustomobject]@{ Text = "次回サインイン時にパスワード変更が必要な状態です。"; PasswordLikelyOk = $true } }
+        1909 { return [pscustomobject]@{ Text = "アカウントがロックアウトされています。"; PasswordLikelyOk = $true } }
+    }
+    return [pscustomobject]@{ Text = "確認できませんでした (エラーコード $code)。"; PasswordLikelyOk = $true }
 }
 
 # ============================================================
@@ -460,15 +482,20 @@ if ($Settings) {
         }
         $pass = $null   # 保存済みパスワードを据え置く
     } else {
-        if (-not (Test-Password $acct.User $acct.Domain $pass)) {
-            $r = [System.Windows.Forms.MessageBox]::Show(
-                "このアカウント名とパスワードでのサインインを確認できませんでした。`n`n" +
-                "パスワードが合っているのにこう出る場合、Microsoft アカウントの可能性が高いです。`n" +
-                "その場合でも保存すれば動くことがあるので、まず『はい』で試してください。`n" +
-                "(効かなくても PC は壊れません。サインイン画面が出るだけです)`n`n" +
-                "効かなかったときは『Windows 標準の方法 (netplwiz)』ボタンをお試しください。`n`n" +
-                "それでもこの内容で保存しますか?",
-                "自動サインイン設定",
+        $chk = Test-Password $acct.User $acct.Domain $pass
+        if (-not $chk.Ok) {
+            $info = Get-LogonErrorInfo $chk.Error
+            $body = "パスワードの事前確認ができませんでした。`n`n理由: $($info.Text)`n`n"
+            if ($info.PasswordLikelyOk) {
+                $body += "これは確認のしくみ側の制限で、パスワード自体は正しい可能性が高いです。`n" +
+                         "そのまま保存して、再起動で試すことをおすすめします。`n"
+            } else {
+                $body += "入力したアカウント名かパスワードを見直してください。`n"
+            }
+            $body += "(間違っていても PC は壊れません。サインイン画面が出るだけです)`n`n" +
+                     "効かなかったときは『Windows 標準の方法 (netplwiz)』ボタンをお試しください。`n`n" +
+                     "この内容で保存しますか?"
+            $r = [System.Windows.Forms.MessageBox]::Show($body, "自動サインイン設定",
                 [System.Windows.Forms.MessageBoxButtons]::YesNo,
                 [System.Windows.Forms.MessageBoxIcon]::Warning)
             if ($r -ne [System.Windows.Forms.DialogResult]::Yes) { exit 0 }
@@ -510,14 +537,20 @@ try {
     $plain = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr)
     if ($plain) {
         Write-Host "パスワードを確認しています..."
-        if (Test-Password $acct.User $acct.Domain $plain) {
+        $chk = Test-Password $acct.User $acct.Domain $plain
+        if ($chk.Ok) {
             Write-Host "パスワードを確認しました。" -ForegroundColor Green
         } else {
+            $info = Get-LogonErrorInfo $chk.Error
             Write-Host ""
-            Write-Warning "このパスワードでのサインインを確認できませんでした。"
-            Write-Warning "間違ったまま設定すると、起動のたびにサインイン画面で止まります (PC は壊れません)。"
-            Write-Warning "Microsoft アカウントの場合は、確認できなくても実際には成功することがあります。"
-            $ans2 = Read-Host "それでもこのパスワードで設定しますか? (y/N)"
+            Write-Warning "パスワードの事前確認ができませんでした。理由: $($info.Text)"
+            if ($info.PasswordLikelyOk) {
+                Write-Warning "確認のしくみ側の制限で、パスワード自体は正しい可能性が高いです。そのまま設定して構いません。"
+            } else {
+                Write-Warning "入力したアカウント名かパスワードを見直してください。"
+            }
+            Write-Warning "間違っていても PC は壊れません (起動時にサインイン画面が出るだけです)。"
+            $ans2 = Read-Host "この内容で設定しますか? (y/N)"
             if ($ans2 -ne "y") { Write-Host "中止しました。設定は変更していません。"; exit 0 }
         }
     }
