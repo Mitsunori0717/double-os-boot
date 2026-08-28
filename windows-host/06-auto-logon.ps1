@@ -121,8 +121,8 @@ public class FieldLsa
 function New-LsaString([string]$s) {
     $u = New-Object 'FieldLsa+LSA_UNICODE_STRING'
     $u.Buffer        = [Runtime.InteropServices.Marshal]::StringToHGlobalUni($s)
-    $u.Length        = [ushort](2 * $s.Length)
-    $u.MaximumLength = [ushort](2 * $s.Length + 2)
+    $u.Length        = [uint16](2 * $s.Length)
+    $u.MaximumLength = [uint16](2 * $s.Length + 2)
     return $u
 }
 
