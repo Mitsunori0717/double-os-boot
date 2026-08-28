@@ -254,6 +254,11 @@ if ($Setup) {
     [IO.File]::WriteAllBytes($lnkPath, $bytes)
     Write-Host "デスクトップに『自動サインイン設定』アイコンを作成しました。" -ForegroundColor Green
     Write-Host "  アカウント名やパスワードを変えたときは、このアイコンから変更してください。"
+    Write-Host ""
+    Write-Host "アイコンを作っただけでは、まだ自動サインインは有効になりません。" -ForegroundColor Yellow
+    Write-Host "続けて設定ウィンドウを開きます。アカウント名とパスワードを入れて『保存』してください。"
+    Start-Sleep -Seconds 2
+    & $PSCommandPath -Settings
     exit 0
 }
 

@@ -38,6 +38,25 @@ if ($Stop) {
 }
 
 if ($vm.State -ne "Running") {
+    # 『FIELD表示設定』で指定されたコンソール解像度を、起動前に反映する
+    $cfgFile = Join-Path $PSScriptRoot "display-config.json"
+    if (Test-Path $cfgFile) {
+        try {
+            $resText = [string](Get-Content $cfgFile -Raw -Encoding UTF8 | ConvertFrom-Json).ConsoleResolution
+            if ($resText -match '^(auto|自動)') {
+                Add-Type -AssemblyName System.Windows.Forms
+                $b = (@([System.Windows.Forms.Screen]::AllScreens | Sort-Object { $_.Bounds.X })[0]).Bounds
+                $rw = $b.Width; $rh = $b.Height
+            } elseif ($resText -match '^(\d{3,5})\s*[xX×*]\s*(\d{3,5})$') {
+                $rw = [int]$Matches[1]; $rh = [int]$Matches[2]
+            }
+            if ($rw) {
+                Set-VMVideo -VMName $VMName -ResolutionType Single `
+                    -HorizontalResolution $rw -VerticalResolution $rh -ErrorAction SilentlyContinue
+                Write-Host "コンソールの解像度: ${rw}x${rh}"
+            }
+        } catch { }
+    }
     Write-Host "FIELD system を起動しています..." -ForegroundColor Cyan
     Start-VM -Name $VMName
 }
