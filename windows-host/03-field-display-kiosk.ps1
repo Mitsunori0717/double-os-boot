@@ -887,13 +887,51 @@ function Set-FramelessWindow([IntPtr]$hwnd, [int]$x, [int]$y, [int]$w, [int]$h) 
     [FieldWin]::BringWindowToTop($hwnd) | Out-Null
 }
 
+# vmconnect を正しく閉じる (強制終了ではなく通常の閉じ方にして、全画面などの状態を保存させる)
+function Close-ConsoleGracefully {
+    $procs = @(Get-Process vmconnect -ErrorAction SilentlyContinue)
+    if ($procs.Count -eq 0) { return }
+    foreach ($p in $procs) { [void]$p.CloseMainWindow() }
+    Start-Sleep -Milliseconds 1500
+    Get-Process vmconnect -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+    Start-Sleep -Milliseconds 500
+}
+
+# vmconnect が保存している「この VM の表示設定」ファイルの FullScreen を書き換える。
+# ここを True にしてから起動すると、切り替え操作なしで最初から全画面で開く
+function Set-ConsoleSavedFullScreen([bool]$on) {
+    try {
+        $vm = Get-VM -Name $VMName -ErrorAction SilentlyContinue
+        if (-not $vm) { return $false }
+        $vmid = $vm.Id.ToString()
+        $dir = Join-Path $env:APPDATA "Microsoft\Windows\Hyper-V\Client\1.0"
+        $file = Get-ChildItem -Path $dir -Filter "vmconnect.rdp.*.config" -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -match [regex]::Escape($vmid) } | Select-Object -First 1
+        if (-not $file) { return $false }
+        [xml]$x = Get-Content $file.FullName -Raw -Encoding UTF8
+        $nodes = $x.SelectNodes("//setting[@name='FullScreen']")
+        if (-not $nodes -or $nodes.Count -eq 0) { return $false }
+        foreach ($n in $nodes) { $n.InnerText = $(if ($on) { "True" } else { "False" }) }
+        $x.Save($file.FullName)
+        return $true
+    } catch { return $false }
+}
+
 # --- FIELD のコンソール画面 (vmconnect) を指定モニターに表示 ---
 function Open-Console($screen, [bool]$fullScreen) {
     Log ("コンソールを開きます (モニター {0},{1} / {2})" -f $screen.Bounds.X, $screen.Bounds.Y,
          $(if ($fullScreen) { "全画面" } else { "最大化ウィンドウ" }))
-    # コンソールは同時に1接続のみ。古い窓が残っていると新しい窓に切断ダイアログが出るため、先に閉じる
-    Get-Process vmconnect -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-    Start-Sleep -Seconds 1
+    # コンソールは同時に1接続のみ。古い窓は「正しく閉じて」状態を保存させる
+    Close-ConsoleGracefully
+
+    # 保存設定を「全画面」に書き換えてから起動する (起動した瞬間から全画面になる)
+    if ($fullScreen) {
+        if (Set-ConsoleSavedFullScreen $true) { Log "コンソール: 保存設定を全画面に書き換えました。" }
+        else { Log "コンソール: 保存設定ファイルが未作成のため、起動後に切り替えます (次回からは直接全画面)。" }
+    } else {
+        Set-ConsoleSavedFullScreen $false | Out-Null
+    }
+
     Start-Process "vmconnect.exe" -ArgumentList "localhost", $VMName
     $hwnd = [IntPtr]::Zero
     $csw = [System.Diagnostics.Stopwatch]::StartNew()
@@ -903,6 +941,21 @@ function Open-Console($screen, [bool]$fullScreen) {
         if ($p) { $hwnd = $p.MainWindowHandle; break }
     }
     if ($hwnd -eq [IntPtr]::Zero) { Log "警告: コンソール画面のウィンドウが見つかりませんでした。"; return }
+
+    # 保存設定が効いて、最初から目的のモニターで全画面になっているか確認
+    if ($fullScreen) {
+        Start-Sleep -Milliseconds 1200
+        if (Test-CoversScreen $hwnd $screen) {
+            Log "コンソール: 保存設定により最初から全画面で起動しました。"
+            return
+        }
+        $own = [System.Windows.Forms.Screen]::FromHandle($hwnd)
+        if ($own -and ($own.Bounds -ne $screen.Bounds) -and (Test-CoversScreen $hwnd $own)) {
+            # 別のモニターで全画面になってしまった → いったん解除してから配置し直す
+            Invoke-ConsoleMenuCommand $hwnd '全画面|Full' | Out-Null
+            Start-Sleep -Milliseconds 800
+        }
+    }
 
     [FieldWin]::MoveWindow($hwnd, $screen.Bounds.X, $screen.Bounds.Y, 900, 700, $true) | Out-Null
     Start-Sleep -Milliseconds 400
