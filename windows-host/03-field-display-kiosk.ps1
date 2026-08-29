@@ -545,6 +545,12 @@ if ($ConsoleResolution) {
 #  ログオン時自動実行の登録 / 解除
 # ============================================================
 if ($Install) {
+    $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
+        ).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+    if (-not $isAdmin) {
+        Write-Error "管理者権限で実行してください (スタートボタンを右クリック →『ターミナル (管理者)』または『Windows PowerShell (管理者)』)。"
+        exit 1
+    }
     $taskSettings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -ExecutionTimeLimit (New-TimeSpan -Hours 1)
 
     # 起動中画面 (スプラッシュ) は独立のタスクとして先に走らせる。
