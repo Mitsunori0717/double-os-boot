@@ -53,6 +53,12 @@ if (-not $NoConfirm) {
     $shutdownWindows = ($res -eq [System.Windows.Forms.DialogResult]::Yes)
 }
 
+# 先にコンソール画面 (vmconnect) を閉じる。
+# 開いたままだと、停止後に画面側から VM が自動で再起動されることがあるため
+Get-Process vmconnect -ErrorAction SilentlyContinue | ForEach-Object { [void]$_.CloseMainWindow() }
+Start-Sleep -Seconds 2
+Get-Process vmconnect -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+
 $vm = Get-VM -Name $VMName -ErrorAction SilentlyContinue
 if ($vm -and $vm.State -eq "Running") {
     Write-Host "FIELD system にシャットダウン要求を送信しました。終了を待っています..."
@@ -97,6 +103,24 @@ if ($shutdownWindows) {
     Write-Host "Windows をシャットダウンします..."
     shutdown /s /t 10 /c "FIELD system の終了を確認しました。Windows をシャットダウンします。"
 } else {
+    # 停止後しばらく見張り、何かに自動で再起動されたらもう一度止める (再発防止の保険)
+    Write-Host "FIELD system の停止を確認しています (1分間)..."
+    $restarted = $false
+    $watch = [System.Diagnostics.Stopwatch]::StartNew()
+    while ($watch.Elapsed.TotalSeconds -lt 60) {
+        Start-Sleep -Seconds 5
+        if ((Get-VM -Name $VMName -ErrorAction SilentlyContinue).State -eq "Running") { $restarted = $true; break }
+    }
+    if ($restarted) {
+        Write-Warning "FIELD system が自動で再起動されたため、もう一度停止します..."
+        Get-Process vmconnect -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+        Stop-VM -Name $VMName -ErrorAction SilentlyContinue
+        $sw3 = [System.Diagnostics.Stopwatch]::StartNew()
+        while ($sw3.Elapsed.TotalSeconds -lt 180) {
+            if ((Get-VM -Name $VMName).State -eq "Off") { break }
+            Start-Sleep -Seconds 3
+        }
+    }
     [System.Windows.Forms.MessageBox]::Show("FIELD system のみ終了しました。Windows はそのまま使えます。`n再開するには 02-start-field-vm.ps1 を実行してください。",
         "全部シャットダウン") | Out-Null
 }

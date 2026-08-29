@@ -100,6 +100,11 @@ if (-not $NoConfirm) {
 }
 
 # --- VM を安全に停止 (実行中なら) ---
+# コンソール画面 (vmconnect) を先に閉じる (停止後の自動再起動を防ぐ)
+Get-Process vmconnect -ErrorAction SilentlyContinue | ForEach-Object { [void]$_.CloseMainWindow() }
+Start-Sleep -Seconds 2
+Get-Process vmconnect -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+
 $vm = Get-VM -Name $VMName -ErrorAction SilentlyContinue
 if ($vm -and $vm.State -eq "Running") {
     Write-Host "FIELD system VM をシャットダウンしています..."
