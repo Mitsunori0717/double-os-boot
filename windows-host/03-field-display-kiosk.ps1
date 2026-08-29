@@ -964,13 +964,14 @@ function Open-Console($screen, [bool]$fullScreen) {
     Close-ConsoleGracefully
 
     # 保存設定を「全画面」に書き換えてから起動する (起動した瞬間から全画面になる)
-    $NoCfgFlag = Join-Path $PSScriptRoot "vmconnect-config-unsupported.flag"
+    $NoCfgFlag = Join-Path $PSScriptRoot "vmconnect-config-unsupported-v2.flag"
     if ($fullScreen) {
         if (-not (Get-ConsoleConfigFile) -and -not (Test-Path $NoCfgFlag)) {
-            # 初回のみ: 一度開いて正しく閉じ、vmconnect 自身に設定ファイルを作らせる
+            # 初回のみ: 一度開いて正しく閉じ、vmconnect 自身に設定ファイルを作らせる。
+            # 接続が確立する前に閉じると保存されないため、しばらく待ってから閉じる
             Log "コンソール: 設定ファイルが無いため、一度開いて作成させます..."
             $tmp = Start-ConsoleWindow
-            if ($tmp -ne [IntPtr]::Zero) { Start-Sleep -Milliseconds 1500 }
+            if ($tmp -ne [IntPtr]::Zero) { Start-Sleep -Seconds 6 }
             Close-ConsoleGracefully
             $cf = Get-ConsoleConfigFile
             if ($cf) { Log "コンソール: 設定ファイルを作成しました ($($cf.Name))。" }

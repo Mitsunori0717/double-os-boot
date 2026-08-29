@@ -4,4 +4,4 @@ kiosk-login.xml
 field-boot-entry.conf
 display-log.txt
 display-status.txt
-vmconnect-config-unsupported.flag
+*.flag
