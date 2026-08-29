@@ -38,6 +38,18 @@ $ConfigFile = Join-Path $PSScriptRoot "display-config.json"
 $LogFile    = Join-Path $PSScriptRoot "display-log.txt"
 $StatusFile = Join-Path $PSScriptRoot "display-status.txt"
 
+# どこで停止しても原因が追えるように、未処理エラーは必ずファイルに残す
+trap {
+    try {
+        $errFile = Join-Path $PSScriptRoot "display-error.txt"
+        $mode = if ($Splash) { "Splash" } elseif ($EscWatcher) { "EscWatcher" } elseif ($Backdrop) { "Backdrop" } else { "Main" }
+        Add-Content -Path $errFile -Encoding UTF8 -Value (
+            "{0}  [{1}] {2}`r`n  場所: {3}`r`n" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $mode,
+            $_.Exception.Message, $_.InvocationInfo.PositionMessage)
+    } catch { }
+    break
+}
+
 function Log([string]$m) {
     $line = "{0}  {1}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $m
     Write-Host $line
@@ -52,8 +64,16 @@ function Log([string]$m) {
 #  起動中画面: 表示準備が終わるまで、全モニターを黒い画面で覆う
 # ============================================================
 if ($Splash) {
-    Add-Type -AssemblyName System.Windows.Forms
-    Add-Type -AssemblyName System.Drawing
+    # サインイン直後はデスクトップの準備中で失敗することがあるため、読み込みを再試行する
+    $loaded = $false
+    for ($i = 0; $i -lt 10 -and -not $loaded; $i++) {
+        try {
+            Add-Type -AssemblyName System.Windows.Forms
+            Add-Type -AssemblyName System.Drawing
+            $loaded = $true
+        } catch { Start-Sleep -Seconds 2 }
+    }
+    if (-not $loaded) { exit 1 }
     $script:SplashDeadline = (Get-Date).AddSeconds($TimeoutSec + 120)   # 万一のときは自動で閉じる
     $script:SplashForms = @()
     $script:SplashDots = 0
@@ -528,16 +548,18 @@ if ($Install) {
     $taskSettings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -ExecutionTimeLimit (New-TimeSpan -Hours 1)
 
     # 起動中画面 (スプラッシュ) は独立のタスクとして先に走らせる。
-    # メイン処理の読み込みを待たず、サインイン直後にできるだけ早く黒画面を出すため
+    # サインイン直後の数秒はデスクトップの準備中で不安定なため、少しだけ遅らせる
     $sAction = New-ScheduledTaskAction -Execute "powershell.exe" `
         -Argument "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$PSCommandPath`" -Splash"
     $sTrigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
+    try { $sTrigger.Delay = "PT5S" } catch { }
     Register-ScheduledTask -TaskName "$TaskName-Splash" -Action $sAction -Trigger $sTrigger `
         -Settings $taskSettings -RunLevel Highest -Force | Out-Null
 
     $arg = "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$PSCommandPath`" -VMName `"$VMName`""
     $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument $arg
     $trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
+    try { $trigger.Delay = "PT15S" } catch { }
     Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger `
         -Settings $taskSettings -RunLevel Highest -Force | Out-Null
     Write-Host "登録しました。次回ログオンから自動で表示されます (起動中は黒い画面で覆います)。" -ForegroundColor Green
