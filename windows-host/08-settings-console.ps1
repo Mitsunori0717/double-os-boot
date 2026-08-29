@@ -50,19 +50,27 @@ if ($Setup) {
     foreach ($old in "FIELD表示設定.lnk", "自動サインイン設定.lnk", "FIELD設定.lnk") {
         Remove-Item (Join-Path $desktop $old) -Force -ErrorAction SilentlyContinue
     }
+
+    # UAC の確認 (「許可しますか?」) を出さずに開けるよう、
+    # 管理者権限付きのタスクとして登録し、アイコンはそのタスクを起動するだけにする
+    $taskName = "FIELD-Settings-Console"
+    $action = New-ScheduledTaskAction -Execute "powershell.exe" `
+        -Argument "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$PSCommandPath`""
+    $ts = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -ExecutionTimeLimit (New-TimeSpan -Hours 2)
+    Register-ScheduledTask -TaskName $taskName -Action $action -Settings $ts -RunLevel Highest -Force | Out-Null
+
     $lnkPath = Join-Path $desktop "設定.lnk"
     $shell = New-Object -ComObject WScript.Shell
     $lnk = $shell.CreateShortcut($lnkPath)
-    $lnk.TargetPath = "powershell.exe"
-    $lnk.Arguments  = "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$PSCommandPath`""
+    $lnk.TargetPath = "schtasks.exe"
+    $lnk.Arguments  = "/run /tn `"$taskName`""
     $lnk.WorkingDirectory = $PSScriptRoot
+    $lnk.WindowStyle  = 7   # 最小化 (schtasks の黒い窓を見せない)
     $lnk.IconLocation = "shell32.dll,21"
-    $lnk.Description  = "FIELD system の統合設定コンソール"
+    $lnk.Description  = "FIELD system の統合設定コンソール (UAC 確認なしで開く)"
     $lnk.Save()
-    $bytes = [IO.File]::ReadAllBytes($lnkPath)
-    $bytes[0x15] = $bytes[0x15] -bor 0x20   # 管理者として実行
-    [IO.File]::WriteAllBytes($lnkPath, $bytes)
     Write-Host "デスクトップに『設定』アイコンを作成しました (旧アイコンは置き換え)。" -ForegroundColor Green
+    Write-Host "  UAC の確認なしで、ダブルクリックだけで設定画面が開きます。"
     exit 0
 }
 
@@ -273,6 +281,8 @@ function Set-ConsoleResolution([int]$w, [int]$h) {
 # ============================================================
 $form = New-Object System.Windows.Forms.Form
 $form.Text = "設定"
+$form.TopMost = $true          # 全画面表示のブラウザ等に隠れないように
+$form.Add_Shown({ $form.Activate() })
 $form.Size = New-Object System.Drawing.Size(660, 560)
 $form.StartPosition = "CenterScreen"
 $form.FormBorderStyle = "FixedDialog"
