@@ -62,22 +62,28 @@ if (-not $Setup -and -not (Test-Path $ConfFile)) {
 }
 
 if ($Setup) {
-    Write-Host "UEFI の起動エントリから FIELD system のものを選択します。" -ForegroundColor Cyan
-    $entries = Get-FirmwareEntries
-    if ($entries.Count -eq 0) {
-        Write-Error "ファームウェア起動エントリが見つかりません。'bcdedit /enum firmware' の出力を確認してください。"
-        exit 1
+    if (Test-Path $ConfFile) {
+        # すでに選択済みなら聞き直さない (アイコン・タスクの作り直しだけ行う)
+        Write-Host "起動先は選択済みのため、そのまま使います: $((Get-Content $ConfFile -First 1).Trim())" -ForegroundColor Cyan
+        Write-Host "  (選び直したい場合は field-boot-entry.conf を削除してから -Setup を実行)"
+    } else {
+        Write-Host "UEFI の起動エントリから FIELD system のものを選択します。" -ForegroundColor Cyan
+        $entries = Get-FirmwareEntries
+        if ($entries.Count -eq 0) {
+            Write-Error "ファームウェア起動エントリが見つかりません。'bcdedit /enum firmware' の出力を確認してください。"
+            exit 1
+        }
+        for ($i = 0; $i -lt $entries.Count; $i++) {
+            Write-Host ("  [{0}] {1}  {2}" -f $i, $entries[$i].Description, $entries[$i].Guid)
+        }
+        Write-Host ""
+        Write-Host "ヒント: FIELD system は 'UEFI OS' や 'ubuntu'、KIOXIA のディスク名などの表記です。"
+        Write-Host "        どれか不明な場合は、この一覧を貼り付けて相談してください。"
+        $sel = Read-Host "FIELD system の番号"
+        $entry = $entries[[int]$sel]
+        $entry.Guid | Set-Content -Path $ConfFile -Encoding ASCII
+        Write-Host "保存しました: $($entry.Description) $($entry.Guid)" -ForegroundColor Green
     }
-    for ($i = 0; $i -lt $entries.Count; $i++) {
-        Write-Host ("  [{0}] {1}  {2}" -f $i, $entries[$i].Description, $entries[$i].Guid)
-    }
-    Write-Host ""
-    Write-Host "ヒント: FIELD system は 'UEFI OS' や 'ubuntu'、KIOXIA のディスク名などの表記です。"
-    Write-Host "        どれか不明な場合は、この一覧を貼り付けて相談してください。"
-    $sel = Read-Host "FIELD system の番号"
-    $entry = $entries[[int]$sel]
-    $entry.Guid | Set-Content -Path $ConfFile -Encoding ASCII
-    Write-Host "保存しました: $($entry.Description) $($entry.Guid)" -ForegroundColor Green
 
     # --- UAC 確認なしで実行できるよう、管理者権限付きタスク + それを起動するアイコンを作成 ---
     $taskName = "FIELD-Native-Boot"
