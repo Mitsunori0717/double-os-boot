@@ -919,9 +919,13 @@ function Get-ConsoleConfigFile {
         $vm = Get-VM -Name $VMName -ErrorAction SilentlyContinue
         if (-not $vm) { return $null }
         $vmid = $vm.Id.ToString()
-        $dir = Join-Path $env:APPDATA "Microsoft\Windows\Hyper-V\Client\1.0"
-        return Get-ChildItem -Path $dir -Filter "vmconnect.rdp.*.config" -ErrorAction SilentlyContinue |
-            Where-Object { $_.Name -match [regex]::Escape($vmid) } | Select-Object -First 1
+        foreach ($root in $env:APPDATA, $env:LOCALAPPDATA) {
+            $dir = Join-Path $root "Microsoft\Windows\Hyper-V\Client\1.0"
+            $f = Get-ChildItem -Path $dir -Filter "vmconnect.rdp.*.config" -ErrorAction SilentlyContinue |
+                Where-Object { $_.Name -match [regex]::Escape($vmid) } | Select-Object -First 1
+            if ($f) { return $f }
+        }
+        return $null
     } catch { return $null }
 }
 
@@ -960,8 +964,9 @@ function Open-Console($screen, [bool]$fullScreen) {
     Close-ConsoleGracefully
 
     # 保存設定を「全画面」に書き換えてから起動する (起動した瞬間から全画面になる)
+    $NoCfgFlag = Join-Path $PSScriptRoot "vmconnect-config-unsupported.flag"
     if ($fullScreen) {
-        if (-not (Get-ConsoleConfigFile)) {
+        if (-not (Get-ConsoleConfigFile) -and -not (Test-Path $NoCfgFlag)) {
             # 初回のみ: 一度開いて正しく閉じ、vmconnect 自身に設定ファイルを作らせる
             Log "コンソール: 設定ファイルが無いため、一度開いて作成させます..."
             $tmp = Start-ConsoleWindow
@@ -969,10 +974,27 @@ function Open-Console($screen, [bool]$fullScreen) {
             Close-ConsoleGracefully
             $cf = Get-ConsoleConfigFile
             if ($cf) { Log "コンソール: 設定ファイルを作成しました ($($cf.Name))。" }
-            else     { Log "コンソール: 設定ファイルを作成できませんでした。" }
+            else {
+                # この環境では作られないと判断し、以後この手順は省略する (毎回10秒の無駄を防ぐ)
+                New-Item -Path $NoCfgFlag -ItemType File -Force | Out-Null
+                Log "コンソール: 設定ファイルは作成されませんでした。以後この手順は省略します。"
+                # 実際の保存場所を探すための診断情報
+                try {
+                    $found = @()
+                    foreach ($root in "$env:APPDATA\Microsoft", "$env:LOCALAPPDATA\Microsoft") {
+                        $found += Get-ChildItem -Path $root -Recurse -Depth 6 -Filter "vmconnect*" -File -ErrorAction SilentlyContinue |
+                            Select-Object -First 5
+                    }
+                    if ($found.Count -gt 0) {
+                        Log ("コンソール: [診断] vmconnect 関連ファイル: " + (($found | ForEach-Object { $_.FullName }) -join " ; "))
+                    } else {
+                        Log "コンソール: [診断] vmconnect 関連ファイルはプロファイル内に見つかりませんでした。"
+                    }
+                } catch { }
+            }
         }
         if (Set-ConsoleSavedFullScreen $true) { Log "コンソール: 保存設定を全画面に書き換えました。" }
-        else { Log "コンソール: 保存設定を書き換えられなかったため、起動後に切り替えます。" }
+        elseif (-not (Test-Path $NoCfgFlag)) { Log "コンソール: 保存設定を書き換えられなかったため、起動後に切り替えます。" }
     } else {
         Set-ConsoleSavedFullScreen $false | Out-Null
     }
