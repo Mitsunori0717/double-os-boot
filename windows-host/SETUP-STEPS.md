@@ -43,14 +43,22 @@ LAN ポート5つ / 工作機械との接続は Ethernet。
 
 どの切替も可逆でデータには触れない。再起動 1〜2 回で必ずどれかの層に確定する。
 
-## CPU の取り分保証 (任意)
+## CPU の取り分保証 (任意・推奨)
 
-物理コア固定は Windows クライアント版 Hyper-V では不可のため、代わりに処理能力の予約で保証する:
+CPU コアを Windows と EdgeBox に分割して固定割り当てできる (`10-cpu-partition.ps1`)。
+再起動不要の runtime モードと、完全分割の full モードの 2 段階。詳細は **CPU-PARTITION.md**。
 
 ```powershell
-# VM 停止中に実行。割り当て vCPU 数ぶんの処理能力を常時確保
-Set-VMProcessor -VMName EdgeBox -Reserve 100
+.\10-cpu-partition.ps1 -HostCores 4                      # 分割案の確認 (変更なし)
+.\10-cpu-partition.ps1 -Apply -Mode runtime -HostCores 4 # 適用 (EdgeBox を専用コアへ固定)
+.\10-cpu-partition.ps1 -Verify                           # 実測 (各コアで誰が動いたか)
+.\10-cpu-partition.ps1 -Undo                             # 全解除
 ```
+
+> 旧手順の `Set-VMProcessor -VMName EdgeBox -Reserve 100` は、クライアント版 Windows の
+> 既定構成 (root スケジューラ) では **機能しない** ことが判明したため撤回
+> (処理能力の予約・上限・重みはハイパーバイザーがスケジュールする構成でのみ有効という公式仕様)。
+> 設定済みでも害はないが、保証にはなっていない。上記スクリプトが正しい代替。
 
 ## 便利機能 (手順⑨の代わり/追加)
 
