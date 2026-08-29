@@ -6,16 +6,16 @@
     タブ構成:
       [画面表示]     左右モニターの表示内容・全画面・ESC・コンソール解像度 (03 と同じ設定)
       [自動サインイン] 電源 ON でデスクトップまで自動で進む設定 (06 と同じ設定)
-      [起動と見た目]  ロック画面スキップ・サインイン画面の暗色化・壁紙の黒一色化 (07 と同じ設定)
 
     保存ボタンで全タブの内容をまとめて反映します。
+    起動時の見た目 (ロック画面スキップ・壁紙の黒一色化など) は 07-boot-appearance.ps1 で設定します。
 
 .EXAMPLE
-    .\08-settings-console.ps1 -Setup   # デスクトップに『FIELD設定』アイコンを作成 (最初にこれ)
+    .\08-settings-console.ps1 -Setup   # デスクトップに『設定』アイコンを作成 (最初にこれ)
     .\08-settings-console.ps1          # 設定コンソールを開く
 
 .NOTES
-    管理者権限が必要です (『FIELD設定』アイコンは管理者実行フラグ付きで作成されます)。
+    管理者権限が必要です (『設定』アイコンは管理者実行フラグ付きで作成されます)。
     従来の 03 -Settings / 06 -Settings / 07 も引き続き使えます (設定の保存先は同じ)。
 #>
 [CmdletBinding()]
@@ -35,22 +35,22 @@ $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIden
 if (-not $isAdmin) {
     [System.Windows.Forms.MessageBox]::Show(
         "管理者権限が必要です。`nアイコンを右クリックして『管理者として実行』を選んでください。",
-        "FIELD設定",
+        "設定",
         [System.Windows.Forms.MessageBoxButtons]::OK,
         [System.Windows.Forms.MessageBoxIcon]::Warning) | Out-Null
     exit 1
 }
 
 # ============================================================
-#  デスクトップに『FIELD設定』アイコンを作成
+#  デスクトップに『設定』アイコンを作成
 # ============================================================
 if ($Setup) {
     $desktop = [Environment]::GetFolderPath("Desktop")
     # 旧アイコンは統合版に置き換える
-    foreach ($old in "FIELD表示設定.lnk", "自動サインイン設定.lnk") {
+    foreach ($old in "FIELD表示設定.lnk", "自動サインイン設定.lnk", "FIELD設定.lnk") {
         Remove-Item (Join-Path $desktop $old) -Force -ErrorAction SilentlyContinue
     }
-    $lnkPath = Join-Path $desktop "FIELD設定.lnk"
+    $lnkPath = Join-Path $desktop "設定.lnk"
     $shell = New-Object -ComObject WScript.Shell
     $lnk = $shell.CreateShortcut($lnkPath)
     $lnk.TargetPath = "powershell.exe"
@@ -62,7 +62,7 @@ if ($Setup) {
     $bytes = [IO.File]::ReadAllBytes($lnkPath)
     $bytes[0x15] = $bytes[0x15] -bor 0x20   # 管理者として実行
     [IO.File]::WriteAllBytes($lnkPath, $bytes)
-    Write-Host "デスクトップに『FIELD設定』アイコンを作成しました (旧アイコンは置き換え)。" -ForegroundColor Green
+    Write-Host "デスクトップに『設定』アイコンを作成しました (旧アイコンは置き換え)。" -ForegroundColor Green
     exit 0
 }
 
@@ -181,15 +181,8 @@ function Test-Password([string]$user, [string]$domain, [string]$password) {
 # ============================================================
 $WinlogonKey  = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon"
 $PwdLessKey   = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\PasswordLess\Device"
-$PolWinSystem = "HKLM:\SOFTWARE\Policies\Microsoft\Windows\System"
-$PolPerso     = "HKLM:\SOFTWARE\Policies\Microsoft\Windows\Personalization"
-$PolSystem    = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System"
 $PowerSubNone = "fea3413e-7e05-4911-9a71-700331f1c294"
 $PowerWakePwd = "0e796bdb-100d-47d6-a2d5-f7d2daa51f51"
-
-function Get-RegValue([string]$path, [string]$name) {
-    try { return (Get-ItemProperty -Path $path -Name $name -ErrorAction SilentlyContinue).$name } catch { return $null }
-}
 
 function Get-AutoLogonState {
     $wl = Get-ItemProperty $WinlogonKey -ErrorAction SilentlyContinue
@@ -208,21 +201,11 @@ function Split-Account([string]$text) {
     return [pscustomobject]@{ Domain = $d; User = $t }
 }
 
-if (-not ("BootLook" -as [type])) {
-    Add-Type -TypeDefinition @'
-using System.Runtime.InteropServices;
-public class BootLook {
-    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
-    public static extern bool SystemParametersInfo(uint uiAction, uint uiParam, string pvParam, uint fWinIni);
-}
-'@
-}
-
 # ============================================================
 #  表示設定 (display-config.json)
 # ============================================================
 $DefaultConfig = [ordered]@{
-    "_説明"             = "FIELD 表示の設定。『FIELD設定』アイコンから編集できます。"
+    "_説明"             = "FIELD 表示の設定。『設定』アイコンから編集できます。"
     "RightUrl"          = "https://192.168.0.200/"
     "RightFullScreen"   = $false
     "LeftUrl"           = "console"
@@ -265,7 +248,7 @@ function Set-ConsoleResolution([int]$w, [int]$h) {
     $r = [System.Windows.Forms.MessageBox]::Show(
         "コンソールの解像度を ${w}x${h} にするには、FIELD system をいったん終了して起動し直す必要があります。`n`n" +
         "今すぐ再起動しますか?`n[はい] 正常終了 → 変更 → 起動し直す`n[いいえ] 設定だけ保存 (次回起動時に反映)",
-        "FIELD設定",
+        "設定",
         [System.Windows.Forms.MessageBoxButtons]::YesNo,
         [System.Windows.Forms.MessageBoxIcon]::Question)
     if ($r -ne [System.Windows.Forms.DialogResult]::Yes) {
@@ -289,7 +272,7 @@ function Set-ConsoleResolution([int]$w, [int]$h) {
 #  画面の構築
 # ============================================================
 $form = New-Object System.Windows.Forms.Form
-$form.Text = "FIELD設定"
+$form.Text = "設定"
 $form.Size = New-Object System.Drawing.Size(660, 560)
 $form.StartPosition = "CenterScreen"
 $form.FormBorderStyle = "FixedDialog"
@@ -444,43 +427,11 @@ $btnNet.Add_Click({
         "1. 一覧からアカウントを選ぶ`n" +
         "2.『ユーザーがこのコンピューターを使うには…入力が必要』のチェックを外す`n" +
         "3.『OK』→ パスワードを2回入力",
-        "FIELD設定") | Out-Null
+        "設定") | Out-Null
 })
 $tp2.Controls.Add($btnNet)
 
-# ------------------------------------------------------------
-#  タブ3: 起動と見た目
-# ------------------------------------------------------------
-$tp3 = New-Object System.Windows.Forms.TabPage
-$tp3.Text = "起動と見た目"
-$tp3.BackColor = [System.Drawing.SystemColors]::Control
-
-$cbDark = New-Check "起動時の画面を暗くする (ロック画面を飛ばし、サインイン画面を無地の暗色にする)" 15 20 580 `
-    ((Get-RegValue $PolWinSystem "DisableLogonBackgroundImage") -eq 1)
-$tp3.Controls.Add($cbDark)
-
-$cbHide = New-Check "サインイン画面にアカウント名・メールアドレスを表示しない" 15 55 580 `
-    ((Get-RegValue $PolSystem "dontdisplaylastusername") -eq 1)
-$tp3.Controls.Add($cbHide)
-$lblHide = New-Label "※ 手動サインイン時は、アカウント名も自分で入力することになります (自動サインインには影響なし)" 35 80
-$lblHide.ForeColor = [System.Drawing.Color]::DimGray
-$tp3.Controls.Add($lblHide)
-
-$cbWall = New-Check "デスクトップの壁紙を黒一色にする (アイコンはそのまま)" 15 110 580 `
-    (-not [string](Get-RegValue "HKCU:\Control Panel\Desktop" "Wallpaper"))
-$tp3.Controls.Add($cbWall)
-
-$lblNote = New-Label ("これらは Windows 側の設定です。起動中の黒い画面 (スプラッシュ) は" + "`r`n" +
-    "『画面表示』の自動表示 (03 -Install) に含まれており、ここでの設定は不要です。") 15 160
-$lblNote.ForeColor = [System.Drawing.Color]::DimGray
-$tp3.Controls.Add($lblNote)
-
-$lblLimit = New-Label ("補足: サインイン中に出る「ようこそ」の文字自体は Windows が描画するもので、" + "`r`n" +
-    "消すことはできません。背景を暗くして目立たなくするところまでが設定できる範囲です。") 15 210
-$lblLimit.ForeColor = [System.Drawing.Color]::DimGray
-$tp3.Controls.Add($lblLimit)
-
-$tabs.TabPages.AddRange(@($tp1, $tp2, $tp3))
+$tabs.TabPages.AddRange(@($tp1, $tp2))
 $form.Controls.Add($tabs)
 
 # ------------------------------------------------------------
@@ -514,7 +465,7 @@ if (-not $res) {
     $resChanged = $false
 }
 $out = [ordered]@{
-    "_説明"             = "FIELD 表示の設定。『FIELD設定』アイコンから編集できます。"
+    "_説明"             = "FIELD 表示の設定。『設定』アイコンから編集できます。"
     "RightUrl"          = $tbR.Text.Trim()
     "RightFullScreen"   = $cbRF.Checked
     "LeftUrl"           = $tbL.Text.Trim()
@@ -548,7 +499,7 @@ try {
                 "自動サインイン: このアカウント名とパスワードでのサインインを事前確認できませんでした。`n" +
                 "(確認のしくみ側の制限の場合もあります。間違っていても PC は壊れません)`n`n" +
                 "この内容で保存しますか?",
-                "FIELD設定",
+                "設定",
                 [System.Windows.Forms.MessageBoxButtons]::YesNo,
                 [System.Windows.Forms.MessageBoxIcon]::Warning)
             if ($r -ne [System.Windows.Forms.DialogResult]::Yes) {
@@ -585,42 +536,5 @@ try {
     $tbPass.Text = ""
 }
 
-# --- 3. 起動と見た目の保存 ---
-try {
-    if ($cbDark.Checked) {
-        if (-not (Test-Path $PolPerso)) { New-Item -Path $PolPerso -Force | Out-Null }
-        Set-ItemProperty $PolPerso -Name NoLockScreen -Value 1 -Type DWord
-        if (-not (Test-Path $PolWinSystem)) { New-Item -Path $PolWinSystem -Force | Out-Null }
-        Set-ItemProperty $PolWinSystem -Name DisableLogonBackgroundImage     -Value 1 -Type DWord
-        Set-ItemProperty $PolWinSystem -Name DisableAcrylicBackgroundOnLogon -Value 1 -Type DWord
-    } else {
-        Remove-ItemProperty $PolPerso -Name NoLockScreen -ErrorAction SilentlyContinue
-        Remove-ItemProperty $PolWinSystem -Name DisableLogonBackgroundImage     -ErrorAction SilentlyContinue
-        Remove-ItemProperty $PolWinSystem -Name DisableAcrylicBackgroundOnLogon -ErrorAction SilentlyContinue
-    }
-    if ($cbHide.Checked) {
-        if (-not (Test-Path $PolSystem)) { New-Item -Path $PolSystem -Force | Out-Null }
-        Set-ItemProperty $PolSystem -Name dontdisplaylastusername                    -Value 1 -Type DWord
-        Set-ItemProperty $PolSystem -Name BlockUserFromShowingAccountDetailsOnSignin -Value 1 -Type DWord
-    } else {
-        Remove-ItemProperty $PolSystem -Name dontdisplaylastusername                    -ErrorAction SilentlyContinue
-        Remove-ItemProperty $PolSystem -Name BlockUserFromShowingAccountDetailsOnSignin -ErrorAction SilentlyContinue
-    }
-    if ($cbWall.Checked) {
-        Set-ItemProperty "HKCU:\Control Panel\Desktop" -Name Wallpaper -Value ""
-        Set-ItemProperty "HKCU:\Control Panel\Colors"  -Name Background -Value "0 0 0"
-        [BootLook]::SystemParametersInfo(20, 0, "", 3) | Out-Null
-    } else {
-        $img = Join-Path $env:windir "Web\Wallpaper\Windows\img0.jpg"
-        if ((Test-Path $img) -and -not [string](Get-RegValue "HKCU:\Control Panel\Desktop" "Wallpaper")) {
-            Set-ItemProperty "HKCU:\Control Panel\Desktop" -Name Wallpaper -Value $img
-            [BootLook]::SystemParametersInfo(20, 0, $img, 3) | Out-Null
-        }
-    }
-    $messages += "起動と見た目の設定を保存しました。"
-} catch {
-    $messages += "起動と見た目の設定に失敗しました: $($_.Exception.Message)"
-}
-
-[System.Windows.Forms.MessageBox]::Show(($messages -join "`n`n"), "FIELD設定") | Out-Null
+[System.Windows.Forms.MessageBox]::Show(($messages -join "`n`n"), "設定") | Out-Null
 exit 0
