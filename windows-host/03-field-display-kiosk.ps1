@@ -136,10 +136,7 @@ public class BdApi {
     $f.Bounds = New-Object System.Drawing.Rectangle([int]$p[0], [int]$p[1], [int]$p[2], [int]$p[3])
     $f.BackColor = [System.Drawing.Color]::Black
     $f.ShowInTaskbar = $false
-    $f.KeyPreview = $true
-    $f.Add_KeyDown({ param($s, $e)
-        if ($e.KeyCode -eq [System.Windows.Forms.Keys]::Escape) { [System.Windows.Forms.Application]::Exit() }
-    })
+    # (ESC では閉じない。誤操作で黒背景が消えるのを防ぐ)
     # 黒背景は常に「いちばん後ろ」に居させる (コンソールなど他の窓を隠さないため)
     # 0x0013 = SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE / (-2) = HWND_BOTTOM
     $f.Add_Shown({ param($s, $e) [BdApi]::SetWindowPos($s.Handle, [IntPtr](-2), 0, 0, 0, 0, 0x0013) | Out-Null })
@@ -913,7 +910,8 @@ function Close-ConsoleGracefully {
     Start-Sleep -Milliseconds 500
 }
 
-# vmconnect が保存している「この VM の表示設定」ファイルを探す
+# vmconnect が保存している表示設定ファイルを探す
+# (VM ごとの vmconnect.rdp.<VMID>.config、無ければ共通の vmconnect.config)
 function Get-ConsoleConfigFile {
     try {
         $vm = Get-VM -Name $VMName -ErrorAction SilentlyContinue
@@ -924,24 +922,43 @@ function Get-ConsoleConfigFile {
             $f = Get-ChildItem -Path $dir -Filter "vmconnect.rdp.*.config" -ErrorAction SilentlyContinue |
                 Where-Object { $_.Name -match [regex]::Escape($vmid) } | Select-Object -First 1
             if ($f) { return $f }
+            $g = Join-Path $dir "vmconnect.config"
+            if (Test-Path $g) { return (Get-Item $g) }
         }
         return $null
     } catch { return $null }
 }
 
-# 表示設定ファイルの FullScreen を書き換える。
+# 表示設定ファイルの FullScreen 系の設定を書き換える。
 # True にしてから起動すると、切り替え操作なしで最初から全画面で開く
 function Set-ConsoleSavedFullScreen([bool]$on) {
     try {
         $file = Get-ConsoleConfigFile
         if (-not $file) { return $false }
         [xml]$x = Get-Content $file.FullName -Raw -Encoding UTF8
-        $nodes = $x.SelectNodes("//setting[@name='FullScreen']")
-        if (-not $nodes -or $nodes.Count -eq 0) { return $false }
-        foreach ($n in $nodes) { $n.InnerText = $(if ($on) { "True" } else { "False" }) }
+        $nodes = @($x.SelectNodes("//setting") | Where-Object { $_.GetAttribute("name") -match 'FullScreen' })
+        if ($nodes.Count -eq 0) {
+            # 何という名前で保存されているかを一度だけ記録する (次の改善のための診断)
+            $names = @($x.SelectNodes("//setting") | ForEach-Object { $_.GetAttribute("name") } | Select-Object -First 40)
+            Log ("コンソール: [診断] $($file.Name) の設定名一覧: " + ($names -join ", "))
+            return $false
+        }
+        $val = if ($on) { "True" } else { "False" }
+        foreach ($n in $nodes) {
+            $valNode = $n.SelectSingleNode("value")
+            if ($valNode) { $valNode.InnerText = $val } else { $n.InnerText = $val }
+        }
         $x.Save($file.FullName)
         return $true
     } catch { return $false }
+}
+
+# vmconnect の「今の」メインウィンドウを取り直す
+# (接続の途中でウィンドウが作り直されることがあり、古いハンドルへの操作は空振りするため)
+function Get-ConsoleHwnd {
+    $p = Get-Process vmconnect -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object -First 1
+    if ($p) { return $p.MainWindowHandle }
+    return [IntPtr]::Zero
 }
 
 # vmconnect を起動してウィンドウハンドルを返す
@@ -1003,9 +1020,18 @@ function Open-Console($screen, [bool]$fullScreen) {
     $hwnd = Start-ConsoleWindow
     if ($hwnd -eq [IntPtr]::Zero) { Log "警告: コンソール画面のウィンドウが見つかりませんでした。"; return }
 
+    # 接続の途中でウィンドウが作り直されることがあるため、落ち着くのを待って取り直す
+    Start-Sleep -Seconds 2
+    $h2 = Get-ConsoleHwnd
+    if ($h2 -ne [IntPtr]::Zero -and $h2 -ne $hwnd) {
+        Log "コンソール: 接続後にウィンドウが作り直されたため、取得し直しました。"
+        $hwnd = $h2
+    }
+
     # 保存設定が効いて、最初から目的のモニターで全画面になっているか確認
     if ($fullScreen) {
         Start-Sleep -Milliseconds 1200
+        $h2 = Get-ConsoleHwnd; if ($h2 -ne [IntPtr]::Zero) { $hwnd = $h2 }
         if (Test-CoversScreen $hwnd $screen) {
             Log "コンソール: 保存設定により最初から全画面で起動しました。"
             return
@@ -1031,6 +1057,7 @@ function Open-Console($screen, [bool]$fullScreen) {
 
     # 方法1: メニューの「全画面」コマンドを WM_COMMAND で直接実行 (フォーカス不要で最も確実)
     for ($try = 1; $try -le 2 -and -not $done; $try++) {
+        $h2 = Get-ConsoleHwnd; if ($h2 -ne [IntPtr]::Zero) { $hwnd = $h2 }
         $hit = Invoke-ConsoleMenuCommand $hwnd '全画面|Full'
         if ($hit) {
             Start-Sleep -Milliseconds 1000
@@ -1041,6 +1068,7 @@ function Open-Console($screen, [bool]$fullScreen) {
 
     # 方法2: メニュー『表示 → 全画面モード』を UI Automation でクリック
     for ($try = 1; $try -le 2 -and -not $done; $try++) {
+        $h2 = Get-ConsoleHwnd; if ($h2 -ne [IntPtr]::Zero) { $hwnd = $h2 }
         Force-Foreground $hwnd | Out-Null
         if (Invoke-ConsoleFullScreenMenu $hwnd) {
             Start-Sleep -Milliseconds 700
@@ -1050,6 +1078,7 @@ function Open-Console($screen, [bool]$fullScreen) {
 
     # 方法3: Ctrl+Alt+Break のキー送信
     for ($try = 1; $try -le 2 -and -not $done; $try++) {
+        $h2 = Get-ConsoleHwnd; if ($h2 -ne [IntPtr]::Zero) { $hwnd = $h2 }
         $fgOk = Force-Foreground $hwnd
         if (-not $fgOk) { Log "コンソール: 前面化に失敗 (キー送信 試行 $try)" }
         if ($try -eq 1) { [System.Windows.Forms.SendKeys]::SendWait("^%{BREAK}") } else { Send-CtrlAltBreak }
@@ -1096,6 +1125,7 @@ function Open-Console($screen, [bool]$fullScreen) {
             Start-Sleep -Milliseconds 900
 
             # 枠とメニューを外して実映像サイズで中央に配置し、ステータスバー等も隠す
+            $h2 = Get-ConsoleHwnd; if ($h2 -ne [IntPtr]::Zero) { $hwnd = $h2 }
             Set-FramelessWindow $hwnd $cx $cy $vw $vh
             Start-Sleep -Milliseconds 400
             foreach ($cls in "msctls_statusbar32", "ToolbarWindow32", "msctls_toolbarwindow32", "ReBarWindow32") {
