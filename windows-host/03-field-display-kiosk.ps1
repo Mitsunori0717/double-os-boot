@@ -1,12 +1,12 @@
 ﻿<#
 .SYNOPSIS
-    FIELD system の画面表示を管理します (左右モニターへの自動表示)。
-    すべての設定は『FIELD表示設定』の設定コンソール (-Settings) で変更できます。
+    EdgeBox の画面表示を管理します (左右モニターへの自動表示)。
+    すべての設定は『EdgeBox表示設定』の設定コンソール (-Settings) で変更できます。
 
 .EXAMPLE
     .\03-field-display-kiosk.ps1              # 設定内容で今すぐ表示
     .\03-field-display-kiosk.ps1 -Settings    # 設定コンソールを開く
-    .\03-field-display-kiosk.ps1 -Setup       # デスクトップに『FIELD表示設定』アイコンを作成
+    .\03-field-display-kiosk.ps1 -Setup       # デスクトップに『EdgeBox表示設定』アイコンを作成
     .\03-field-display-kiosk.ps1 -Install     # ログオン時の自動表示を登録
     .\03-field-display-kiosk.ps1 -Uninstall   # 自動表示を解除
     .\03-field-display-kiosk.ps1 -ConsoleResolution auto   # コンソールの解像度をモニターに合わせる (VM 停止中)
@@ -16,7 +16,7 @@
 #>
 [CmdletBinding()]
 param(
-    [string]$VMName   = "FIELDsystem",
+    [string]$VMName   = "EdgeBox",
     [string]$RightUrl,
     [string]$LeftUrl,
     [switch]$Install,
@@ -33,7 +33,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$TaskName = "FIELD-Display-Kiosk"
+$TaskName = "EdgeBox-Display-Kiosk"
 $ConfigFile = Join-Path $PSScriptRoot "display-config.json"
 $LogFile    = Join-Path $PSScriptRoot "display-log.txt"
 $StatusFile = Join-Path $PSScriptRoot "display-status.txt"
@@ -178,7 +178,7 @@ public class BdApi {
 }
 
 # ============================================================
-#  ESC 見張り役: FIELD 表示用ブラウザ窓が前面・最大化のときだけ ESC で解除
+#  ESC 見張り役: EdgeBox 表示用ブラウザ窓が前面・最大化のときだけ ESC で解除
 # ============================================================
 if ($EscWatcher) {
     Add-Type -AssemblyName System.Windows.Forms
@@ -237,7 +237,7 @@ function Stop-EscWatcher {
 #  設定ファイル
 # ============================================================
 $DefaultConfig = [ordered]@{
-    "_説明"             = "FIELD 表示の設定。『FIELD表示設定』アイコンから編集できます。"
+    "_説明"             = "EdgeBox 表示の設定。『EdgeBox表示設定』アイコンから編集できます。"
     "RightUrl"          = "https://192.168.0.200/"
     "RightFullScreen"   = $false
     "LeftUrl"           = "console"
@@ -298,18 +298,18 @@ function Set-ConsoleResolution([int]$w, [int]$h, [string]$OnRunning = "skip") {
         return "コンソールの解像度を ${w}x${h} にしました。"
     }
     if ($OnRunning -ne "ask") {
-        return "FIELD system が動作中のため、解像度 ${w}x${h} は保存だけしました (次回停止時に反映)。"
+        return "EdgeBox が動作中のため、解像度 ${w}x${h} は保存だけしました (次回停止時に反映)。"
     }
     $r = [System.Windows.Forms.MessageBox]::Show(
-        "コンソールの解像度を ${w}x${h} にするには、FIELD system をいったん終了して起動し直す必要があります。`n`n" +
+        "コンソールの解像度を ${w}x${h} にするには、EdgeBox をいったん終了して起動し直す必要があります。`n`n" +
         "今すぐ再起動しますか?`n" +
-        "[はい]    FIELD を正常終了 → 解像度を変更 → 起動し直す`n" +
-        "[いいえ]  設定だけ保存する (次に FIELD を起動したときに反映)",
-        "FIELD 表示設定",
+        "[はい]    EdgeBox を正常終了 → 解像度を変更 → 起動し直す`n" +
+        "[いいえ]  設定だけ保存する (次に EdgeBox を起動したときに反映)",
+        "EdgeBox 表示設定",
         [System.Windows.Forms.MessageBoxButtons]::YesNo,
         [System.Windows.Forms.MessageBoxIcon]::Question)
     if ($r -ne [System.Windows.Forms.DialogResult]::Yes) {
-        return "設定だけ保存しました。次に FIELD system を起動したときに ${w}x${h} で表示されます。"
+        return "設定だけ保存しました。次に EdgeBox を起動したときに ${w}x${h} で表示されます。"
     }
     Stop-VM -Name $VMName            # ACPI シャットダウン要求 (強制電源断ではない)
     $wsw = [System.Diagnostics.Stopwatch]::StartNew()
@@ -318,11 +318,11 @@ function Set-ConsoleResolution([int]$w, [int]$h, [string]$OnRunning = "skip") {
         Start-Sleep -Seconds 3
     }
     if ((Get-VM -Name $VMName).State -ne "Off") {
-        return "FIELD system が3分以内に停止しませんでした。解像度は変更していません (強制終了はしていません)。"
+        return "EdgeBox が3分以内に停止しませんでした。解像度は変更していません (強制終了はしていません)。"
     }
     Set-VMVideo -VMName $VMName -ResolutionType Single -HorizontalResolution $w -VerticalResolution $h
     Start-VM -Name $VMName
-    return "解像度を ${w}x${h} にして FIELD system を起動し直しました。"
+    return "解像度を ${w}x${h} にして EdgeBox を起動し直しました。"
 }
 
 # ============================================================
@@ -332,7 +332,7 @@ if ($Settings) {
     Add-Type -AssemblyName System.Windows.Forms
     Add-Type -AssemblyName System.Drawing
     $form = New-Object System.Windows.Forms.Form
-    $form.Text = "FIELD 表示設定"
+    $form.Text = "EdgeBox 表示設定"
     $form.Size = New-Object System.Drawing.Size(600, 475)
     $form.StartPosition = "CenterScreen"
     $form.FormBorderStyle = "FixedDialog"
@@ -346,7 +346,7 @@ if ($Settings) {
 
     # --- モニター表示 ---
     $grpMon = New-Object System.Windows.Forms.GroupBox
-    $grpMon.Text = "モニター表示 (URL を入力 / console = FIELDのコンソール画面 / 空欄 = 表示しない)"
+    $grpMon.Text = "モニター表示 (URL を入力 / console = EdgeBox のコンソール画面 / 空欄 = 表示しない)"
     $grpMon.Location = New-Object System.Drawing.Point(15, 15)
     $grpMon.Size = New-Object System.Drawing.Size(555, 130)
 
@@ -405,7 +405,7 @@ if ($Settings) {
 
     # --- コンソールの表示サイズ ---
     $grpRes = New-Object System.Windows.Forms.GroupBox
-    $grpRes.Text = "コンソールの表示サイズ (FIELD system 側の画面解像度)"
+    $grpRes.Text = "コンソールの表示サイズ (EdgeBox 側の画面解像度)"
     $grpRes.Location = New-Object System.Drawing.Point(15, 255)
     $grpRes.Size = New-Object System.Drawing.Size(555, 115)
 
@@ -434,7 +434,7 @@ if ($Settings) {
     $lblRes.ForeColor = [System.Drawing.Color]::DimGray
     $grpRes.Controls.Add($lblRes)
 
-    $lblRes2 = New-Label "※ 変更は FIELD system を起動し直したときに反映されます" 15 85
+    $lblRes2 = New-Label "※ 変更は EdgeBox を起動し直したときに反映されます" 15 85
     $lblRes2.ForeColor = [System.Drawing.Color]::DimGray
     $grpRes.Controls.Add($lblRes2)
     $form.Controls.Add($grpRes)
@@ -478,7 +478,7 @@ if ($Settings) {
                 "解像度の指定『$resText』を解釈できませんでした。`n" +
                 "「1920x1080」のような形式か、一覧からの選択にしてください。`n`n" +
                 "解像度以外の設定は保存します。",
-                "FIELD 表示設定",
+                "EdgeBox 表示設定",
                 [System.Windows.Forms.MessageBoxButtons]::OK,
                 [System.Windows.Forms.MessageBoxIcon]::Warning) | Out-Null
             $resText = [string]$cfg.ConsoleResolution
@@ -486,7 +486,7 @@ if ($Settings) {
         }
 
         $out = [ordered]@{
-            "_説明"             = "FIELD 表示の設定。『FIELD表示設定』アイコンから編集できます。"
+            "_説明"             = "EdgeBox 表示の設定。『EdgeBox表示設定』アイコンから編集できます。"
             "RightUrl"          = $tbR.Text.Trim()
             "RightFullScreen"   = $cbRF.Checked
             "LeftUrl"           = $tbL.Text.Trim()
@@ -502,25 +502,25 @@ if ($Settings) {
             try { $msg += "`n`n" + (Set-ConsoleResolution $res.W $res.H "ask") }
             catch { $msg += "`n`n解像度の変更に失敗しました: $($_.Exception.Message)" }
         }
-        [System.Windows.Forms.MessageBox]::Show($msg, "FIELD 表示設定") | Out-Null
+        [System.Windows.Forms.MessageBox]::Show($msg, "EdgeBox 表示設定") | Out-Null
     }
     exit 0
 }
 
 # ============================================================
-#  デスクトップに『FIELD表示設定』アイコンを作成
+#  デスクトップに『EdgeBox表示設定』アイコンを作成
 # ============================================================
 if ($Setup) {
-    $lnkPath = Join-Path ([Environment]::GetFolderPath("Desktop")) "FIELD表示設定.lnk"
+    $lnkPath = Join-Path ([Environment]::GetFolderPath("Desktop")) "EdgeBox表示設定.lnk"
     $shell = New-Object -ComObject WScript.Shell
     $lnk = $shell.CreateShortcut($lnkPath)
     $lnk.TargetPath = "powershell.exe"
     $lnk.Arguments  = "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$PSCommandPath`" -Settings"
     $lnk.WorkingDirectory = $PSScriptRoot
     $lnk.IconLocation = "shell32.dll,21"
-    $lnk.Description  = "FIELD 表示の設定コンソール"
+    $lnk.Description  = "EdgeBox 表示の設定コンソール"
     $lnk.Save()
-    Write-Host "デスクトップに『FIELD表示設定』アイコンを作成しました。" -ForegroundColor Green
+    Write-Host "デスクトップに『EdgeBox表示設定』アイコンを作成しました。" -ForegroundColor Green
     exit 0
 }
 
@@ -536,7 +536,7 @@ if ($ConsoleResolution) {
     $vm = Get-VM -Name $VMName -ErrorAction SilentlyContinue
     if (-not $vm) { Write-Error "VM '$VMName' がありません。"; exit 1 }
     if ($vm.State -ne "Off") {
-        Write-Error "VM を停止してから実行してください (.\05-shutdown-all.ps1 で FIELD だけ終了 → もう一度実行)。"
+        Write-Error "VM を停止してから実行してください (.\05-shutdown-all.ps1 で EdgeBox だけ終了 → もう一度実行)。"
         exit 1
     }
     Set-VMVideo -VMName $VMName -ResolutionType Single `
@@ -577,7 +577,7 @@ if ($Install) {
     Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger `
         -Settings $taskSettings -RunLevel Highest -Force | Out-Null
     Write-Host "登録しました。次回ログオンから自動で表示されます (起動中は黒い画面で覆います)。" -ForegroundColor Green
-    Write-Host "  表示内容の変更: 『FIELD表示設定』アイコン (再登録不要)"
+    Write-Host "  表示内容の変更: 『EdgeBox表示設定』アイコン (再登録不要)"
     exit 0
 }
 if ($Uninstall) {
@@ -591,7 +591,7 @@ if ($Uninstall) {
     exit 0
 }
 if (-not $RightUrl -and -not $LeftUrl) {
-    Write-Error "表示する内容がありません。『FIELD表示設定』(-Settings) で設定してください。"
+    Write-Error "表示する内容がありません。『EdgeBox表示設定』(-Settings) で設定してください。"
     exit 1
 }
 
@@ -609,7 +609,7 @@ function Stop-Splash {
         ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
 }
 if (-not $NoSplash) {
-    # ログオンタスク (FIELD-Display-Kiosk-Splash) が先に出していればそれを使い、無ければここで出す
+    # ログオンタスク (EdgeBox-Display-Kiosk-Splash) が先に出していればそれを使い、無ければここで出す
     $existing = @(Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" -ErrorAction SilentlyContinue |
         Where-Object { $_.CommandLine -match '-Splash' -and $_.ProcessId -ne $PID })
     if ($existing.Count -eq 0) {
@@ -1009,7 +1009,7 @@ function Start-ConsoleWindow {
     return [IntPtr]::Zero
 }
 
-# --- FIELD のコンソール画面 (vmconnect) を指定モニターに表示 ---
+# --- EdgeBox のコンソール画面 (vmconnect) を指定モニターに表示 ---
 function Open-Console($screen, [bool]$fullScreen) {
     Log ("コンソールを開きます (モニター {0},{1} / {2})" -f $screen.Bounds.X, $screen.Bounds.Y,
          $(if ($fullScreen) { "全画面" } else { "最大化ウィンドウ" }))
@@ -1149,7 +1149,7 @@ function Open-Console($screen, [bool]$fullScreen) {
             if ($vw -le 0 -or $vw -gt $screen.Bounds.Width)  { $vw = [Math]::Min(1024, $screen.Bounds.Width) }
             if ($vh -le 0 -or $vh -gt $screen.Bounds.Height) { $vh = [Math]::Min(768,  $screen.Bounds.Height) }
             if ($vw -lt $screen.Bounds.Width) {
-                Log "コンソール: 映像がモニターより小さいため余白は黒になります (FIELD の再起動後はモニターと同じ大きさになります)。"
+                Log "コンソール: 映像がモニターより小さいため余白は黒になります (EdgeBox の再起動後はモニターと同じ大きさになります)。"
             }
             $cx = $screen.Bounds.X + [int](($screen.Bounds.Width  - $vw) / 2)
             $cy = $screen.Bounds.Y + [int](($screen.Bounds.Height - $vh) / 2)

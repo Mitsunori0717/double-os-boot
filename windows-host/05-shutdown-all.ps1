@@ -1,10 +1,10 @@
 ﻿<#
 .SYNOPSIS
-    終業用ワンクリック: FIELD system を正しく終了してから、Windows もシャットダウンします。
+    終業用ワンクリック: EdgeBox を正しく終了してから、Windows もシャットダウンします。
 
 .DESCRIPTION
-    1. FIELD system VM に ACPI シャットダウン要求を送る (物理機の電源ボタン短押しと同じ)
-       → FIELD 自身が正規の終了処理を実行する
+    1. EdgeBox VM に ACPI シャットダウン要求を送る (物理機の電源ボタン短押しと同じ)
+       → EdgeBox 自身が正規の終了処理を実行する
     2. 完全に停止するのを待つ (最大3分)
     3. Windows をシャットダウンする
 
@@ -15,7 +15,7 @@
 #>
 [CmdletBinding()]
 param(
-    [string]$VMName = "FIELDsystem",
+    [string]$VMName = "EdgeBox",
     [switch]$NoConfirm,
     [switch]$Setup
 )
@@ -31,7 +31,7 @@ if ($Setup) {
     }
 
     # UAC 確認なしで実行できるよう、管理者権限付きタスク + それを起動するアイコンを作成
-    $taskName = "FIELD-Shutdown-All"
+    $taskName = "EdgeBox-Shutdown-All"
     $action = New-ScheduledTaskAction -Execute "powershell.exe" `
         -Argument "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$PSCommandPath`""
     $ts = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -ExecutionTimeLimit (New-TimeSpan -Hours 1)
@@ -45,7 +45,7 @@ if ($Setup) {
     $lnk.WorkingDirectory = $PSScriptRoot
     $lnk.WindowStyle  = 7   # 最小化 (schtasks の黒い窓を見せない)
     $lnk.IconLocation = "shell32.dll,27"
-    $lnk.Description  = "FIELD system を正しく終了してから Windows もシャットダウン"
+    $lnk.Description  = "EdgeBox を正しく終了してから Windows もシャットダウン"
     $lnk.Save()
     Write-Host "デスクトップに『全部シャットダウン』ショートカットを作成しました (UAC 確認なしで実行できます)。" -ForegroundColor Green
     exit 0
@@ -54,9 +54,9 @@ if ($Setup) {
 Add-Type -AssemblyName System.Windows.Forms
 $shutdownWindows = $true
 if (-not $NoConfirm) {
-    $msg = "FIELD system を終了します。`n`nWindows もシャットダウンしますか?`n`n" +
-           "[はい]      FIELD を終了 → Windows もシャットダウン`n" +
-           "[いいえ]    FIELD だけ終了 (Windows はこのまま使う)`n" +
+    $msg = "EdgeBox を終了します。`n`nWindows もシャットダウンしますか?`n`n" +
+           "[はい]      EdgeBox を終了 → Windows もシャットダウン`n" +
+           "[いいえ]    EdgeBox だけ終了 (Windows はこのまま使う)`n" +
            "[キャンセル] 何もしない"
     $res = [System.Windows.Forms.MessageBox]::Show($msg, "全部シャットダウン",
         [System.Windows.Forms.MessageBoxButtons]::YesNoCancel,
@@ -73,7 +73,7 @@ Get-Process vmconnect -ErrorAction SilentlyContinue | Stop-Process -Force -Error
 
 $vm = Get-VM -Name $VMName -ErrorAction SilentlyContinue
 if ($vm -and $vm.State -eq "Running") {
-    Write-Host "FIELD system にシャットダウン要求を送信しました。終了を待っています..."
+    Write-Host "EdgeBox にシャットダウン要求を送信しました。終了を待っています..."
     Stop-VM -Name $VMName            # ACPI シャットダウン要求 (強制電源断ではない)
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
     while ($sw.Elapsed.TotalSeconds -lt 180) {
@@ -82,18 +82,18 @@ if ($vm -and $vm.State -eq "Running") {
     }
     if ((Get-VM -Name $VMName).State -ne "Off") {
         [System.Windows.Forms.MessageBox]::Show(
-            "FIELD system が3分以内に停止しませんでした。`nWindows のシャットダウンを中止します。`nコンソール画面で状態を確認してください (強制終了はしません)。",
+            "EdgeBox が3分以内に停止しませんでした。`nWindows のシャットダウンを中止します。`nコンソール画面で状態を確認してください (強制終了はしません)。",
             "全部シャットダウン",
             [System.Windows.Forms.MessageBoxButtons]::OK,
             [System.Windows.Forms.MessageBoxIcon]::Warning) | Out-Null
         exit 1
     }
-    Write-Host "FIELD system が正常に終了しました。" -ForegroundColor Green
+    Write-Host "EdgeBox が正常に終了しました。" -ForegroundColor Green
 } else {
-    Write-Host "FIELD system は既に停止しています。"
+    Write-Host "EdgeBox は既に停止しています。"
 }
 
-# --- 停止中のいまのうちに、『FIELD表示設定』のコンソール解像度を反映しておく ---
+# --- 停止中のいまのうちに、『EdgeBox表示設定』のコンソール解像度を反映しておく ---
 # (VM は Windows 起動時に自動起動するため、解像度変更はここが唯一の機会)
 try {
     $cfgFile = Join-Path $PSScriptRoot "display-config.json"
@@ -116,10 +116,10 @@ try {
 
 if ($shutdownWindows) {
     Write-Host "Windows をシャットダウンします..."
-    shutdown /s /t 10 /c "FIELD system の終了を確認しました。Windows をシャットダウンします。"
+    shutdown /s /t 10 /c "EdgeBox の終了を確認しました。Windows をシャットダウンします。"
 } else {
     # 停止後しばらく見張り、何かに自動で再起動されたらもう一度止める (再発防止の保険)
-    Write-Host "FIELD system の停止を確認しています (1分間)..."
+    Write-Host "EdgeBox の停止を確認しています (1分間)..."
     $restarted = $false
     $watch = [System.Diagnostics.Stopwatch]::StartNew()
     while ($watch.Elapsed.TotalSeconds -lt 60) {
@@ -127,7 +127,7 @@ if ($shutdownWindows) {
         if ((Get-VM -Name $VMName -ErrorAction SilentlyContinue).State -eq "Running") { $restarted = $true; break }
     }
     if ($restarted) {
-        Write-Warning "FIELD system が自動で再起動されたため、もう一度停止します..."
+        Write-Warning "EdgeBox が自動で再起動されたため、もう一度停止します..."
         Get-Process vmconnect -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
         Stop-VM -Name $VMName -ErrorAction SilentlyContinue
         $sw3 = [System.Diagnostics.Stopwatch]::StartNew()
@@ -136,6 +136,6 @@ if ($shutdownWindows) {
             Start-Sleep -Seconds 3
         }
     }
-    [System.Windows.Forms.MessageBox]::Show("FIELD system のみ終了しました。Windows はそのまま使えます。`n再開するには 02-start-field-vm.ps1 を実行してください。",
+    [System.Windows.Forms.MessageBox]::Show("EdgeBox のみ終了しました。Windows はそのまま使えます。`n再開するには 02-start-field-vm.ps1 を実行してください。",
         "全部シャットダウン") | Out-Null
 }

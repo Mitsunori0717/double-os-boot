@@ -1,15 +1,15 @@
 # 構成B: Windows ホスト + メーカー専用機 Linux の同時起動
 
-Linux 側が **メーカー製の専用機システム**(例: FANUC FIELD system / FsBP。署名検証付きの
+Linux 側が **メーカー製の専用機システム**(例: FANUC EdgeBox / FsBP。署名検証付きの
 改造不可イメージ)だった場合の構成です。専用機はホスト(土台)役にできないため、
 主構成(`baremetal/`)とはホストとゲストを反転させます。
 
 ```
 Windows 11(ホスト・ネイティブ動作 = メイン業務はフルスピード)
  ├─ モニター1: Windows のメイン業務・FsBP 専用アプリ
- ├─ モニター2: FIELD system の管理画面(ブラウザ)/ コンソール窓
+ ├─ モニター2: EdgeBox の管理画面(ブラウザ)/ コンソール窓
  └─ Hyper-V
-      └─ FIELD system VM
+      └─ EdgeBox VM
            ├─ 専用機の物理ディスクを無改造のまま起動(コピー・変換なし)
            └─ 外部スイッチ経由で工場ラインの機械と通信
 ```
@@ -50,7 +50,7 @@ Get-NetAdapter
 .\02-start-field-vm.ps1
 ```
 
-起動後、`Get-VMNetworkAdapter -VMName FIELDsystem` で IP を確認し、
+起動後、`Get-VMNetworkAdapter -VMName EdgeBox` で IP を確認し、
 ブラウザでその IP を開けば専用機の管理画面が使えます(モニター2に全画面配置を推奨)。
 
 Windows 側の FsBP 専用アプリの接続先にも、この IP を設定します。
@@ -58,7 +58,7 @@ Windows 側の FsBP 専用アプリの接続先にも、この IP を設定し�
 ## 自動起動 (PC 起動時に専用機も自動で立ち上げる)
 
 ```powershell
-Set-VM -Name FIELDsystem -AutomaticStartAction Start -AutomaticStartDelay 30
+Set-VM -Name EdgeBox -AutomaticStartAction Start -AutomaticStartDelay 30
 powercfg /h off                  # 高速スタートアップ無効 (自動起動を確実にする)
 .\06-auto-logon.ps1 -Setup       # サインイン画面を省略し、電源 ON で直接デスクトップへ
 ```
@@ -75,7 +75,7 @@ VM 起動 → サインイン → 左右モニターへの自動表示 (`03-fiel
    (VM 定義は残したままで共存できます。**同時に両方から起動しないこと**)
 3. 完全に元へ戻す場合:
    ```powershell
-   Remove-VM FIELDsystem -Force
+   Remove-VM EdgeBox -Force
    Set-Disk -Number <番号> -IsOffline $false
    ```
    ディスクは無改造のため、これだけで導入前の状態に戻ります。

@@ -1,6 +1,6 @@
 ﻿<#
 .SYNOPSIS
-    FIELD system の統合設定コンソール。すべての設定をタブで切り替えて 1 画面で行えます。
+    EdgeBox の統合設定コンソール。すべての設定をタブで切り替えて 1 画面で行えます。
 
 .DESCRIPTION
     タブ構成:
@@ -20,7 +20,7 @@
 #>
 [CmdletBinding()]
 param(
-    [string]$VMName = "FIELDsystem",
+    [string]$VMName = "EdgeBox",
     [switch]$Setup
 )
 
@@ -47,13 +47,13 @@ if (-not $isAdmin) {
 if ($Setup) {
     $desktop = [Environment]::GetFolderPath("Desktop")
     # 旧アイコンは統合版に置き換える
-    foreach ($old in "FIELD表示設定.lnk", "自動サインイン設定.lnk", "FIELD設定.lnk") {
+    foreach ($old in "EdgeBox表示設定.lnk", "自動サインイン設定.lnk", "EdgeBox設定.lnk") {
         Remove-Item (Join-Path $desktop $old) -Force -ErrorAction SilentlyContinue
     }
 
     # UAC の確認 (「許可しますか?」) を出さずに開けるよう、
     # 管理者権限付きのタスクとして登録し、アイコンはそのタスクを起動するだけにする
-    $taskName = "FIELD-Settings-Console"
+    $taskName = "EdgeBox-Settings-Console"
     $action = New-ScheduledTaskAction -Execute "powershell.exe" `
         -Argument "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$PSCommandPath`""
     $ts = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -ExecutionTimeLimit (New-TimeSpan -Hours 2)
@@ -67,7 +67,7 @@ if ($Setup) {
     $lnk.WorkingDirectory = $PSScriptRoot
     $lnk.WindowStyle  = 7   # 最小化 (schtasks の黒い窓を見せない)
     $lnk.IconLocation = "shell32.dll,21"
-    $lnk.Description  = "FIELD system の統合設定コンソール (UAC 確認なしで開く)"
+    $lnk.Description  = "EdgeBox の統合設定コンソール (UAC 確認なしで開く)"
     $lnk.Save()
     Write-Host "デスクトップに『設定』アイコンを作成しました (旧アイコンは置き換え)。" -ForegroundColor Green
     Write-Host "  UAC の確認なしで、ダブルクリックだけで設定画面が開きます。"
@@ -213,7 +213,7 @@ function Split-Account([string]$text) {
 #  表示設定 (display-config.json)
 # ============================================================
 $DefaultConfig = [ordered]@{
-    "_説明"             = "FIELD 表示の設定。『設定』アイコンから編集できます。"
+    "_説明"             = "EdgeBox 表示の設定。『設定』アイコンから編集できます。"
     "RightUrl"          = "https://192.168.0.200/"
     "RightFullScreen"   = $false
     "LeftUrl"           = "console"
@@ -254,13 +254,13 @@ function Set-ConsoleResolution([int]$w, [int]$h) {
         return "コンソールの解像度を ${w}x${h} にしました。"
     }
     $r = [System.Windows.Forms.MessageBox]::Show(
-        "コンソールの解像度を ${w}x${h} にするには、FIELD system をいったん終了して起動し直す必要があります。`n`n" +
+        "コンソールの解像度を ${w}x${h} にするには、EdgeBox をいったん終了して起動し直す必要があります。`n`n" +
         "今すぐ再起動しますか?`n[はい] 正常終了 → 変更 → 起動し直す`n[いいえ] 設定だけ保存 (次回起動時に反映)",
         "設定",
         [System.Windows.Forms.MessageBoxButtons]::YesNo,
         [System.Windows.Forms.MessageBoxIcon]::Question)
     if ($r -ne [System.Windows.Forms.DialogResult]::Yes) {
-        return "解像度は保存のみ。次に FIELD system を起動し直したときに反映されます。"
+        return "解像度は保存のみ。次に EdgeBox を起動し直したときに反映されます。"
     }
     Stop-VM -Name $VMName
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
@@ -269,11 +269,11 @@ function Set-ConsoleResolution([int]$w, [int]$h) {
         Start-Sleep -Seconds 3
     }
     if ((Get-VM -Name $VMName).State -ne "Off") {
-        return "FIELD system が3分以内に停止しませんでした。解像度は変更していません。"
+        return "EdgeBox が3分以内に停止しませんでした。解像度は変更していません。"
     }
     Set-VMVideo -VMName $VMName -ResolutionType Single -HorizontalResolution $w -VerticalResolution $h
     Start-VM -Name $VMName
-    return "解像度を ${w}x${h} にして FIELD system を起動し直しました。"
+    return "解像度を ${w}x${h} にして EdgeBox を起動し直しました。"
 }
 
 # ============================================================
@@ -313,7 +313,7 @@ $tp1 = New-Object System.Windows.Forms.TabPage
 $tp1.Text = "画面表示"
 $tp1.BackColor = [System.Drawing.SystemColors]::Control
 
-$tp1.Controls.Add((New-Label "モニターに表示する内容 (URL / console = FIELDのコンソール画面 / 空欄 = 表示しない)" 15 15))
+$tp1.Controls.Add((New-Label "モニターに表示する内容 (URL / console = EdgeBox のコンソール画面 / 空欄 = 表示しない)" 15 15))
 
 $tp1.Controls.Add((New-Label "左モニター:" 15 45))
 $tbL = New-Object System.Windows.Forms.TextBox
@@ -343,7 +343,7 @@ $cbSF = New-Check "コンソールの全画面が効かないときは、黒背�
 $tp1.Controls.Add($cbSF)
 
 $grpRes = New-Object System.Windows.Forms.GroupBox
-$grpRes.Text = "コンソールの表示サイズ (FIELD system 側の画面解像度)"
+$grpRes.Text = "コンソールの表示サイズ (EdgeBox 側の画面解像度)"
 $grpRes.Location = New-Object System.Drawing.Point(15, 210)
 $grpRes.Size = New-Object System.Drawing.Size(580, 120)
 
@@ -361,7 +361,7 @@ $grpRes.Controls.Add($cmbRes)
 $lblRes = New-Label "一覧にないサイズは直接入力 (例: 2560x1440)" 315 62
 $lblRes.ForeColor = [System.Drawing.Color]::DimGray
 $grpRes.Controls.Add($lblRes)
-$lblRes2 = New-Label "※ 変更は FIELD system の起動し直しで反映 (保存時に選択できます)" 15 90
+$lblRes2 = New-Label "※ 変更は EdgeBox の起動し直しで反映 (保存時に選択できます)" 15 90
 $lblRes2.ForeColor = [System.Drawing.Color]::DimGray
 $grpRes.Controls.Add($lblRes2)
 $tp1.Controls.Add($grpRes)
@@ -475,7 +475,7 @@ if (-not $res) {
     $resChanged = $false
 }
 $out = [ordered]@{
-    "_説明"             = "FIELD 表示の設定。『設定』アイコンから編集できます。"
+    "_説明"             = "EdgeBox 表示の設定。『設定』アイコンから編集できます。"
     "RightUrl"          = $tbR.Text.Trim()
     "RightFullScreen"   = $cbRF.Checked
     "LeftUrl"           = $tbL.Text.Trim()

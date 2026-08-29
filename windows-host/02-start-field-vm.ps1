@@ -1,6 +1,6 @@
 ﻿<#
 .SYNOPSIS
-    FIELD system VM を起動し、コンソール画面を開きます。
+    EdgeBox VM を起動し、コンソール画面を開きます。
 
 .EXAMPLE
     .\02-start-field-vm.ps1              # 起動 + コンソール表示
@@ -9,7 +9,7 @@
 #>
 [CmdletBinding()]
 param(
-    [string]$VMName = "FIELDsystem",
+    [string]$VMName = "EdgeBox",
     [switch]$Stop,
     [switch]$Status
 )
@@ -38,7 +38,7 @@ if ($Stop) {
 }
 
 if ($vm.State -ne "Running") {
-    # 『FIELD表示設定』で指定されたコンソール解像度を、起動前に反映する
+    # 『EdgeBox表示設定』で指定されたコンソール解像度を、起動前に反映する
     $cfgFile = Join-Path $PSScriptRoot "display-config.json"
     if (Test-Path $cfgFile) {
         try {
@@ -57,7 +57,7 @@ if ($vm.State -ne "Running") {
             }
         } catch { }
     }
-    Write-Host "FIELD system を起動しています..." -ForegroundColor Cyan
+    Write-Host "EdgeBox を起動しています..." -ForegroundColor Cyan
     Start-VM -Name $VMName
 }
 

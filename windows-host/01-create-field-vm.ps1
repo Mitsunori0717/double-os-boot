@@ -1,6 +1,6 @@
 ﻿<#
 .SYNOPSIS
-    メーカー専用機 Linux (FANUC FIELD system 等) の物理ディスクを、
+    メーカー専用機 Linux (FANUC EdgeBox 等) の物理ディスクを、
     Windows ホスト上の Hyper-V VM としてそのまま起動する定義を作成します。
 
 .DESCRIPTION
@@ -15,7 +15,7 @@
     Get-Disk
     Get-NetAdapter
 
-    # FIELD system のディスクが 0、有線LAN が "イーサネット" の場合
+    # EdgeBox のディスクが 0、有線LAN が "イーサネット" の場合
     .\01-create-field-vm.ps1 -DiskNumber 0 -NetAdapterName "イーサネット"
 
 .NOTES
@@ -28,7 +28,7 @@ param(
     [Parameter(Mandatory = $true)]
     [int]$DiskNumber,
 
-    [string]$VMName   = "FIELDsystem",
+    [string]$VMName   = "EdgeBox",
     [int]$MemoryGB    = 8,
     [int]$CpuCount    = 6,
 
@@ -79,7 +79,7 @@ if (-not $disk.IsOffline) {
 
 # --- ネットワークスイッチ ---
 if ($NetAdapterName) {
-    $switchName = "FIELD-External"
+    $switchName = "EdgeBox-External"
     if (-not (Get-VMSwitch -Name $switchName -ErrorAction SilentlyContinue)) {
         Write-Host "外部スイッチ '$switchName' を作成しています (NIC: $NetAdapterName)..." -ForegroundColor Cyan
         Write-Host "  ※ 作成の瞬間、ネットワークが数秒切断されます。"
