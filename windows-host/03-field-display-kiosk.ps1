@@ -97,7 +97,7 @@ if ($Splash) {
         $main.BackColor = [System.Drawing.Color]::Black
         $main.ForeColor = [System.Drawing.Color]::White
         $main.Font = New-Object System.Drawing.Font("Meiryo UI", 26)
-        $main.Text = "FIELD system 起動中"
+        $main.Text = "EdgeBox 起動中"
         $f.Controls.Add($main)
         return $f
     }
@@ -122,7 +122,7 @@ if ($Splash) {
         foreach ($f in $script:SplashForms) {
             if ($f.IsDisposed) { continue }
             foreach ($c in $f.Controls) {
-                if ($c.Name -eq "main") { $c.Text = "FIELD system 起動中" + ("." * $script:SplashDots) }
+                if ($c.Name -eq "main") { $c.Text = "EdgeBox 起動中" + ("." * $script:SplashDots) }
             }
         }
         Sync-SplashScreens
