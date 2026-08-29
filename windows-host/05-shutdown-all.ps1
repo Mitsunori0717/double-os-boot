@@ -23,19 +23,31 @@ param(
 $ErrorActionPreference = "Stop"
 
 if ($Setup) {
+    $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
+        ).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+    if (-not $isAdmin) {
+        Write-Error "管理者権限で実行してください (PowerShell を右クリック →『管理者として実行』)。"
+        exit 1
+    }
+
+    # UAC 確認なしで実行できるよう、管理者権限付きタスク + それを起動するアイコンを作成
+    $taskName = "FIELD-Shutdown-All"
+    $action = New-ScheduledTaskAction -Execute "powershell.exe" `
+        -Argument "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$PSCommandPath`""
+    $ts = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -ExecutionTimeLimit (New-TimeSpan -Hours 1)
+    Register-ScheduledTask -TaskName $taskName -Action $action -Settings $ts -RunLevel Highest -Force | Out-Null
+
     $lnkPath = Join-Path ([Environment]::GetFolderPath("Desktop")) "全部シャットダウン.lnk"
     $shell = New-Object -ComObject WScript.Shell
     $lnk = $shell.CreateShortcut($lnkPath)
-    $lnk.TargetPath = "powershell.exe"
-    $lnk.Arguments  = "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`""
+    $lnk.TargetPath = "schtasks.exe"
+    $lnk.Arguments  = "/run /tn `"$taskName`""
     $lnk.WorkingDirectory = $PSScriptRoot
+    $lnk.WindowStyle  = 7   # 最小化 (schtasks の黒い窓を見せない)
     $lnk.IconLocation = "shell32.dll,27"
     $lnk.Description  = "FIELD system を正しく終了してから Windows もシャットダウン"
     $lnk.Save()
-    $bytes = [IO.File]::ReadAllBytes($lnkPath)
-    $bytes[0x15] = $bytes[0x15] -bor 0x20   # 管理者として実行
-    [IO.File]::WriteAllBytes($lnkPath, $bytes)
-    Write-Host "デスクトップに『全部シャットダウン』ショートカットを作成しました。" -ForegroundColor Green
+    Write-Host "デスクトップに『全部シャットダウン』ショートカットを作成しました (UAC 確認なしで実行できます)。" -ForegroundColor Green
     exit 0
 }
 
@@ -69,8 +81,11 @@ if ($vm -and $vm.State -eq "Running") {
         Start-Sleep -Seconds 3
     }
     if ((Get-VM -Name $VMName).State -ne "Off") {
-        Write-Warning "FIELD system が3分以内に停止しませんでした。Windows のシャットダウンを中止します。"
-        Write-Warning "コンソール画面で状態を確認してください (強制終了はしません)。"
+        [System.Windows.Forms.MessageBox]::Show(
+            "FIELD system が3分以内に停止しませんでした。`nWindows のシャットダウンを中止します。`nコンソール画面で状態を確認してください (強制終了はしません)。",
+            "全部シャットダウン",
+            [System.Windows.Forms.MessageBoxButtons]::OK,
+            [System.Windows.Forms.MessageBoxIcon]::Warning) | Out-Null
         exit 1
     }
     Write-Host "FIELD system が正常に終了しました。" -ForegroundColor Green

@@ -51,7 +51,17 @@ function Get-FirmwareEntries {
     return $entries
 }
 
-if ($Setup -or -not (Test-Path $ConfFile)) {
+if (-not $Setup -and -not (Test-Path $ConfFile)) {
+    Add-Type -AssemblyName System.Windows.Forms
+    [System.Windows.Forms.MessageBox]::Show(
+        "初期設定がまだ済んでいません。`n管理者 PowerShell で次を実行してください:`n`n.\04-reboot-to-field-native.ps1 -Setup",
+        "FIELD system 単独起動",
+        [System.Windows.Forms.MessageBoxButtons]::OK,
+        [System.Windows.Forms.MessageBoxIcon]::Warning) | Out-Null
+    exit 1
+}
+
+if ($Setup) {
     Write-Host "UEFI の起動エントリから FIELD system のものを選択します。" -ForegroundColor Cyan
     $entries = Get-FirmwareEntries
     if ($entries.Count -eq 0) {
@@ -69,21 +79,24 @@ if ($Setup -or -not (Test-Path $ConfFile)) {
     $entry.Guid | Set-Content -Path $ConfFile -Encoding ASCII
     Write-Host "保存しました: $($entry.Description) $($entry.Guid)" -ForegroundColor Green
 
-    # --- デスクトップに管理者実行フラグ付きショートカットを作成 ---
+    # --- UAC 確認なしで実行できるよう、管理者権限付きタスク + それを起動するアイコンを作成 ---
+    $taskName = "FIELD-Native-Boot"
+    $action = New-ScheduledTaskAction -Execute "powershell.exe" `
+        -Argument "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$PSCommandPath`""
+    $ts = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -ExecutionTimeLimit (New-TimeSpan -Hours 1)
+    Register-ScheduledTask -TaskName $taskName -Action $action -Settings $ts -RunLevel Highest -Force | Out-Null
+
     $lnkPath = Join-Path ([Environment]::GetFolderPath("Desktop")) "FIELD system 単独起動.lnk"
     $shell = New-Object -ComObject WScript.Shell
     $lnk = $shell.CreateShortcut($lnkPath)
-    $lnk.TargetPath = "powershell.exe"
-    $lnk.Arguments  = "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`""
+    $lnk.TargetPath = "schtasks.exe"
+    $lnk.Arguments  = "/run /tn `"$taskName`""
     $lnk.WorkingDirectory = $PSScriptRoot
+    $lnk.WindowStyle  = 7   # 最小化 (schtasks の黒い窓を見せない)
     $lnk.IconLocation = "shell32.dll,238"
     $lnk.Description  = "FIELD system をネイティブ単独起動 (次回のみ。次の電源投入では Windows に戻る)"
     $lnk.Save()
-    # 「管理者として実行」フラグを立てる
-    $bytes = [IO.File]::ReadAllBytes($lnkPath)
-    $bytes[0x15] = $bytes[0x15] -bor 0x20
-    [IO.File]::WriteAllBytes($lnkPath, $bytes)
-    Write-Host "デスクトップに『FIELD system 単独起動』ショートカットを作成しました。" -ForegroundColor Green
+    Write-Host "デスクトップに『FIELD system 単独起動』ショートカットを作成しました (UAC 確認なしで実行できます)。" -ForegroundColor Green
     if ($Setup) { exit 0 }
 }
 
@@ -94,9 +107,17 @@ Write-Host " FIELD system を単独起動します (Windows は終了)"
 Write-Host "  - 実行中の作業は保存してください"
 Write-Host "  - FIELD system の利用終了後、次に電源を入れると Windows に戻ります"
 Write-Host "==============================================" -ForegroundColor Yellow
+Add-Type -AssemblyName System.Windows.Forms
 if (-not $NoConfirm) {
-    $ans = Read-Host "実行しますか? (y/N)"
-    if ($ans -ne "y") { exit 0 }
+    $r = [System.Windows.Forms.MessageBox]::Show(
+        "FIELD system を単独起動します (Windows は終了して再起動します)。`n`n" +
+        "・実行中の作業は保存してください`n" +
+        "・FIELD system の利用終了後、次に電源を入れると自動的に Windows に戻ります`n`n" +
+        "実行しますか?",
+        "FIELD system 単独起動",
+        [System.Windows.Forms.MessageBoxButtons]::YesNo,
+        [System.Windows.Forms.MessageBoxIcon]::Question)
+    if ($r -ne [System.Windows.Forms.DialogResult]::Yes) { exit 0 }
 }
 
 # --- VM を安全に停止 (実行中なら) ---
@@ -115,7 +136,11 @@ if ($vm -and $vm.State -eq "Running") {
         Start-Sleep -Seconds 3
     }
     if ((Get-VM -Name $VMName).State -ne "Off") {
-        Write-Error "VM が3分以内に停止しませんでした。VM の状態を確認してから再実行してください。"
+        [System.Windows.Forms.MessageBox]::Show(
+            "FIELD system が3分以内に停止しませんでした。`n単独起動を中止します。コンソール画面で状態を確認してから再実行してください。",
+            "FIELD system 単独起動",
+            [System.Windows.Forms.MessageBoxButtons]::OK,
+            [System.Windows.Forms.MessageBoxIcon]::Warning) | Out-Null
         exit 1
     }
 }
