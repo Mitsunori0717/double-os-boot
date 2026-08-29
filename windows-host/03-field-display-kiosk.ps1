@@ -146,6 +146,8 @@ using System;
 using System.Runtime.InteropServices;
 public class BdApi {
     [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr hWnd, IntPtr after, int X, int Y, int cx, int cy, uint flags);
+    [DllImport("user32.dll")] public static extern int GetWindowLong(IntPtr hWnd, int nIndex);
+    [DllImport("user32.dll")] public static extern int SetWindowLong(IntPtr hWnd, int nIndex, int dwNewLong);
 }
 '@
     }
@@ -157,9 +159,15 @@ public class BdApi {
     $f.BackColor = [System.Drawing.Color]::Black
     $f.ShowInTaskbar = $false
     # (ESC では閉じない。誤操作で黒背景が消えるのを防ぐ)
-    # 黒背景は常に「いちばん後ろ」に居させる (コンソールなど他の窓を隠さないため)
+    # 黒背景は「クリックが素通りし、絶対に前面に出ない」窓にする。
+    # これでクリックしてもコンソールを隠さない
+    # 0x08000020 = WS_EX_NOACTIVATE | WS_EX_TRANSPARENT / (-20) = GWL_EXSTYLE
     # 0x0013 = SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE / (-2) = HWND_BOTTOM
-    $f.Add_Shown({ param($s, $e) [BdApi]::SetWindowPos($s.Handle, [IntPtr](-2), 0, 0, 0, 0, 0x0013) | Out-Null })
+    $f.Add_Shown({ param($s, $e)
+        $ex = [BdApi]::GetWindowLong($s.Handle, -20)
+        [BdApi]::SetWindowLong($s.Handle, -20, ($ex -bor 0x08000020)) | Out-Null
+        [BdApi]::SetWindowPos($s.Handle, [IntPtr](-2), 0, 0, 0, 0, 0x0013) | Out-Null
+    })
     $bt = New-Object System.Windows.Forms.Timer
     $bt.Interval = 2000
     $bt.Add_Tick({ if (-not $f.IsDisposed) { [BdApi]::SetWindowPos($f.Handle, [IntPtr](-2), 0, 0, 0, 0, 0x0013) | Out-Null } })
@@ -1105,11 +1113,11 @@ function Open-Console($screen, [bool]$fullScreen) {
     }
 
     # 方法3: Ctrl+Alt+Break のキー送信
-    for ($try = 1; $try -le 2 -and -not $done; $try++) {
+    for ($try = 1; $try -le 4 -and -not $done; $try++) {
         $h2 = Get-ConsoleHwnd; if ($h2 -ne [IntPtr]::Zero) { $hwnd = $h2 }
         $fgOk = Force-Foreground $hwnd
         if (-not $fgOk) { Log "コンソール: 前面化に失敗 (キー送信 試行 $try)" }
-        if ($try -eq 1) { [System.Windows.Forms.SendKeys]::SendWait("^%{BREAK}") } else { Send-CtrlAltBreak }
+        if ($try % 2 -eq 1) { [System.Windows.Forms.SendKeys]::SendWait("^%{BREAK}") } else { Send-CtrlAltBreak }
         Start-Sleep -Milliseconds 1500
         if (Test-CoversScreen $hwnd $screen) { $done = $true; Log "コンソール: 全画面モードになりました (キー送信 試行 $try)" }
     }
@@ -1152,17 +1160,26 @@ function Open-Console($screen, [bool]$fullScreen) {
                 "-BackdropBounds `"$($screen.Bounds.X),$($screen.Bounds.Y),$($screen.Bounds.Width),$($screen.Bounds.Height)`"")
             Start-Sleep -Milliseconds 900
 
-            # 枠とメニューを外して実映像サイズで中央に配置し、ステータスバー等も隠す
-            $h2 = Get-ConsoleHwnd; if ($h2 -ne [IntPtr]::Zero) { $hwnd = $h2 }
-            Set-FramelessWindow $hwnd $cx $cy $vw $vh
-            Start-Sleep -Milliseconds 400
+            # 枠とメニューを外して実映像サイズで中央に配置し、ステータスバー等も隠す。
+            # ウィンドウが作り直されて空振りすることがあるため、除去できたか確認して再試行する
+            $stripped = $false
+            for ($k = 1; $k -le 3; $k++) {
+                $h2 = Get-ConsoleHwnd; if ($h2 -ne [IntPtr]::Zero) { $hwnd = $h2 }
+                Set-FramelessWindow $hwnd $cx $cy $vw $vh
+                Start-Sleep -Milliseconds 500
+                $h2 = Get-ConsoleHwnd; if ($h2 -ne [IntPtr]::Zero) { $hwnd = $h2 }
+                $style = [FieldWin]::GetWindowLong($hwnd, -16)
+                if (($style -band 0x00C00000) -eq 0) { $stripped = $true; break }   # WS_CAPTION が消えたか
+                Log "コンソール: 枠の除去が効かなかったため再試行します ($k/3)"
+            }
             foreach ($cls in "msctls_statusbar32", "ToolbarWindow32", "msctls_toolbarwindow32", "ReBarWindow32") {
                 $child = [FieldWin]::FindWindowEx($hwnd, [IntPtr]::Zero, $cls, $null)
                 if ($child -ne [IntPtr]::Zero) { [FieldWin]::ShowWindow($child, 0) | Out-Null }
             }
+            if ([FieldWin]::GetMenu($hwnd) -ne [IntPtr]::Zero) { [FieldWin]::SetMenu($hwnd, [IntPtr]::Zero) | Out-Null }
             [FieldWin]::SetWindowPos($hwnd, [IntPtr]::Zero, $cx, $cy, $vw, $vh, 0x0060) | Out-Null
             [FieldWin]::BringWindowToTop($hwnd) | Out-Null
-            Log "コンソール: 黒背景の上に実映像サイズ ${vw}x${vh} で表示しました。"
+            Log "コンソール: 黒背景の上に実映像サイズ ${vw}x${vh} で表示しました (枠除去=$stripped)。"
         }
     }
 }
