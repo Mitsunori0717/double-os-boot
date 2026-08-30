@@ -220,6 +220,7 @@ $DefaultConfig = [ordered]@{
     "LeftFullScreen"    = $true
     "EscEnabled"        = $true
     "ConsoleStripFrame" = $true
+    "ConsoleAutoClose"  = $true
     "ConsoleResolution" = "自動 (モニターに合わせる)"
 }
 if (-not (Test-Path $ConfigFile)) {
@@ -341,10 +342,12 @@ $cbEsc = New-Check "ESC キーでブラウザの全画面/最大化を解除す�
 $tp1.Controls.Add($cbEsc)
 $cbSF = New-Check "コンソールの全画面が効かないときは、黒背景の上に中央表示する (代替の全画面)" 15 170 580 ($cfg.ConsoleStripFrame -ne $false)
 $tp1.Controls.Add($cbSF)
+$cbAC = New-Check "EdgeBox の起動を確認したら、コンソール画面を自動で閉じる (黒い画面を残さない)" 15 200 580 ($cfg.ConsoleAutoClose -ne $false)
+$tp1.Controls.Add($cbAC)
 
 $grpRes = New-Object System.Windows.Forms.GroupBox
 $grpRes.Text = "コンソールの表示サイズ (EdgeBox 側の画面解像度)"
-$grpRes.Location = New-Object System.Drawing.Point(15, 210)
+$grpRes.Location = New-Object System.Drawing.Point(15, 240)
 $grpRes.Size = New-Object System.Drawing.Size(580, 120)
 
 $cbFit = New-Check "モニターいっぱいに全画面表示する (解像度をモニターに合わせ、全画面にする)" 15 25 550 $false
@@ -482,7 +485,12 @@ $out = [ordered]@{
     "LeftFullScreen"    = $cbLF.Checked
     "EscEnabled"        = $cbEsc.Checked
     "ConsoleStripFrame" = $cbSF.Checked
+    "ConsoleAutoClose"  = $cbAC.Checked
     "ConsoleResolution" = $resText
+}
+# 手動で追加できる詳細設定 (自動クローズまでの秒数) は保存で消さない
+if ($cfg.PSObject.Properties["ConsoleAutoCloseDelaySec"]) {
+    $out["ConsoleAutoCloseDelaySec"] = [int]$cfg.ConsoleAutoCloseDelaySec
 }
 $out | ConvertTo-Json | Set-Content -Path $ConfigFile -Encoding UTF8
 $messages += "画面表示の設定を保存しました (次回の表示から反映)。"

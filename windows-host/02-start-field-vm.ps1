@@ -37,6 +37,7 @@ if ($Stop) {
     exit 0
 }
 
+$wasOff = ($vm.State -ne "Running")
 if ($vm.State -ne "Running") {
     # 『EdgeBox表示設定』で指定されたコンソール解像度を、起動前に反映する
     $cfgFile = Join-Path $PSScriptRoot "display-config.json"
@@ -70,9 +71,34 @@ if (Test-Path (Join-Path $PSScriptRoot "cpu-partition.json")) {
 # コンソール画面 (起動ログ・専用機の画面) を表示。モニター2に置いて監視用に
 Start-Process "vmconnect.exe" -ArgumentList "localhost", $VMName
 
+# いま起動したときだけ: EdgeBox の起動を確認したら監視画面を自動で閉じる
+# (起動後のコンソールは黒い画面が残るだけのため。『設定』の[画面表示]でオフにできる)
+$autoCloseNote = ""
+if ($wasOff) {
+    try {
+        $dispFile = Join-Path $PSScriptRoot "display-config.json"
+        $dispCfg = $null
+        if (Test-Path $dispFile) { $dispCfg = Get-Content $dispFile -Raw -Encoding UTF8 | ConvertFrom-Json }
+        if (-not $dispCfg -or $dispCfg.ConsoleAutoClose -ne $false) {
+            $waitUrl = ""
+            foreach ($u in @([string]$dispCfg.RightUrl, [string]$dispCfg.LeftUrl)) {
+                if ($u -match '^https?://') { $waitUrl = $u; break }
+            }
+            # 管理画面 URL があれば応答確認後 30 秒で、無ければ起動が確実に終わる 5 分後に閉じる
+            $closeDelay = if ($waitUrl) { 30 } else { 300 }
+            $closerArgs = "-NoProfile -ExecutionPolicy Bypass -File `"$PSScriptRoot\03-field-display-kiosk.ps1`" " +
+                "-ConsoleCloser -CloserDelaySec $closeDelay -VMName `"$VMName`""
+            if ($waitUrl) { $closerArgs += " -CloserWaitUrl `"$waitUrl`"" }
+            Start-Process powershell.exe -WindowStyle Hidden -ArgumentList $closerArgs
+            $autoCloseNote = "  - 起動の完了を確認したら、コンソール窓は自動で閉じます (『設定』の[画面表示]で変更可)"
+        }
+    } catch { }
+}
+
 Write-Host ""
 Write-Host "起動しました。" -ForegroundColor Green
 Write-Host "  - コンソール窓が開きます。モニター2に移動して監視用にどうぞ"
+if ($autoCloseNote) { Write-Host $autoCloseNote }
 Write-Host "  - 管理画面 (Web UI) は、VM の IP アドレスにブラウザでアクセスしてください"
 Write-Host "    IP の確認: Get-VMNetworkAdapter -VMName $VMName | Select -Expand IPAddresses"
 Write-Host "    (表示されるまで起動から数分かかることがあります)"

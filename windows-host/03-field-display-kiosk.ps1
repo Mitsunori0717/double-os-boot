@@ -28,6 +28,9 @@ param(
     [switch]$NoSplash,
     [switch]$Backdrop,
     [string]$BackdropBounds,
+    [switch]$ConsoleCloser,
+    [int]$CloserDelaySec = 30,
+    [string]$CloserWaitUrl = "",
     [string]$ConsoleResolution,
     [int]$TimeoutSec  = 420
 )
@@ -42,7 +45,7 @@ $StatusFile = Join-Path $PSScriptRoot "display-status.txt"
 trap {
     try {
         $errFile = Join-Path $PSScriptRoot "display-error.txt"
-        $mode = if ($Splash) { "Splash" } elseif ($EscWatcher) { "EscWatcher" } elseif ($Backdrop) { "Backdrop" } else { "Main" }
+        $mode = if ($Splash) { "Splash" } elseif ($EscWatcher) { "EscWatcher" } elseif ($Backdrop) { "Backdrop" } elseif ($ConsoleCloser) { "ConsoleCloser" } else { "Main" }
         Add-Content -Path $errFile -Encoding UTF8 -Value (
             "{0}  [{1}] {2}`r`n  場所: {3}`r`n" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $mode,
             $_.Exception.Message, $_.InvocationInfo.PositionMessage)
@@ -168,9 +171,20 @@ public class BdApi {
         [BdApi]::SetWindowLong($s.Handle, -20, ($ex -bor 0x08000020)) | Out-Null
         [BdApi]::SetWindowPos($s.Handle, [IntPtr](-2), 0, 0, 0, 0, 0x0013) | Out-Null
     })
+    $script:BdMiss = 0
     $bt = New-Object System.Windows.Forms.Timer
     $bt.Interval = 2000
-    $bt.Add_Tick({ if (-not $f.IsDisposed) { [BdApi]::SetWindowPos($f.Handle, [IntPtr](-2), 0, 0, 0, 0, 0x0013) | Out-Null } })
+    $bt.Add_Tick({
+        if ($f.IsDisposed) { return }
+        [BdApi]::SetWindowPos($f.Handle, [IntPtr](-2), 0, 0, 0, 0, 0x0013) | Out-Null
+        # コンソール (vmconnect) が終了したら、黒い画面だけを残さず自分も閉じる
+        if (Get-Process vmconnect -ErrorAction SilentlyContinue) {
+            $script:BdMiss = 0
+        } else {
+            $script:BdMiss++
+            if ($script:BdMiss -ge 2) { [System.Windows.Forms.Application]::Exit() }
+        }
+    })
     $bt.Start()
     $f.Show()
     [System.Windows.Forms.Application]::Run((New-Object System.Windows.Forms.ApplicationContext))
@@ -227,6 +241,57 @@ public class EscApi {
     exit 0
 }
 
+# ============================================================
+#  コンソール自動クローズ: EdgeBox の起動を確認したら、コンソール画面と黒背景を閉じる
+#  (EdgeBox の操作は Web 管理画面で行うため、起動後のコンソールは黒い画面が残るだけになる)
+# ============================================================
+if ($ConsoleCloser) {
+    # 起動完了の目印になる URL (管理画面) が指定されていれば、応答するまで待つ
+    if ($CloserWaitUrl) {
+        $responded = $false
+        try {
+            $uri = [Uri]$CloserWaitUrl
+            $port = if ($uri.Port -gt 0) { $uri.Port } elseif ($uri.Scheme -eq "https") { 443 } else { 80 }
+            $wsw = [System.Diagnostics.Stopwatch]::StartNew()
+            while ($wsw.Elapsed.TotalSeconds -lt $TimeoutSec) {
+                try {
+                    $tcp = New-Object Net.Sockets.TcpClient
+                    $ok = $tcp.ConnectAsync($uri.Host, $port).Wait(3000)
+                    $tcp.Dispose()
+                    if ($ok) { $responded = $true; break }
+                } catch { }
+                Start-Sleep -Seconds 5
+            }
+        } catch { }
+        if (-not $responded) {
+            Log "コンソール自動クローズ: 管理画面 ($CloserWaitUrl) の応答を確認できないため閉じません (起動の様子を確認できるよう残します)。"
+            exit 0
+        }
+    }
+    Start-Sleep -Seconds $CloserDelaySec
+    $vm = Get-VM -Name $VMName -ErrorAction SilentlyContinue
+    if (-not ($vm -and $vm.State -eq "Running")) {
+        Log "コンソール自動クローズ: EdgeBox が実行中でないため閉じません (起動の様子を確認できるよう残します)。"
+        exit 0
+    }
+    $procs = @(Get-Process vmconnect -ErrorAction SilentlyContinue)
+    if ($procs.Count -gt 0) {
+        foreach ($p in $procs) { [void]$p.CloseMainWindow() }   # 正しく閉じて表示状態を保存させる
+        $csw = [System.Diagnostics.Stopwatch]::StartNew()
+        while ($csw.Elapsed.TotalSeconds -lt 8) {
+            if (-not (Get-Process vmconnect -ErrorAction SilentlyContinue)) { break }
+            Start-Sleep -Milliseconds 500
+        }
+        Get-Process vmconnect -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+    }
+    # 黒背景も一緒に片付ける (自動終了の保険。通常はコンソール終了を検知して自分で閉じる)
+    Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" -ErrorAction SilentlyContinue |
+        Where-Object { $_.CommandLine -match '-Backdrop' -and $_.ProcessId -ne $PID } |
+        ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+    Log "コンソール自動クローズ: EdgeBox は起動済みのため、コンソール画面を閉じました (見たいときは『EdgeBox 画面』= 02-start-field-vm.ps1)。"
+    exit 0
+}
+
 function Stop-EscWatcher {
     Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" -ErrorAction SilentlyContinue |
         Where-Object { $_.CommandLine -match '-EscWatcher' -and $_.ProcessId -ne $PID } |
@@ -244,6 +309,7 @@ $DefaultConfig = [ordered]@{
     "LeftFullScreen"    = $true
     "EscEnabled"        = $true
     "ConsoleStripFrame" = $true
+    "ConsoleAutoClose"  = $true
     "ConsoleResolution" = "自動 (モニターに合わせる)"
 }
 if (-not (Test-Path $ConfigFile)) {
@@ -333,7 +399,7 @@ if ($Settings) {
     Add-Type -AssemblyName System.Drawing
     $form = New-Object System.Windows.Forms.Form
     $form.Text = "EdgeBox 表示設定"
-    $form.Size = New-Object System.Drawing.Size(600, 475)
+    $form.Size = New-Object System.Drawing.Size(600, 505)
     $form.StartPosition = "CenterScreen"
     $form.FormBorderStyle = "FixedDialog"
     $form.MaximizeBox = $false
@@ -387,7 +453,7 @@ if ($Settings) {
     $grpOp = New-Object System.Windows.Forms.GroupBox
     $grpOp.Text = "操作"
     $grpOp.Location = New-Object System.Drawing.Point(15, 155)
-    $grpOp.Size = New-Object System.Drawing.Size(555, 90)
+    $grpOp.Size = New-Object System.Drawing.Size(555, 120)
     $cbEsc = New-Object System.Windows.Forms.CheckBox
     $cbEsc.Text = "ESC キーでブラウザの最大化を解除する (ブラウザ画面が前面のときのみ)"
     $cbEsc.Location = New-Object System.Drawing.Point(15, 25)
@@ -401,12 +467,19 @@ if ($Settings) {
     $cbSF.Size = New-Object System.Drawing.Size(530, 24)
     $cbSF.Checked = ($cfg.ConsoleStripFrame -ne $false)
     $grpOp.Controls.Add($cbSF)
+
+    $cbAC = New-Object System.Windows.Forms.CheckBox
+    $cbAC.Text = "EdgeBox の起動を確認したら、コンソール画面を自動で閉じる (黒い画面を残さない)"
+    $cbAC.Location = New-Object System.Drawing.Point(15, 85)
+    $cbAC.Size = New-Object System.Drawing.Size(530, 24)
+    $cbAC.Checked = ($cfg.ConsoleAutoClose -ne $false)
+    $grpOp.Controls.Add($cbAC)
     $form.Controls.Add($grpOp)
 
     # --- コンソールの表示サイズ ---
     $grpRes = New-Object System.Windows.Forms.GroupBox
     $grpRes.Text = "コンソールの表示サイズ (EdgeBox 側の画面解像度)"
-    $grpRes.Location = New-Object System.Drawing.Point(15, 255)
+    $grpRes.Location = New-Object System.Drawing.Point(15, 285)
     $grpRes.Size = New-Object System.Drawing.Size(555, 115)
 
     # このチェック 1 つで「解像度をモニターに合わせる」+「コンソール側を全画面」がまとまる
@@ -456,12 +529,12 @@ if ($Settings) {
     # --- ボタン ---
     $btnOK = New-Object System.Windows.Forms.Button
     $btnOK.Text = "保存"
-    $btnOK.Location = New-Object System.Drawing.Point(370, 385)
+    $btnOK.Location = New-Object System.Drawing.Point(370, 415)
     $btnOK.Size = New-Object System.Drawing.Size(90, 32)
     $btnOK.DialogResult = "OK"
     $btnCancel = New-Object System.Windows.Forms.Button
     $btnCancel.Text = "キャンセル"
-    $btnCancel.Location = New-Object System.Drawing.Point(475, 385)
+    $btnCancel.Location = New-Object System.Drawing.Point(475, 415)
     $btnCancel.Size = New-Object System.Drawing.Size(90, 32)
     $btnCancel.DialogResult = "Cancel"
     $form.Controls.AddRange(@($btnOK, $btnCancel))
@@ -493,7 +566,12 @@ if ($Settings) {
             "LeftFullScreen"    = $cbLF.Checked
             "EscEnabled"        = $cbEsc.Checked
             "ConsoleStripFrame" = $cbSF.Checked
+            "ConsoleAutoClose"  = $cbAC.Checked
             "ConsoleResolution" = $resText
+        }
+        # 手動で追加できる詳細設定 (自動クローズまでの秒数) は保存で消さない
+        if ($cfg.PSObject.Properties["ConsoleAutoCloseDelaySec"]) {
+            $out["ConsoleAutoCloseDelaySec"] = [int]$cfg.ConsoleAutoCloseDelaySec
         }
         $out | ConvertTo-Json | Set-Content -Path $ConfigFile -Encoding UTF8
 
@@ -1201,6 +1279,17 @@ if ($hasBrowser -and ($cfg.EscEnabled -ne $false)) {
     Start-Process powershell.exe -WindowStyle Hidden `
         -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" -EscWatcher"
     Log "ESC キーでブラウザの全画面/最大化を解除できます (ブラウザ画面が前面のときのみ)。"
+}
+
+# --- EdgeBox 起動後のコンソール自動クローズ (起動確認だけ済ませて黒い画面を残さない) ---
+$hasConsole = (($LeftUrl -match '^(console|コンソール)$') -or ($RightUrl -match '^(console|コンソール)$'))
+if ($hasConsole -and ($cfg.ConsoleAutoClose -ne $false)) {
+    $closeDelay = 30
+    if ([int]$cfg.ConsoleAutoCloseDelaySec -gt 0) { $closeDelay = [int]$cfg.ConsoleAutoCloseDelaySec }
+    Start-Process powershell.exe -WindowStyle Hidden -ArgumentList (
+        "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" -ConsoleCloser " +
+        "-CloserDelaySec $closeDelay -VMName `"$VMName`"")
+    Log "コンソール: 起動確認のため約 $closeDelay 秒表示したあと、自動で閉じます (『設定』の[画面表示]で変更可)。"
 }
 
 Log "===== 表示処理を完了 ====="

@@ -73,6 +73,10 @@ VM の起動と Web 画面の応答を待ってから、サブモニターに Ed
 これと `Set-VM -AutomaticStartAction Start` の組み合わせで、電源 ON → ログオンだけで
 「モニター1 = Windows / モニター2 = EdgeBox 全画面」になる。終了は Alt+F4。
 
+コンソール表示 (console 指定) は、EdgeBox の起動を確認した約 30 秒後に **自動で閉じる**
+(起動後のコンソールは黒い画面が残るだけのため。土台の黒背景も一緒に消える)。
+残しておきたい場合は『設定』の[画面表示]でオフにできる。02 スクリプトの手動起動時も同様。
+
 ### ワンクリックで EdgeBox 単独起動 (04-reboot-to-field-native.ps1)
 
 ```powershell
