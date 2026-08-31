@@ -38,7 +38,10 @@ param(
     [string]$NetAdapterName = "",
 
     # 既にある Hyper-V 仮想スイッチをそのまま使う場合はこちら (Get-VMSwitch で確認)
-    [string]$SwitchName = ""
+    [string]$SwitchName = "",
+
+    # 確認プロンプトを出さずに実行する (00-field-launcher.ps1 から呼ぶとき用)
+    [switch]$NoConfirm
 )
 
 $ErrorActionPreference = "Stop"
@@ -220,8 +223,10 @@ foreach ($other in @(Get-VM -ErrorAction SilentlyContinue)) {
 $disk = Get-Disk -Number $DiskNumber
 Write-Host "対象ディスク:" -ForegroundColor Cyan
 Write-Host ("  番号 {0}: {1} ({2:N0} GB)" -f $disk.Number, $disk.FriendlyName, ($disk.Size / 1GB))
-$ans = Read-Host "このディスクを VM として起動します。よろしいですか? (y/N)"
-if ($ans -ne "y") { exit 0 }
+if (-not $NoConfirm) {
+    $ans = Read-Host "このディスクを VM として起動します。よろしいですか? (y/N)"
+    if ($ans -ne "y") { exit 0 }
+}
 
 # --- WSL にアタッチされたままだと衝突するため注意喚起 ---
 Write-Host "注意: このディスクを wsl --mount している場合は、先に wsl --unmount してください。" -ForegroundColor Yellow
