@@ -598,63 +598,145 @@ if ($Verify) {
         Write-Host "  計画: 未適用 (cpu-partition.json なし)"
     }
 
-    # ハイパーバイザーの論理プロセッサ性能カウンター (言語非依存の CIM クラス経由)
-    $cls = Get-CimClass -ClassName "Win32_PerfRawData_*HyperVHypervisorLogicalProcessor" -ErrorAction SilentlyContinue |
+    # ハイパーバイザーの性能カウンター (言語非依存の CIM クラス経由)
+    #
+    # 重要: 論理プロセッサ カウンターの PercentGuestRunTime は
+    #       「VM の実行時間」ではなく「パーティションの実行時間」で、
+    #       ホスト Windows 自身 (ルート パーティション) の実行も含まれる。
+    #       Hyper-V を有効にした Windows は素のハードウェア上ではなく
+    #       ルート パーティションとして動くため、ここを引き算しないと
+    #       Windows の処理まで「ゲスト実行」として数えてしまう。
+    #
+    #       LP の Guest = ルート VP (Windows) + すべての VM の VP
+    #       ルート VP は論理 CPU と 1:1 で固定 (移動しない) ため、
+    #       VM の実行 = LP の Guest − 同番号のルート VP の Guest で求まる。
+    $lpCls = Get-CimClass -ClassName "Win32_PerfRawData_*HyperVHypervisorLogicalProcessor" -ErrorAction SilentlyContinue |
         Select-Object -First 1
-    if (-not $cls) {
+    if (-not $lpCls) {
         Write-Host ""
         Write-Host "ハイパーバイザーの性能カウンターが見つかりません (Hyper-V 無効か、カウンター破損)。" -ForegroundColor Yellow
         Write-Host "代わりの確認手段: タスクマネージャーで vmmem の CPU 使用がゲスト用コアに寄っているか (詳細タブ→列に「CPU」追加)。"
         exit 1
     }
+    $rvCls = Get-CimClass -ClassName "Win32_PerfRawData_*HyperVHypervisorRootVirtualProcessor" -ErrorAction SilentlyContinue |
+        Select-Object -First 1
+    $vpCls = Get-CimClass -ClassName "Win32_PerfRawData_*HyperVHypervisorVirtualProcessor" -ErrorAction SilentlyContinue |
+        Select-Object -First 1
+
+    # 現在のコア固定 (実測の前に「設定として何が入っているか」を示す)
+    $procsNow = Get-VmProcesses $VMName
+    if ($procsNow.Vmmem) {
+        try {
+            $pm = Get-Process -Id $procsNow.Vmmem.ProcessId -ErrorAction Stop
+            $affNow = [int64]$pm.ProcessorAffinity
+            $lpsNow = @(0..62 | Where-Object { ($affNow -band ([int64]1 -shl $_)) -ne 0 })
+            Write-Host "  現在の固定: vmmem(PID $($pm.Id)) = CPU $(ConvertTo-LpRangeText $lpsNow)  ← OS が保証する実行可能範囲"
+        } catch { }
+    }
+
     Write-Host "  採取中... (ゲスト VM に負荷がかかっているほど分かりやすい結果になります)"
-    $s1 = @(Get-CimInstance -ClassName $cls.CimClassName)
+
+    function Get-CounterMap($ClassName) {
+        # 末尾の数字をインスタンス番号として取り出す (_Total は数字で終わらないので除外)
+        $map = @{}
+        if (-not $ClassName) { return $map }
+        foreach ($x in @(Get-CimInstance -ClassName $ClassName -ErrorAction SilentlyContinue)) {
+            if ($x.Name -notmatch '(\d+)\s*$') { continue }
+            $map[[int]$Matches[1]] = $x
+        }
+        return $map
+    }
+    function Get-VmVpTotals($ClassName) {
+        # インスタンス名 "<VM名>:Hv VP 0" を VM 名ごとにまとめる
+        $map = @{}
+        if (-not $ClassName) { return $map }
+        foreach ($x in @(Get-CimInstance -ClassName $ClassName -ErrorAction SilentlyContinue)) {
+            $n = [string]$x.Name
+            if ($n -notmatch '^(.+?):') { continue }
+            $vmn = $Matches[1]
+            if (-not $map.ContainsKey($vmn)) { $map[$vmn] = @() }
+            $map[$vmn] += $x
+        }
+        return $map
+    }
+
+    $lpName = $lpCls.CimClassName
+    $rvName = $null; if ($rvCls) { $rvName = $rvCls.CimClassName }
+    $vpName = $null; if ($vpCls) { $vpName = $vpCls.CimClassName }
+
+    $lp1 = Get-CounterMap $lpName
+    $rv1 = Get-CounterMap $rvName
     Start-Sleep -Seconds $Seconds
-    $s2 = @(Get-CimInstance -ClassName $cls.CimClassName)
+    $lp2 = Get-CounterMap $lpName
+    $rv2 = Get-CounterMap $rvName
+    $vp2 = Get-VmVpTotals $vpName
+
+    function Get-DeltaPct($A, $B, [string]$Prop) {
+        if (-not $A -or -not $B) { return 0.0 }
+        $dt = [double]($B.Timestamp_Sys100NS - $A.Timestamp_Sys100NS)
+        if ($dt -le 0) { return 0.0 }
+        return [Math]::Max(0, [Math]::Min(100, 100.0 * ($B.$Prop - $A.$Prop) / $dt))
+    }
 
     $rows = @()
-    foreach ($b in $s2) {
-        if ($b.Name -notmatch '(\d+)\s*$') { continue }   # "_Total" は除外
-        $lp = [int]$Matches[1]
-        $a = $s1 | Where-Object { $_.Name -eq $b.Name } | Select-Object -First 1
-        if (-not $a) { continue }
-        $dt = [double]($b.Timestamp_Sys100NS - $a.Timestamp_Sys100NS)
-        if ($dt -le 0) { continue }
-        $guest = [Math]::Max(0, [Math]::Min(100, 100.0 * ($b.PercentGuestRunTime - $a.PercentGuestRunTime) / $dt))
-        $total = [Math]::Max(0, [Math]::Min(100, 100.0 * ($b.PercentTotalRunTime - $a.PercentTotalRunTime) / $dt))
+    foreach ($lp in @($lp2.Keys | Sort-Object)) {
+        $lpGuest = Get-DeltaPct $lp1[$lp] $lp2[$lp] "PercentGuestRunTime"
+        $lpTotal = Get-DeltaPct $lp1[$lp] $lp2[$lp] "PercentTotalRunTime"
+        $winPct  = 0.0
+        if ($rv2.ContainsKey($lp)) { $winPct = Get-DeltaPct $rv1[$lp] $rv2[$lp] "PercentGuestRunTime" }
+        $vmPct = [Math]::Max(0, $lpGuest - $winPct)
         $side = ""
         if ($planGuest -contains $lp) { $side = "ゲスト用" }
         elseif ($planHost -contains $lp) { $side = "ホスト用" }
-        $rows += [pscustomobject]@{ LP = $lp; PlanSide = $side; GuestPct = $guest; HostEtcPct = [Math]::Max(0, $total - $guest) }
+        $rows += [pscustomobject]@{
+            LP = $lp; PlanSide = $side; VmPct = $vmPct; WinPct = $winPct
+            HvPct = [Math]::Max(0, $lpTotal - $lpGuest)
+        }
     }
-    $rows = @($rows | Sort-Object LP)
     if ($rows.Count -eq 0) {
         Write-Host "カウンターの採取に失敗しました。" -ForegroundColor Yellow
         exit 1
     }
 
+    if (-not $rvCls) {
+        Write-Host ""
+        Write-Host "注意: ルート仮想プロセッサのカウンターが無いため、Windows 自身の実行を分離できません。" -ForegroundColor Yellow
+        Write-Host "      下表の『VM 実行%』には Windows の処理も混ざります (判定は参考値)。" -ForegroundColor Yellow
+    }
+
     Write-Host ""
-    Write-Host ("  {0,4} {1,-10} {2,12} {3,16}" -f "CPU", "割り当て", "ゲスト実行%", "ホスト他実行%")
+    Write-Host ("  {0,4} {1,-10} {2,10} {3,14} {4,12}" -f "CPU", "割り当て", "VM実行%", "Windows実行%", "HV内部%")
     foreach ($r in $rows) {
         $mark = ""
-        if ($r.PlanSide -eq "ホスト用" -and $r.GuestPct -ge 5) { $mark = " ← ゲストが載っている" }
-        if ($r.PlanSide -eq "ゲスト用" -and $r.HostEtcPct -ge 20) { $mark = " ← ホスト側の処理が多い" }
-        Write-Host ("  {0,4} {1,-10} {2,12:N1} {3,16:N1}{4}" -f $r.LP, $r.PlanSide, $r.GuestPct, $r.HostEtcPct, $mark)
+        if ($r.PlanSide -eq "ホスト用" -and $r.VmPct -ge 3)  { $mark = " ← VM がはみ出している" }
+        if ($r.PlanSide -eq "ゲスト用" -and $r.WinPct -ge 20) { $mark = " ← Windows 側の処理が多い" }
+        Write-Host ("  {0,4} {1,-10} {2,10:N1} {3,14:N1} {4,12:N1}{5}" -f $r.LP, $r.PlanSide, $r.VmPct, $r.WinPct, $r.HvPct, $mark)
+    }
+
+    # 他の VM が動いていると、その実行も上の「VM 実行%」に混ざる
+    $others = @($vp2.Keys | Where-Object { $_ -ne $VMName -and $_ -notmatch '^_Total' })
+    if ($others.Count -gt 0) {
+        Write-Host ""
+        Write-Host "注意: 他にも稼働中の VM があります: $($others -join ', ')" -ForegroundColor Yellow
+        Write-Host "      その分も『VM 実行%』に含まれるため、判定がぶれることがあります。" -ForegroundColor Yellow
     }
 
     if ($planGuest.Count -gt 0) {
-        $gAll = [double](($rows | Measure-Object -Property GuestPct -Sum).Sum)
-        $gOn  = [double](($rows | Where-Object { $planGuest -contains $_.LP } | Measure-Object -Property GuestPct -Sum).Sum)
+        $gAll = [double](($rows | Measure-Object -Property VmPct -Sum).Sum)
+        $gOn  = [double](($rows | Where-Object { $planGuest -contains $_.LP } | Measure-Object -Property VmPct -Sum).Sum)
         Write-Host ""
-        if ($gAll -gt 1) {
+        if ($gAll -gt 2) {
             $pct = [Math]::Round(100.0 * $gOn / $gAll, 1)
-            Write-Host "  ゲスト ($VMName) の CPU 実行のうち、計画どおりゲスト用コア上で実行された割合: $pct%" -ForegroundColor Cyan
+            Write-Host "  VM の CPU 実行のうち、計画どおりゲスト用コア上で実行された割合: $pct%" -ForegroundColor Cyan
             if ($pct -ge 95) { Write-Host "  → 分割は効いています。" -ForegroundColor Green }
-            elseif ($pct -ge 70) { Write-Host "  → おおむね効いていますが、完全ではありません (runtime モードの場合は正常範囲。full モードで厳密化できます)。" -ForegroundColor Yellow }
-            else { Write-Host "  → 分割が効いていません。-Apply の実行状況と再起動の要否を確認してください。" -ForegroundColor Red }
+            elseif ($pct -ge 70) { Write-Host "  → おおむね効いていますが、完全ではありません (VM 起動後に -Apply した場合は、VM を再起動すると揃います)。" -ForegroundColor Yellow }
+            else { Write-Host "  → 分割が効いていません。-Apply の実行状況と、上の『現在の固定』の範囲を確認してください。" -ForegroundColor Red }
         } else {
-            Write-Host "  ゲストの CPU 使用がほぼゼロのため判定できません。ゲスト VM の稼働中にもう一度実行してください。" -ForegroundColor Yellow
+            Write-Host "  VM の CPU 使用がほぼゼロのため判定できません (計 $([Math]::Round($gAll,1))%)。" -ForegroundColor Yellow
+            Write-Host "  上の『現在の固定』が計画どおりなら、割り当て自体は OS に受理されています。" -ForegroundColor Yellow
         }
+        $winTotal = [double](($rows | Measure-Object -Property WinPct -Sum).Sum)
+        Write-Host "  (参考) Windows 自身の実行合計: $([Math]::Round($winTotal,1))% / VM の実行合計: $([Math]::Round($gAll,1))%"
     }
     exit 0
 }
