@@ -87,6 +87,23 @@ function Get-SourceViaZip {
 # ============================================================
 #  取得方式 2: ファイルを 1 つずつ取得 (ZIP が遮断されている環境向け)
 # ============================================================
+# 同梱のファイル一覧 (filelist.txt) から取得する。api.github.com が
+# 遮断されている環境でも、raw.githubusercontent.com だけで完結する
+function Get-EntriesFromFileList {
+    $url = "https://raw.githubusercontent.com/$Repo/$Branch/filelist.txt"
+    $txt = (Invoke-WebRequest -Uri $url -UseBasicParsing -Headers $UA).Content
+    $out = @()
+    foreach ($line in ($txt -split "`r?`n")) {
+        $rel = $line.Trim()
+        if (-not $rel -or $rel.StartsWith("#")) { continue }
+        $out += [pscustomobject]@{
+            Rel = $rel
+            Url = "https://raw.githubusercontent.com/$Repo/$Branch/$rel"
+        }
+    }
+    return $out
+}
+
 function Get-RepoEntries([string]$Path) {
     # 末尾に / を付けると GitHub API が 400 を返すため、パス無しのときは付けない
     $api = "https://api.github.com/repos/$Repo/contents"
@@ -107,7 +124,14 @@ function Get-SourceViaFiles {
     $root = Join-Path $tmpRoot "f"
     New-Item -ItemType Directory -Path $root -Force | Out-Null
     Write-Host "  ファイル一覧を取得しています..."
-    $entries = @(Get-RepoEntries "")
+    # まず同梱の一覧 (raw のみで完結)。取れなければ GitHub API にフォールバック
+    $entries = @()
+    try {
+        $entries = @(Get-EntriesFromFileList)
+    } catch {
+        Write-Host "    同梱の一覧を取得できなかったため、GitHub API を使います" -ForegroundColor Yellow
+    }
+    if ($entries.Count -eq 0) { $entries = @(Get-RepoEntries "") }
     if ($entries.Count -eq 0) { throw "ファイル一覧を取得できませんでした。" }
     Write-Host "  $($entries.Count) 件をダウンロードしています..."
     $n = 0
