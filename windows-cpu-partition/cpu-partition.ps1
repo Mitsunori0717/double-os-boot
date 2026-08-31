@@ -71,6 +71,7 @@ param(
 
     [switch]$NoPriorityBoost,   # runtime: vmmem の優先度昇格をしない
     [switch]$NoReserve,         # full: CPU グループ不成立時の処理能力予約をしない
+    [switch]$AutoGetTools,      # full: CpuGroups.exe を確認なしで取得する (設定コンソール用)
 
     # --- 確認・解除 ---
     [switch]$Verify,            # 実測 (各論理 CPU のゲスト/合計実行率を採取)
@@ -844,6 +845,7 @@ if (-not $exe) {
     Write-Host "ゲスト側の完全固定には Microsoft 製 CpuGroups.exe が必要です (未検出)。" -ForegroundColor Yellow
     $dl = "n"
     if (-not $NoConfirm) { $dl = Read-Host "Microsoft Download Center から取得しますか? (y/N)" }
+    if ($AutoGetTools) { $dl = "y" }
     if ($dl -eq "y") {
         try {
             if (-not (Test-Path $ToolsDir)) { New-Item -ItemType Directory -Path $ToolsDir | Out-Null }

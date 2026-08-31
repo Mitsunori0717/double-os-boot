@@ -77,6 +77,13 @@ EdgeBox VM に使う場合は VM 名が既定値のため、そのまま実行�
 
 ```powershell
 cd ..\windows-cpu-partition
+.\cpu-console.ps1 -Setup   # デスクトップに『CPU割り当て』アイコンを作成 (GUI で設定)
+```
+
+P コア / E コアをタイルで選んで割り当てられ、動かない設定・矛盾した設定は
+理由を表示して適用できないようになっています。コマンドで操作することもできます:
+
+```powershell
 .\cpu-partition.ps1 -Apply -Mode runtime -HostCores 4   # 再起動不要で適用
 .\cpu-partition.ps1 -Verify                             # 実測 (各コアで誰が動いたか)
 ```

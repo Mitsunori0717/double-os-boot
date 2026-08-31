@@ -2,3 +2,4 @@
 cpu-partition.json
 cpu-partition-log.txt
 tools/
+cpu-topology.json
