@@ -38,6 +38,7 @@ $ConfigFile   = Join-Path $PSScriptRoot "cpu-partition.json"
 $SnapshotFile = Join-Path $PSScriptRoot "cpu-topology.json"
 $AppsFile     = Join-Path $PSScriptRoot "cpu-apps.json"
 $AppsEngine   = Join-Path $PSScriptRoot "cpu-apps.ps1"
+$AppsLog      = Join-Path $PSScriptRoot "cpu-apps-log.txt"
 $TaskName     = "CpuPartition-Console"
 
 function Test-Admin {
@@ -1234,21 +1235,40 @@ function Show-AppsDialog {
     # --- 保存して即適用 (以後は自動タスクが 1 分ごとに適用し直す) ---
     $script:Apps = @($work)
     Save-AppsFile $script:Apps
+    # 適用エンジンの結果は必ず確認する。失敗を握りつぶすと
+    # 「自動で固定します」と表示しているのに何も設定されていない、という状態になる
+    $engineErr = ""
     if (Test-Path $AppsEngine) {
         $argLine = "-NoProfile -ExecutionPolicy Bypass -File `"$AppsEngine`" -Apply -Quiet"
         if ($script:Apps.Count -gt 0) { $argLine += " -Install" }
         try {
-            Start-Process powershell.exe -ArgumentList $argLine -WindowStyle Hidden -Wait
-        } catch { }
+            $pApply = Start-Process powershell.exe -ArgumentList $argLine `
+                -WindowStyle Hidden -Wait -PassThru
+            if ($pApply.ExitCode -ne 0) { $engineErr = "適用エンジンが終了コード $($pApply.ExitCode) で終了しました" }
+        } catch {
+            $engineErr = $_.Exception.Message
+        }
         if ($script:Apps.Count -eq 0) {
             try {
                 Start-Process powershell.exe -WindowStyle Hidden -Wait -ArgumentList (
-                    "-NoProfile -ExecutionPolicy Bypass -File `"$AppsEngine`" -Uninstall -Quiet")
+                    "-NoProfile -ExecutionPolicy Bypass -File `"$AppsEngine`" -Uninstall -Quiet") | Out-Null
             } catch { }
         }
+    } else {
+        $engineErr = "適用エンジン cpu-apps.ps1 が見つかりません"
     }
     Update-Validation
-    Show-Info "アプリの割り当てを保存しました ($($script:Apps.Count) 件)。`n実行中のアプリには今すぐ反映し、以後は起動のたびに自動で固定します。"
+
+    if ($engineErr) {
+        $tail = ""
+        if (Test-Path $AppsLog) {
+            try { $tail = "`n`n[記録の末尾]`n" + ((Get-Content $AppsLog -Tail 5) -join "`n") } catch { }
+        }
+        Show-Info ("登録内容は保存しましたが、適用できませんでした。`n$engineErr" +
+            "`n`n自動で固定し直す設定は入っていません。" + $tail) "Warning"
+    } else {
+        Show-Info "アプリの割り当てを保存しました ($($script:Apps.Count) 件)。`n実行中のアプリには今すぐ反映し、以後は起動のたびに自動で固定します。"
+    }
 }
 
 # ============================================================

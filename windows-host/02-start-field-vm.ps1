@@ -24,6 +24,23 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+function Test-Admin {
+    ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
+        ).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+}
+
+# Hyper-V の操作とディスクのオフライン化には管理者権限が要る。
+# 無いまま進むと途中で分かりにくいエラーになるため先に止める
+if (-not (Test-Admin)) {
+    Write-Error ("管理者権限の PowerShell で実行してください。`n" +
+        "field-start.cmd をダブルクリックすれば自動で昇格します。")
+    exit 1
+}
+
+# Windows のシステムディスク (C:)。ディスクをオフラインにする前の安全確認に使う
+$SysDisk = -1
+try { $SysDisk = [int](Get-Partition -DriveLetter C -ErrorAction Stop).DiskNumber } catch { $SysDisk = -1 }
+
 $vm = Get-VM -Name $VMName -ErrorAction SilentlyContinue
 if (-not $vm) {
     Write-Error "VM '$VMName' がありません。01-create-field-vm.ps1 で作成してください。"
@@ -103,8 +120,14 @@ function Test-DiskReady([switch]$Fix) {
         if ($d -and -not $d.IsOffline) {
             $problems += "ディスク $n が Windows でオンラインのままです"
             if ($Fix) {
-                Set-Disk -Number $n -IsOffline $true
-                Write-Host "  ディスク $n をオフラインにしました" -ForegroundColor Green
+                # 万一 VM に誤ったディスクが接続されていても、Windows 自身の
+                # ディスクだけは絶対にオフラインにしない
+                if ($n -eq $SysDisk) {
+                    $problems += "ディスク $n は Windows のシステムディスクです。オフラインにしません (VM の設定を見直してください)"
+                } else {
+                    Set-Disk -Number $n -IsOffline $true
+                    Write-Host "  ディスク $n をオフラインにしました" -ForegroundColor Green
+                }
             }
         }
     }
