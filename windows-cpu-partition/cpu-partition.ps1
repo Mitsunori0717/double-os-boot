@@ -37,6 +37,7 @@
     .\cpu-partition.ps1 -Apply -Mode runtime -HostCores 4 # 再起動なしで分割 (ホストに物理4コア)
     .\cpu-partition.ps1 -Apply -Mode full    -HostCores 4 # 完全分割 (再起動→もう一度同じコマンド)
     .\cpu-partition.ps1 -Verify                           # 実測: 各コアで誰が実行されているか
+    .\cpu-partition.ps1 -SelfTest                         # 撤退手順の予行 (収集は止まらない)
     .\cpu-partition.ps1 -Undo                             # 全て元に戻す
 
 .EXAMPLE
@@ -78,6 +79,7 @@ param(
     [switch]$Verify,            # 実測 (各論理 CPU のゲスト/合計実行率を採取)
     [int]$Seconds = 5,          # -Verify の採取時間
     [switch]$Undo,              # 全設定の解除
+    [switch]$SelfTest,          # 撤退手順の予行 (-Undo → 再適用 まで自動。収集は止まらない)
 
     # --- 内部用 (自動タスクが呼ぶ) ---
     [switch]$ApplyRuntime,
@@ -473,6 +475,14 @@ function Register-PinTask {
     throw "自動タスク '$PinTaskName' を登録できませんでした: $($lastErr.Exception.Message)"
 }
 
+# -VMName を明示していない場合は、保存済み計画の VM 名を採用する。
+# 既定値 (EdgeBox) のまま -Undo すると別 VM を対象にしてしまい、
+# 「タスクは消えたが vmmem の固定は外れていない」という中途半端な状態になる。
+if (-not $PSBoundParameters.ContainsKey("VMName")) {
+    $cfgVm = Get-SavedConfig
+    if ($cfgVm -and $cfgVm.VMName) { $VMName = [string]$cfgVm.VMName }
+}
+
 # ============================================================ -ApplyRuntime (内部用)
 
 if ($ApplyRuntime) {
@@ -503,6 +513,148 @@ if ($ApplyRuntime) {
 }
 
 # ============================================================ -Undo
+
+# ============================================================ -SelfTest (撤退手順の予行)
+#
+# 「いざというとき -Undo で戻せる」ことを、実際に戻して確かめる。
+# 手作業だと途中で中断したときに分割が外れたまま残るため、
+# 何があっても最後に必ず再適用する (finally)。
+# 収集は止まらない (VM は動いたまま。変わるのはコアの割り当てだけ)。
+
+if ($SelfTest) {
+    if (-not (Test-Admin)) { Write-Error "管理者権限の PowerShell で実行してください。"; exit 1 }
+
+    $cfg = Get-SavedConfig
+    if (-not $cfg) {
+        Write-Error "適用済みの設定がありません。先に -Apply してから予行してください。"
+        exit 1
+    }
+    if ([string]$cfg.Mode -ne "runtime") {
+        Write-Error ("予行できるのは runtime モードの設定だけです (現在: $($cfg.Mode))。`n" +
+            "full モードの解除は bcdedit を書き換えるため再起動が必要で、無人での予行に向きません。")
+        exit 1
+    }
+
+    # -Undo は cpu-partition.json を消すため、復元に必要な情報を先に控える
+    $tVm    = [string]$cfg.VMName
+    $tHost  = ConvertTo-LpRangeText @([int[]]$cfg.HostLps)
+    $tGuest = ConvertTo-LpRangeText @([int[]]$cfg.GuestLps)
+    $tBoost = [bool]$cfg.NoPriorityBoost
+    $guestMask = Get-LpMask @([int[]]$cfg.GuestLps)
+
+    function Get-VmmemAffinity([string]$Name) {
+        # 戻り値: vmmem の現在のアフィニティ (VM 停止中など取得できない場合は $null)
+        try {
+            $pr = Get-VmProcesses $Name
+            if (-not $pr.Vmmem) { return $null }
+            return [int64](Get-Process -Id $pr.Vmmem.ProcessId -ErrorAction Stop).ProcessorAffinity
+        } catch { return $null }
+    }
+    function Invoke-Self([string[]]$Args) {
+        # 実際に運用者が打つのと同じ形で呼び出す (別プロセス・終了コードで判定)
+        $q = '"' + $PSCommandPath + '"'
+        $all = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $q) + $Args
+        $p = Start-Process -FilePath "powershell.exe" -ArgumentList $all -Wait -PassThru -NoNewWindow
+        return $p.ExitCode
+    }
+
+    $results = @()
+    function Add-Check([string]$Name, [bool]$Ok, [string]$Detail) {
+        $script:results += [pscustomobject]@{ Name = $Name; Ok = $Ok; Detail = $Detail }
+        $mark = if ($Ok) { "OK  " } else { "NG  " }
+        $col  = if ($Ok) { "Green" } else { "Red" }
+        Write-Host ("  {0}{1}{2}" -f $mark, $Name, $(if ($Detail) { " — $Detail" } else { "" })) -ForegroundColor $col
+    }
+
+    Write-Host ""
+    Write-Host "=== 撤退手順の予行 (-Undo → 再適用) ===" -ForegroundColor Cyan
+    Write-Host "  対象 VM  : $tVm"
+    Write-Host "  戻す計画 : ホスト = CPU $tHost / ゲスト = CPU $tGuest"
+    Write-Host "  収集は止まりません (VM は動いたまま)。最後に必ず元の割り当てへ戻します。"
+    Write-Host ""
+
+    $affBefore = Get-VmmemAffinity $tVm
+    if ($affBefore -eq $null) {
+        Write-Host "  注意: vmmem が見つからないため (VM 停止中?)、コア固定の確認は省略します。" -ForegroundColor Yellow
+    }
+
+    try {
+        # --- 1) 解除 ---
+        Write-Host "[1/3] 解除 (-Undo)" -ForegroundColor Cyan
+        $rc = Invoke-Self @("-Undo", "-VMName", $tVm, "-NoConfirm")
+        Add-Check "-Undo が正常終了する" ($rc -eq 0) "終了コード $rc"
+        Add-Check "自動タスクが削除される" `
+            (-not (Get-ScheduledTask -TaskName $PinTaskName -ErrorAction SilentlyContinue)) $PinTaskName
+        Add-Check "設定ファイルが削除される" (-not (Test-Path $ConfigFile)) "cpu-partition.json"
+        if ($affBefore -ne $null) {
+            $affUndo = Get-VmmemAffinity $tVm
+            Add-Check "vmmem のコア固定が解除される" `
+                ($affUndo -ne $null -and $affUndo -ne $guestMask) "全コアで実行可能な状態に戻る"
+        }
+    } finally {
+        # --- 2) 再適用 (途中で失敗しても必ず通す) ---
+        Write-Host ""
+        Write-Host "[2/3] 再適用 (元の割り当てへ復帰)" -ForegroundColor Cyan
+        $applyArgs = @("-Apply", "-Mode", "runtime", "-VMName", $tVm,
+                       "-HostLps", $tHost, "-GuestLps", $tGuest, "-NoConfirm", "-Quiet")
+        if ($tBoost) { $applyArgs += "-NoPriorityBoost" }
+        $rc2 = Invoke-Self $applyArgs
+        Add-Check "再適用が正常終了する" ($rc2 -eq 0) "終了コード $rc2"
+        Add-Check "自動タスクが再登録される" `
+            ([bool](Get-ScheduledTask -TaskName $PinTaskName -ErrorAction SilentlyContinue)) $PinTaskName
+        Add-Check "設定ファイルが復元される" (Test-Path $ConfigFile) "cpu-partition.json"
+        if ($affBefore -ne $null) {
+            $affAfter = Get-VmmemAffinity $tVm
+            Add-Check "vmmem が元のコアへ固定し直される" ($affAfter -eq $guestMask) "CPU $tGuest"
+        }
+    }
+
+    # --- 3) 自動タスクが本当に固定し直せるか ---
+    #
+    # ここがいちばん静かに失敗する。分割が外れても Windows も VM も普通に動くため
+    # 誰も気付かない。再起動せずに、タスクの「中身」だけを試す
+    # (再起動が確かめるのは引き金の方で、それは別途 1-5 で行う)。
+    if ($affBefore -ne $null) {
+        Write-Host ""
+        Write-Host "[3/3] 自動タスクによる復元 (再起動せずに動作だけ確認)" -ForegroundColor Cyan
+        try {
+            $wideMask = Get-LpMask @(0..([Math]::Min([Environment]::ProcessorCount, 63) - 1))
+            $pr = Get-VmProcesses $tVm
+            $pp = Get-Process -Id $pr.Vmmem.ProcessId -ErrorAction Stop
+            $pp.ProcessorAffinity = [IntPtr]$wideMask
+            Add-Check "固定を一旦外す" ((Get-VmmemAffinity $tVm) -ne $guestMask) "わざと分割が外れた状態を作る"
+
+            Start-ScheduledTask -TaskName $PinTaskName -ErrorAction Stop
+            $restored = $false
+            for ($i = 0; $i -lt 45; $i++) {
+                Start-Sleep -Seconds 2
+                if ((Get-VmmemAffinity $tVm) -eq $guestMask) { $restored = $true; break }
+            }
+            Add-Check "自動タスクが固定し直す" $restored `
+                $(if ($restored) { "CPU $tGuest に復帰 (約 $($i * 2) 秒)" } else { "90 秒待っても復帰しませんでした" })
+        } catch {
+            Add-Check "自動タスクによる復元" $false $_.Exception.Message
+        } finally {
+            # 何があっても計画どおりの状態で終える
+            $msg = Set-RuntimePin @([int[]]$cfg.HostLps) @([int[]]$cfg.GuestLps) (-not $tBoost)
+            if ($msg -notlike "ok:*") { Write-Host "  最終確認: $msg" -ForegroundColor Yellow }
+        }
+    }
+
+    $ng = @($results | Where-Object { -not $_.Ok })
+    Write-Host ""
+    Write-PinLog "SelfTest: $($results.Count) 項目中 $($ng.Count) 件 NG"
+    if ($ng.Count -eq 0) {
+        Write-Host "予行 合格 ($($results.Count)/$($results.Count))。いつでも安全に撤退できます。" -ForegroundColor Green
+        Write-Host "  実運用での撤退: .\cpu-partition.ps1 -Undo -VMName $tVm" -ForegroundColor Cyan
+        exit 0
+    } else {
+        Write-Host "予行 不合格 ($($ng.Count) 件)。撤退手順が確実でないため、本番運用に進まないでください。" -ForegroundColor Red
+        foreach ($x in $ng) { Write-Host "  - $($x.Name)" -ForegroundColor Red }
+        Write-Host "  現在の状態: .\cpu-partition.ps1 -Verify -VMName $tVm  で確認してください。" -ForegroundColor Yellow
+        exit 1
+    }
+}
 
 if ($Undo) {
     if (-not (Test-Admin)) { Write-Error "管理者権限の PowerShell で実行してください。"; exit 1 }

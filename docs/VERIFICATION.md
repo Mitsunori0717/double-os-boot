@@ -175,19 +175,18 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\cpu-partition.ps1 -Undo -V
 > 冒頭に書いたとおり「戻し方が確認できない段階には進まない」のが本書の原則です。
 > 実際に困るのは深夜や休日で、そのとき初めて `-Undo` を試すのでは遅すぎます。
 >
-> 予行の手順 (収集は止まりません。所要 2 分):
+> 予行はコマンド 1 つで行えます (収集は止まりません。所要 2 分):
 >
 > ```powershell
-> .\cpu-partition.ps1 -Undo -VMName FIELDsystem -NoConfirm       # 解除
-> .\cpu-partition.ps1 -Verify -Seconds 10 -VMName FIELDsystem    # 「計画: 未適用」になる
-> Get-ScheduledTask -TaskName CpuPartition-Pin -ErrorAction SilentlyContinue   # 何も返らない
-> .\cpu-partition.ps1 -Apply -Mode runtime -VMName FIELDsystem `
->   -HostLps "0-15,22-27" -GuestLps "16-21"                      # 元に戻す
-> .\cpu-partition.ps1 -Verify -Seconds 30 -VMName FIELDsystem    # 100% に復帰
+> .\cpu-partition.ps1 -SelfTest
 > ```
 >
-> **合格基準**: 解除後に「計画: 未適用」と表示され、タスクが消え、
-> 再適用で 100% に戻ること。ここまで通れば、いつでも安全に撤退できます。
+> 解除 → 確認 → 再適用 → **自動タスクによる復元の確認**まで自動で行い、
+> 各項目を OK / NG で判定します。**途中で失敗しても必ず元の割り当てに戻します**
+> (手作業だと中断したときに分割が外れたまま残るため)。
+>
+> **合格基準**: 最後に「予行 合格」と表示されること。
+> ここまで通れば、いつでも安全に撤退できます。
 
 ---
 
