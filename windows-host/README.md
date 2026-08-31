@@ -73,12 +73,11 @@ VM 起動 → サインイン → 左右モニターへの自動表示 (`03-fiel
 主構成の isolcpus + vcpupin に相当するコア分割は、**独立ツール
 [../windows-cpu-partition/](../windows-cpu-partition/README.md)** で行えます
 (本構成のスクリプト・設定とは切り離されており、互いに干渉しません)。
-EdgeBox VM に使う場合は VM 名が既定値のため、そのまま実行できます:
+EdgeBox VM に使う場合は VM 名が既定値のため、追加の指定は不要です。
 
-```powershell
-cd ..\windows-cpu-partition
-.\cpu-console.ps1 -Setup   # デスクトップに『CPU割り当て』アイコンを作成 (GUI で設定)
-```
+導入は **`..\windows-cpu-partition\setup.cmd` をダブルクリックするだけ** で、
+デスクトップに『CPU割り当て』アイコンが作られます
+(管理者への昇格とファイルのブロック解除も自動。PowerShell の実行ポリシーの影響を受けません)。
 
 P コア / E コアをタイルで選んで割り当てられ、動かない設定・矛盾した設定は
 理由を表示して適用できないようになっています。コマンドで操作することもできます:
