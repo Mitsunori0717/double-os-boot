@@ -169,26 +169,50 @@ if ($Install) {
     $interval = [Math]::Max(1, $IntervalMinutes)
     $action = New-ScheduledTaskAction -Execute "powershell.exe" `
         -Argument "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$PSCommandPath`" -Apply -Quiet"
-    $trigger = New-ScheduledTaskTrigger -AtLogOn
-    # 繰り返し設定 (環境によっては MaxValue が拒否されるため、その場合は十分長い期間で代用)
-    try {
-        $rep = (New-ScheduledTaskTrigger -Once -At (Get-Date) `
-            -RepetitionInterval (New-TimeSpan -Minutes $interval) `
-            -RepetitionDuration ([TimeSpan]::MaxValue)).Repetition
-    } catch {
-        $rep = (New-ScheduledTaskTrigger -Once -At (Get-Date) `
-            -RepetitionInterval (New-TimeSpan -Minutes $interval) `
-            -RepetitionDuration (New-TimeSpan -Days 3650)).Repetition
-    }
-    $trigger.Repetition = $rep
-    $bootTrigger = New-ScheduledTaskTrigger -AtStartup
-    $bootTrigger.Delay = "PT1M"
     $principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
     $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
         -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 5)
-    Register-ScheduledTask -TaskName $TaskName -Trigger @($trigger, $bootTrigger) `
-        -Action $action -Principal $principal -Settings $settings -Force | Out-Null
-    Say "自動適用タスク '$TaskName' を登録しました ($interval 分ごとに適用し直します)。" "Green"
+
+    # 繰り返し期間は指定しない (無期限扱い)。
+    # [TimeSpan]::MaxValue は P99999999DT23H59M59S となり、タスク XML の
+    # 範囲外として拒否される環境がある (しかも失敗するのは
+    # トリガー作成時ではなく Register-ScheduledTask の時点)
+    $logonRep = New-ScheduledTaskTrigger -AtLogOn
+    try {
+        $logonRep.Repetition = (New-ScheduledTaskTrigger -Once -At (Get-Date) `
+            -RepetitionInterval (New-TimeSpan -Minutes $interval)).Repetition
+    } catch { }
+    $logonPlain = New-ScheduledTaskTrigger -AtLogOn
+    $boot = New-ScheduledTaskTrigger -AtStartup
+    try { $boot.Delay = "PT1M" } catch { }
+
+    # 受け付けられる組み合わせは環境によって違うため、
+    # 機能の多い順に試し、必ずどれかで登録できるようにする
+    $plans = @()
+    $plans += [pscustomobject]@{ T = @($logonRep, $boot)
+                                 N = "$interval 分ごとに適用し直します" }
+    $plans += [pscustomobject]@{ T = @($logonPlain, $boot)
+                                 N = "この環境では定期実行が使えないため、起動時とログオン時だけの適用になります" }
+    $plans += [pscustomobject]@{ T = @($logonPlain)
+                                 N = "この環境ではログオン時だけの適用になります" }
+
+    $registered = $false; $lastErr = $null
+    foreach ($plan in $plans) {
+        try {
+            Register-ScheduledTask -TaskName $TaskName -Trigger $plan.T `
+                -Action $action -Principal $principal -Settings $settings -Force | Out-Null
+            Write-AppLog "Install: タスク登録 ($($plan.N))"
+            Say "自動適用タスク '$TaskName' を登録しました ($($plan.N))。" "Green"
+            $registered = $true
+            break
+        } catch {
+            $lastErr = $_
+        }
+    }
+    if (-not $registered) {
+        Write-AppLog "Install: 登録失敗 $($lastErr.Exception.Message)"
+        throw "自動適用タスク '$TaskName' を登録できませんでした: $($lastErr.Exception.Message)"
+    }
     if (-not $Apply) { exit 0 }
 }
 

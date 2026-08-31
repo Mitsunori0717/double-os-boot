@@ -412,12 +412,16 @@ function Set-RuntimePin([int[]]$HostArr, [int[]]$GuestArr, [bool]$Boost) {
 }
 
 # VM 起動を検出して自動で再適用するタスク (SYSTEM 権限)
-# 戻り値: 使えたトリガーの説明 (環境によりイベント検出が作れない場合は定期実行で代替)
+# 戻り値: 制限があった場合の説明 (無ければ空文字)
 function Register-PinTask {
-    $triggers = @()
-    $note = ""
+    $action = New-ScheduledTaskAction -Execute "powershell.exe" `
+        -Argument "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$PSCommandPath`" -ApplyRuntime -Quiet"
+    $principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
+    $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
+        -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 10)
 
-    # VM 起動イベント (最速で反映される)。作れない環境ではスキップする
+    # 1) VM 起動イベント (最速で反映される)。作れない環境ではスキップ
+    $evTrigger = $null
     try {
         $xml = '<QueryList><Query Id="0" Path="Microsoft-Windows-Hyper-V-Worker-Admin">' +
                '<Select Path="Microsoft-Windows-Hyper-V-Worker-Admin">' +
@@ -425,40 +429,48 @@ function Register-PinTask {
                '</Select></Query></QueryList>'
         $evClass = Get-CimClass -Namespace "Root/Microsoft/Windows/TaskScheduler" `
             -ClassName "MSFT_TaskEventTrigger" -ErrorAction Stop
-        $triggers += New-CimInstance -CimClass $evClass -ClientOnly `
+        $evTrigger = New-CimInstance -CimClass $evClass -ClientOnly `
             -Property @{ Enabled = $true; Subscription = $xml } -ErrorAction Stop
     } catch {
-        $note = "VM 起動イベントのトリガーは作れなかったため、定期実行で補います"
         Write-PinLog "Register-PinTask: イベントトリガー不可 ($($_.Exception.Message))"
     }
 
-    $bootTrigger = New-ScheduledTaskTrigger -AtStartup
-    try { $bootTrigger.Delay = "PT2M" } catch { }
-    $triggers += $bootTrigger
+    $boot = New-ScheduledTaskTrigger -AtStartup
+    try { $boot.Delay = "PT2M" } catch { }
 
-    # ログオン時 + 2 分ごとの再適用 (取りこぼしと、上のイベント不可を補う保険)
-    $logonTrigger = New-ScheduledTaskTrigger -AtLogOn
+    # 2) ログオン + 2 分ごとの再適用。
+    #    繰り返し期間は指定しない (無期限扱い)。[TimeSpan]::MaxValue は
+    #    タスク XML の範囲外としてタスクスケジューラに拒否される環境がある
+    $logonRep = New-ScheduledTaskTrigger -AtLogOn
     try {
-        $logonTrigger.Repetition = (New-ScheduledTaskTrigger -Once -At (Get-Date) `
-            -RepetitionInterval (New-TimeSpan -Minutes 2) `
-            -RepetitionDuration ([TimeSpan]::MaxValue)).Repetition
-    } catch {
-        try {
-            $logonTrigger.Repetition = (New-ScheduledTaskTrigger -Once -At (Get-Date) `
-                -RepetitionInterval (New-TimeSpan -Minutes 2) `
-                -RepetitionDuration (New-TimeSpan -Days 3650)).Repetition
-        } catch { }
-    }
-    $triggers += $logonTrigger
+        $logonRep.Repetition = (New-ScheduledTaskTrigger -Once -At (Get-Date) `
+            -RepetitionInterval (New-TimeSpan -Minutes 2)).Repetition
+    } catch { }
+    $logonPlain = New-ScheduledTaskTrigger -AtLogOn
 
-    $action = New-ScheduledTaskAction -Execute "powershell.exe" `
-        -Argument "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$PSCommandPath`" -ApplyRuntime -Quiet"
-    $principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
-    $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
-        -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 10)
-    Register-ScheduledTask -TaskName $PinTaskName -Trigger $triggers `
-        -Action $action -Principal $principal -Settings $settings -Force | Out-Null
-    return $note
+    # 受け付けられる組み合わせは環境によって違うため、
+    # 機能の多い順に試し、必ずどれかで登録できるようにする
+    $plans = @()
+    if ($evTrigger) { $plans += [pscustomobject]@{ T = @($evTrigger, $boot, $logonRep);   N = "" } }
+    $plans += [pscustomobject]@{ T = @($boot, $logonRep)
+                                 N = "VM 起動イベントのトリガーが使えないため、2 分ごとの再適用で補います" }
+    if ($evTrigger) { $plans += [pscustomobject]@{ T = @($evTrigger, $boot, $logonPlain)
+                                                   N = "定期実行が使えないため、VM 起動イベントと起動/ログオン時に適用します" } }
+    $plans += [pscustomobject]@{ T = @($boot, $logonPlain)
+                                 N = "この環境では起動時とログオン時のみの適用になります (VM 起動時の即時反映は不可)" }
+
+    $lastErr = $null
+    foreach ($plan in $plans) {
+        try {
+            Register-ScheduledTask -TaskName $PinTaskName -Trigger $plan.T `
+                -Action $action -Principal $principal -Settings $settings -Force | Out-Null
+            if ($plan.N) { Write-PinLog "Register-PinTask: $($plan.N)" }
+            return $plan.N
+        } catch {
+            $lastErr = $_
+        }
+    }
+    throw "自動タスク '$PinTaskName' を登録できませんでした: $($lastErr.Exception.Message)"
 }
 
 # ============================================================ -ApplyRuntime (内部用)
