@@ -103,7 +103,7 @@ Set-VMFirmware -VMName $VMName -FirstBootDevice $dvd
 Get-VMIntegrationService -VMName $VMName | Enable-VMIntegrationService
 
 # チェックポイント (スナップショット) も D ドライブ側へ
-Set-VM -VMName $VMName -CheckpointType Production -SnapshotFileLocation $VMPath
+Set-VM -Name $VMName -CheckpointType Production -SnapshotFileLocation $VMPath
 
 Write-Host ""
 Write-Host "仮想マシンを作成しました。" -ForegroundColor Green
