@@ -302,6 +302,7 @@ windows-cpu-partition/               (別口) Windows ホスト用 CPU コア分
 docs/DUAL-BOOT-SETUP.md              ネイティブ・デュアルブートの構築手順
 docs/ARCHITECTURE.md                 技術解説 (なぜこの設計か・何がどこまで可能か)
 docs/TROUBLESHOOTING.md              トラブルシューティング
+docs/VERIFICATION.md                 検証手順書 (未検証部分の確かめ方・合格基準・戻し方)
 alternatives/hyperv/                 (参考) Hyper-V による簡易構成。GPU 専有なし・要件が緩い
 ```
 

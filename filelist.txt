@@ -20,6 +20,7 @@ docs/ARCHITECTURE.md
 docs/DUAL-BOOT-SETUP.md
 docs/EXPLANATION.md
 docs/TROUBLESHOOTING.md
+docs/VERIFICATION.md
 filelist.txt
 update.cmd
 update.ps1
