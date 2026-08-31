@@ -6,12 +6,16 @@
     .\02-start-field-vm.ps1              # 起動 + コンソール表示
     .\02-start-field-vm.ps1 -Stop       # 通常シャットダウン要求
     .\02-start-field-vm.ps1 -Status     # 状態表示
+    .\02-start-field-vm.ps1 -Repair     # ディスクの取り合いを診断して直せる範囲を直す
 #>
 [CmdletBinding()]
 param(
     [string]$VMName = "EdgeBox",
     [switch]$Stop,
-    [switch]$Status
+    [switch]$Status,
+    # ディスクが「別のプロセスが使用中」で起動できないときの自動修復
+    # (重複した接続の削除 / ディスクのオフライン化。他 VM の設定には触れない)
+    [switch]$Repair
 )
 
 $ErrorActionPreference = "Stop"
@@ -33,6 +37,96 @@ if ($Stop) {
         Write-Host "シャットダウンを要求しました。"
     } else {
         Write-Host "VM は起動していません ($($vm.State))。"
+    }
+    exit 0
+}
+
+# ============================================================
+#  物理ディスクの取り合いを調べる
+#  (パススルー ディスクは「Windows からオフライン」かつ「1 つの VM だけが接続」
+#   でないと開けず、Start-VM が 0x80070020 で失敗する)
+# ============================================================
+function Get-PassthroughDisks([string]$Name) {
+    @(Get-VMHardDiskDrive -VMName $Name -ErrorAction SilentlyContinue |
+        Where-Object { $null -ne $_.DiskNumber })
+}
+
+function Test-DiskReady([switch]$Fix) {
+    $problems = @()
+    $mine = Get-PassthroughDisks $VMName
+    if ($mine.Count -eq 0) { return $problems }   # 仮想ディスク運用なら対象外
+
+    # 1) 同じディスクを二重に接続していないか (作成をやり直したときに起きやすい)
+    foreach ($g in ($mine | Group-Object DiskNumber)) {
+        if ($g.Count -le 1) { continue }
+        $problems += "ディスク $($g.Name) が $($g.Count) 回接続されています (二重接続)"
+        if ($Fix) {
+            foreach ($extra in @($g.Group | Select-Object -Skip 1)) {
+                Remove-VMHardDiskDrive -VMName $VMName `
+                    -ControllerType $extra.ControllerType `
+                    -ControllerNumber $extra.ControllerNumber `
+                    -ControllerLocation $extra.ControllerLocation
+                Write-Host "  余分な接続を外しました (ディスク $($g.Name))" -ForegroundColor Green
+            }
+        }
+    }
+
+    $diskNums = @($mine | Select-Object -ExpandProperty DiskNumber -Unique)
+
+    # 2) 他の VM が同じ物理ディスクを掴んでいないか (旧構成の VM が残っている等)
+    foreach ($other in @(Get-VM | Where-Object { $_.Name -ne $VMName })) {
+        foreach ($d in (Get-PassthroughDisks $other.Name)) {
+            if ($diskNums -contains $d.DiskNumber) {
+                $problems += "VM『$($other.Name)』も同じディスク $($d.DiskNumber) を使っています (同時には使えません)"
+            }
+        }
+    }
+
+    # 3) Windows 側でオンラインのままになっていないか
+    foreach ($n in $diskNums) {
+        $d = Get-Disk -Number $n -ErrorAction SilentlyContinue
+        if ($d -and -not $d.IsOffline) {
+            $problems += "ディスク $n が Windows でオンラインのままです"
+            if ($Fix) {
+                Set-Disk -Number $n -IsOffline $true
+                Write-Host "  ディスク $n をオフラインにしました" -ForegroundColor Green
+            }
+        }
+    }
+    return $problems
+}
+
+function Show-DiskHelp($Problems) {
+    Write-Host ""
+    Write-Host "ディスクを開けないため起動できません。考えられる原因:" -ForegroundColor Red
+    foreach ($p in $Problems) { Write-Host "  - $p" -ForegroundColor Yellow }
+    if ($Problems.Count -eq 0) {
+        Write-Host "  - WSL がディスクを掴んでいる可能性があります" -ForegroundColor Yellow
+        Write-Host "  - バックアップ・暗号化・ディスク管理ツールが使用中の可能性があります" -ForegroundColor Yellow
+    }
+    Write-Host ""
+    Write-Host "対処:" -ForegroundColor Cyan
+    Write-Host "  1. 自動で直せる分を直す : .\02-start-field-vm.ps1 -Repair"
+    Write-Host "  2. WSL を切り離す       : wsl --unmount \\.\PHYSICALDRIVE0   (その後 wsl --shutdown)"
+    Write-Host "  3. 他 VM が使っている場合: その VM を停止し、Hyper-V マネージャーでディスク接続を外す"
+    Write-Host "  4. それでも駄目なら PC を再起動すると、掴んでいたプロセスごと解放されます"
+}
+
+if ($Repair) {
+    Write-Host "ディスクの取り合いを診断しています..." -ForegroundColor Cyan
+    $before = Test-DiskReady -Fix
+    if ($before.Count -eq 0) {
+        Write-Host "自動で直せる問題は見つかりませんでした (接続は 1 つ・オフライン済み)。" -ForegroundColor Green
+        Show-DiskHelp @()
+    } else {
+        Write-Host "見つかった問題:" -ForegroundColor Yellow
+        foreach ($p in $before) { Write-Host "  - $p" }
+        $after = Test-DiskReady
+        if ($after.Count -eq 0) {
+            Write-Host "直しました。起動してみてください: .\02-start-field-vm.ps1" -ForegroundColor Green
+        } else {
+            Show-DiskHelp $after
+        }
     }
     exit 0
 }
@@ -59,7 +153,16 @@ if ($vm.State -ne "Running") {
         } catch { }
     }
     Write-Host "EdgeBox を起動しています..." -ForegroundColor Cyan
-    Start-VM -Name $VMName
+    try {
+        Start-VM -Name $VMName -ErrorAction Stop
+    } catch {
+        Write-Host ""
+        Write-Host "起動に失敗しました: $($_.Exception.Message)" -ForegroundColor Red
+        if ($_.Exception.Message -match '0x80070020|使用中|in use') {
+            Show-DiskHelp (Test-DiskReady)
+        }
+        exit 1
+    }
 }
 
 # コンソール画面 (起動ログ・専用機の画面) を表示。モニター2に置いて監視用に
