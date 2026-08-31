@@ -6,8 +6,3 @@ display-log.txt
 display-status.txt
 display-error.txt
 *.flag
-
-# CPU コア分割 (10-cpu-partition.ps1) の端末固有ファイル
-cpu-partition.json
-cpu-partition-log.txt
-tools/

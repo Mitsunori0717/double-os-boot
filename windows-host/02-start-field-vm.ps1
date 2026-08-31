@@ -62,12 +62,6 @@ if ($vm.State -ne "Running") {
     Start-VM -Name $VMName
 }
 
-# CPU コア分割 (10-cpu-partition.ps1 -Apply 済みの場合) を起動直後に反映
-# (自動タスクも同じ適用を行うため、ここは即時反映のための先回り)
-if (Test-Path (Join-Path $PSScriptRoot "cpu-partition.json")) {
-    try { & (Join-Path $PSScriptRoot "10-cpu-partition.ps1") -ApplyRuntime } catch { }
-}
-
 # コンソール画面 (起動ログ・専用機の画面) を表示。モニター2に置いて監視用に
 Start-Process "vmconnect.exe" -ArgumentList "localhost", $VMName
 

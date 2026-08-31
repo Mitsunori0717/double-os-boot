@@ -1,6 +1,6 @@
 ﻿<#
 .SYNOPSIS
-    Windows ホストと EdgeBox VM の間で CPU コアを分割し、固定割り当て (ピンニング) します。
+    Windows ホストと Hyper-V ゲスト VM の間で CPU コアを分割し、固定割り当て (ピンニング) します。
     主構成 (Linux ホスト) の isolcpus + vcpupin に相当する機能の Windows ホスト版です。
 
 .DESCRIPTION
@@ -10,7 +10,7 @@
         クライアント版 Windows の Hyper-V は既定で「root スケジューラ」で動いており、
         ゲスト VM の仮想プロセッサは vmmem プロセスのスレッドとして Windows の
         スケジューラが実行しています。この性質を利用して:
-          - vmmem (= EdgeBox の CPU 実行の実体) をゲスト用コアへ物理固定
+          - vmmem (= ゲストの CPU 実行の実体) をゲスト用コアへ物理固定
           - vmwp (= VM のディスク/ネットワーク処理) をホスト用コアへ固定
           - vmmem の優先度を High に昇格 (ゲスト用コアを Windows 側の処理が
             奪いにくくする = ホスト側の締め出しを優先度で担保)
@@ -22,7 +22,7 @@
           - minroot (bcdedit hypervisorrootproc) で Windows ホスト自体を
             下位コアへ封じ込める (Linux の isolcpus 相当。Windows のプロセス・
             割り込みはゲスト用コアに一切載らなくなる)
-          - CPU グループ (Microsoft 製 CpuGroups.exe) で EdgeBox を上位コアへ
+          - CPU グループ (Microsoft 製 CpuGroups.exe) でゲストを上位コアへ
             固定する (Linux の vcpupin 相当)
         両方向とも物理的な分割になります。CpuGroups.exe が使えない環境では
         minroot + 処理能力予約 (-Reserve) までの「準分割」で止まり、その旨を
@@ -32,20 +32,21 @@
            専用用途向けで、-Undo でいつでも既定へ戻せます。
 
 .EXAMPLE
-    .\10-cpu-partition.ps1                                   # 現状の確認 (何も変更しない)
-    .\10-cpu-partition.ps1 -HostCores 4                      # 分割案のプレビュー (何も変更しない)
-    .\10-cpu-partition.ps1 -Apply -Mode runtime -HostCores 4 # 再起動なしで分割 (ホストに物理4コア)
-    .\10-cpu-partition.ps1 -Apply -Mode full    -HostCores 4 # 完全分割 (再起動→もう一度同じコマンド)
-    .\10-cpu-partition.ps1 -Verify                           # 実測: 各コアで誰が実行されているか
-    .\10-cpu-partition.ps1 -Undo                             # 全て元に戻す
+    .\cpu-partition.ps1                                   # 現状の確認 (何も変更しない)
+    .\cpu-partition.ps1 -HostCores 4                      # 分割案のプレビュー (何も変更しない)
+    .\cpu-partition.ps1 -Apply -Mode runtime -HostCores 4 # 再起動なしで分割 (ホストに物理4コア)
+    .\cpu-partition.ps1 -Apply -Mode full    -HostCores 4 # 完全分割 (再起動→もう一度同じコマンド)
+    .\cpu-partition.ps1 -Verify                           # 実測: 各コアで誰が実行されているか
+    .\cpu-partition.ps1 -Undo                             # 全て元に戻す
 
 .EXAMPLE
     # P/E コア混成 CPU (Intel 12世代以降) や、割り当てを番号で決めたい場合
-    .\10-cpu-partition.ps1 -Apply -Mode runtime -HostLps "0-11" -GuestLps "12-19"
+    .\cpu-partition.ps1 -Apply -Mode runtime -HostLps "0-11" -GuestLps "12-19"
 
 .NOTES
     管理者権限の PowerShell で実行してください (-Verify と現状確認は管理者なしでも可)。
-    設定は cpu-partition.json に保存され、02-start-field-vm.ps1 と自動タスクが参照します。
+    設定は cpu-partition.json に保存され、自動タスクが参照します。
+    対象 VM は -VMName で指定します (既定: EdgeBox)。どの Hyper-V VM にも使えます。
 #>
 [CmdletBinding()]
 param(
@@ -58,7 +59,7 @@ param(
 
     # ホスト Windows に残す物理コア数 (SMT 有効なら論理 CPU は 2 倍になる)
     [int]$HostCores = 0,
-    # EdgeBox に渡す物理コア数 (省略時: 残り全部)
+    # ゲスト VM に渡す物理コア数 (省略時: 残り全部)
     [int]$GuestCores = 0,
     # 論理 CPU 番号での明示指定 (例: "0-7" や "0-3,8-11")。指定時は -HostCores より優先
     [string]$HostLps = "",
@@ -76,7 +77,7 @@ param(
     [int]$Seconds = 5,          # -Verify の採取時間
     [switch]$Undo,              # 全設定の解除
 
-    # --- 内部用 (02-start-field-vm.ps1 と自動タスクが呼ぶ) ---
+    # --- 内部用 (自動タスクが呼ぶ) ---
     [switch]$ApplyRuntime,
     [switch]$Quiet,
     [switch]$NoConfirm
@@ -87,8 +88,8 @@ $ErrorActionPreference = "Stop"
 $ConfigFile  = Join-Path $PSScriptRoot "cpu-partition.json"
 $LogFile     = Join-Path $PSScriptRoot "cpu-partition-log.txt"
 $ToolsDir    = Join-Path $PSScriptRoot "tools"
-$PinTaskName = "EdgeBox-CPU-Pin"
-$GroupId     = "b0edb0ed-c01e-4a11-8000-0000000000e1"   # EdgeBox 用 CPU グループの固定 ID
+$PinTaskName = "CpuPartition-Pin"
+$GroupId     = "b0edb0ed-c01e-4a11-8000-0000000000e1"   # 本ツール専用の CPU グループ固定 ID
 $NullGroupId = "00000000-0000-0000-0000-000000000000"
 $CpuGroupsUrl = "https://go.microsoft.com/fwlink/?linkid=865968"  # Microsoft 公式配布の CpuGroups.exe
 
@@ -288,7 +289,7 @@ function Resolve-Plan([object]$Topo, [string]$PlanMode) {
                   "番号の対応はタスクマネージャーのパフォーマンスタブ、または CpuGroups.exe GetCpuTopology で確認できます。"
         }
         $n = $HostCores * $Topo.SmtPerCore
-        if ($n -ge $total) { throw "ホストに $HostCores コア (論理 $n) を残すと EdgeBox 用が残りません (全論理 $total)" }
+        if ($n -ge $total) { throw "ホストに $HostCores コア (論理 $n) を残すとゲスト用が残りません (全論理 $total)" }
         $h = @(0..($n - 1))
     } else {
         throw "分割の指定がありません。-HostCores <残す物理コア数> か -HostLps `"0-7`" の形式で指定してください。"
@@ -300,7 +301,7 @@ function Resolve-Plan([object]$Topo, [string]$PlanMode) {
         if ($Topo.HybridSuspected) { throw "P/E コア混成の可能性があるため -GuestLps で明示してください。" }
         $n = $GuestCores * $Topo.SmtPerCore
         $rest = @(0..($total - 1) | Where-Object { $h -notcontains $_ })
-        if ($n -gt $rest.Count) { throw "EdgeBox 用に $GuestCores コア (論理 $n) は確保できません (残り論理 $($rest.Count))" }
+        if ($n -gt $rest.Count) { throw "ゲスト用に $GuestCores コア (論理 $n) は確保できません (残り論理 $($rest.Count))" }
         $g = @($rest | Select-Object -First $n)
     } else {
         $g = @(0..($total - 1) | Where-Object { $h -notcontains $_ })
@@ -308,10 +309,10 @@ function Resolve-Plan([object]$Topo, [string]$PlanMode) {
 
     # --- 妥当性 ---
     foreach ($i in $g) {
-        if ($h -contains $i) { throw "論理 CPU $i がホストと EdgeBox の両方に指定されています" }
+        if ($h -contains $i) { throw "論理 CPU $i がホストとゲストの両方に指定されています" }
     }
     if ($h.Count -lt 2) { throw "ホスト側は最低 2 論理 CPU 必要です (VM のディスク/ネットワーク処理もホスト側で動くため 4 以上を推奨)" }
-    if ($g.Count -lt 1) { throw "EdgeBox 側の論理 CPU がありません" }
+    if ($g.Count -lt 1) { throw "ゲスト側の論理 CPU がありません" }
 
     if ($PlanMode -eq "full") {
         # minroot はホストを「先頭から N 個」の論理 CPU に閉じ込める方式のため、
@@ -329,7 +330,7 @@ function Resolve-Plan([object]$Topo, [string]$PlanMode) {
         Say ("注意: 論理 CPU {0} はどちらにも割り当てられず遊びます。" -f (ConvertTo-LpRangeText $rest)) "Yellow"
     }
     if ($h.Count -lt 4) {
-        Say "注意: ホスト側が論理 4 未満です。EdgeBox のディスク/ネットワーク処理はホスト側コアで動くため、細くしすぎると EdgeBox の I/O も遅くなります。" "Yellow"
+        Say "注意: ホスト側が論理 4 未満です。VM のディスク/ネットワーク処理はホスト側コアで動くため、細くしすぎると VM の I/O も遅くなります。" "Yellow"
     }
     # SMT 境界チェック (同一物理コアの 2 スレッドが両側にまたがると分割が甘くなる)
     if (-not $Topo.HybridSuspected -and $Topo.SmtPerCore -eq 2) {
@@ -532,7 +533,7 @@ if ($Verify) {
     Write-Host "=== CPU コア分割の実測 (${Seconds}秒間の採取) ===" -ForegroundColor Cyan
     Write-Host "  ホスト Windows から見える論理 CPU 数: $([Environment]::ProcessorCount) / 物理には $($topo.Lps)"
     if ($cfg) {
-        Write-Host "  計画: ホスト = CPU $(ConvertTo-LpRangeText $planHost) / EdgeBox = CPU $(ConvertTo-LpRangeText $planGuest) ($($cfg.Mode) モード)"
+        Write-Host "  計画: ホスト = CPU $(ConvertTo-LpRangeText $planHost) / ゲスト = CPU $(ConvertTo-LpRangeText $planGuest) ($($cfg.Mode) モード)"
     } else {
         Write-Host "  計画: 未適用 (cpu-partition.json なし)"
     }
@@ -546,7 +547,7 @@ if ($Verify) {
         Write-Host "代わりの確認手段: タスクマネージャーで vmmem の CPU 使用がゲスト用コアに寄っているか (詳細タブ→列に「CPU」追加)。"
         exit 1
     }
-    Write-Host "  採取中... (EdgeBox が収集動作中だと、より分かりやすい結果になります)"
+    Write-Host "  採取中... (ゲスト VM に負荷がかかっているほど分かりやすい結果になります)"
     $s1 = @(Get-CimInstance -ClassName $cls.CimClassName)
     Start-Sleep -Seconds $Seconds
     $s2 = @(Get-CimInstance -ClassName $cls.CimClassName)
@@ -562,7 +563,7 @@ if ($Verify) {
         $guest = [Math]::Max(0, [Math]::Min(100, 100.0 * ($b.PercentGuestRunTime - $a.PercentGuestRunTime) / $dt))
         $total = [Math]::Max(0, [Math]::Min(100, 100.0 * ($b.PercentTotalRunTime - $a.PercentTotalRunTime) / $dt))
         $side = ""
-        if ($planGuest -contains $lp) { $side = "EdgeBox用" }
+        if ($planGuest -contains $lp) { $side = "ゲスト用" }
         elseif ($planHost -contains $lp) { $side = "ホスト用" }
         $rows += [pscustomobject]@{ LP = $lp; PlanSide = $side; GuestPct = $guest; HostEtcPct = [Math]::Max(0, $total - $guest) }
     }
@@ -577,7 +578,7 @@ if ($Verify) {
     foreach ($r in $rows) {
         $mark = ""
         if ($r.PlanSide -eq "ホスト用" -and $r.GuestPct -ge 5) { $mark = " ← ゲストが載っている" }
-        if ($r.PlanSide -eq "EdgeBox用" -and $r.HostEtcPct -ge 20) { $mark = " ← ホスト側の処理が多い" }
+        if ($r.PlanSide -eq "ゲスト用" -and $r.HostEtcPct -ge 20) { $mark = " ← ホスト側の処理が多い" }
         Write-Host ("  {0,4} {1,-10} {2,12:N1} {3,16:N1}{4}" -f $r.LP, $r.PlanSide, $r.GuestPct, $r.HostEtcPct, $mark)
     }
 
@@ -587,12 +588,12 @@ if ($Verify) {
         Write-Host ""
         if ($gAll -gt 1) {
             $pct = [Math]::Round(100.0 * $gOn / $gAll, 1)
-            Write-Host "  EdgeBox の CPU 実行のうち、計画どおり EdgeBox 用コア上で実行された割合: $pct%" -ForegroundColor Cyan
+            Write-Host "  ゲスト ($VMName) の CPU 実行のうち、計画どおりゲスト用コア上で実行された割合: $pct%" -ForegroundColor Cyan
             if ($pct -ge 95) { Write-Host "  → 分割は効いています。" -ForegroundColor Green }
             elseif ($pct -ge 70) { Write-Host "  → おおむね効いていますが、完全ではありません (runtime モードの場合は正常範囲。full モードで厳密化できます)。" -ForegroundColor Yellow }
             else { Write-Host "  → 分割が効いていません。-Apply の実行状況と再起動の要否を確認してください。" -ForegroundColor Red }
         } else {
-            Write-Host "  ゲストの CPU 使用がほぼゼロのため判定できません。EdgeBox 稼働中にもう一度実行してください。" -ForegroundColor Yellow
+            Write-Host "  ゲストの CPU 使用がほぼゼロのため判定できません。ゲスト VM の稼働中にもう一度実行してください。" -ForegroundColor Yellow
         }
     }
     exit 0
@@ -648,7 +649,7 @@ if (-not $Apply) {
     Write-Host "  CpuGroups.exe     : $(if ($exe) { $exe } else { '(なし。full モードの完全固定時に使用)' })"
     if ($cfg) {
         Write-Host ""
-        Write-Host "  適用済みの計画    : $($cfg.Mode) モード / ホスト = CPU $(ConvertTo-LpRangeText @([int[]]$cfg.HostLps)) / EdgeBox = CPU $(ConvertTo-LpRangeText @([int[]]$cfg.GuestLps))" -ForegroundColor Green
+        Write-Host "  適用済みの計画    : $($cfg.Mode) モード / ホスト = CPU $(ConvertTo-LpRangeText @([int[]]$cfg.HostLps)) / ゲスト = CPU $(ConvertTo-LpRangeText @([int[]]$cfg.GuestLps))" -ForegroundColor Green
     } else {
         Write-Host ""
         Write-Host "  適用済みの計画    : なし" -ForegroundColor Yellow
@@ -661,15 +662,15 @@ if (-not $Apply) {
         if ($previewMode -eq "") { $previewMode = "runtime" }
         $plan = Resolve-Plan $topo $previewMode
         Write-Host "  ホスト Windows : CPU $(ConvertTo-LpRangeText $plan.HostLps) ($($plan.HostLps.Count) 論理)"
-        Write-Host "  EdgeBox        : CPU $(ConvertTo-LpRangeText $plan.GuestLps) ($($plan.GuestLps.Count) 論理)"
+        Write-Host "  ゲスト VM      : CPU $(ConvertTo-LpRangeText $plan.GuestLps) ($($plan.GuestLps.Count) 論理)"
         Write-Host ""
-        Write-Host "  適用するには: .\10-cpu-partition.ps1 -Apply -Mode runtime $(if ($HostLps) { "-HostLps `"$HostLps`"" } else { "-HostCores $HostCores" })$(if ($GuestLps) { " -GuestLps `"$GuestLps`"" })" -ForegroundColor Cyan
-        Write-Host "    -Mode runtime : 再起動不要。EdgeBox を専用コアへ固定 (まず推奨)"
+        Write-Host "  適用するには: .\cpu-partition.ps1 -Apply -Mode runtime $(if ($HostLps) { "-HostLps `"$HostLps`"" } else { "-HostCores $HostCores" })$(if ($GuestLps) { " -GuestLps `"$GuestLps`"" })" -ForegroundColor Cyan
+        Write-Host "    -Mode runtime : 再起動不要。ゲスト VM を専用コアへ固定 (まず推奨)"
         Write-Host "    -Mode full    : 再起動 2 回で完全分割 (ホスト側もコアから締め出す)"
     } else {
         Write-Host ""
-        Write-Host "使い方: .\10-cpu-partition.ps1 -HostCores 4        ← 分割案を見る" -ForegroundColor Cyan
-        Write-Host "        Get-Help .\10-cpu-partition.ps1 -Full      ← 説明"
+        Write-Host "使い方: .\cpu-partition.ps1 -HostCores 4        ← 分割案を見る" -ForegroundColor Cyan
+        Write-Host "        Get-Help .\cpu-partition.ps1 -Full      ← 説明"
     }
     exit 0
 }
@@ -677,7 +678,7 @@ if (-not $Apply) {
 # ---------- -Apply ----------
 if (-not $isAdmin) { Write-Error "管理者権限の PowerShell で実行してください。"; exit 1 }
 if (-not (Get-Command Get-VM -ErrorAction SilentlyContinue)) {
-    Write-Error "Hyper-V が有効になっていません。alternatives\hyperv\windows\01-enable-hyperv.ps1 を実行して再起動してください。"
+    Write-Error "Hyper-V が有効になっていません。管理者 PowerShell で Enable-WindowsOptionalFeature -Online -FeatureName Microsoft-Hyper-V-All を実行して再起動してください。"
     exit 1
 }
 if ($Mode -eq "") {
@@ -685,7 +686,7 @@ if ($Mode -eq "") {
     exit 1
 }
 if (-not $vm) {
-    Write-Error "VM '$VMName' がありません。01-create-field-vm.ps1 で作成してください。"
+    Write-Error "VM '$VMName' がありません。-VMName で対象の VM 名を指定してください (一覧: Get-VM)。"
     exit 1
 }
 
@@ -693,7 +694,7 @@ if (-not $vm) {
 if ($HostCores -eq 0 -and $HostLps -eq "" -and $cfg -and $cfg.Mode -eq $Mode) {
     $HostLps  = ConvertTo-LpRangeText @([int[]]$cfg.HostLps)
     $GuestLps = ConvertTo-LpRangeText @([int[]]$cfg.GuestLps)
-    Say "保存済みの計画を使用します (ホスト = $HostLps / EdgeBox = $GuestLps)" "Cyan"
+    Say "保存済みの計画を使用します (ホスト = $HostLps / ゲスト = $GuestLps)" "Cyan"
 }
 $plan = Resolve-Plan $topo $Mode
 $hostText  = ConvertTo-LpRangeText $plan.HostLps
@@ -710,16 +711,16 @@ try {
 Write-Host ""
 Write-Host "=== CPU コア分割の適用 ($Mode モード) ===" -ForegroundColor Cyan
 Write-Host "  ホスト Windows : CPU $hostText ($($plan.HostLps.Count) 論理)"
-Write-Host "  EdgeBox        : CPU $guestText ($($plan.GuestLps.Count) 論理)"
+Write-Host "  ゲスト VM      : CPU $guestText ($($plan.GuestLps.Count) 論理)"
 
-# vCPU 数と EdgeBox 用コア数の一致を確認 (1 論理 CPU = 1 仮想プロセッサが理想形)
+# vCPU 数とゲスト用コア数の一致を確認 (1 論理 CPU = 1 仮想プロセッサが理想形)
 $vcpu = (Get-VMProcessor -VMName $VMName).Count
 if ($vcpu -ne $plan.GuestLps.Count) {
     if ($vm.State -eq "Off") {
         Write-Host "  仮想プロセッサ数を $vcpu → $($plan.GuestLps.Count) に合わせます (1 コア = 1 仮想プロセッサが理想のため)" -ForegroundColor Cyan
         Set-VMProcessor -VMName $VMName -Count $plan.GuestLps.Count
     } else {
-        Write-Host "  注意: 仮想プロセッサ数 ($vcpu) が EdgeBox 用論理 CPU 数 ($($plan.GuestLps.Count)) と不一致です。" -ForegroundColor Yellow
+        Write-Host "  注意: 仮想プロセッサ数 ($vcpu) がゲスト用論理 CPU 数 ($($plan.GuestLps.Count)) と不一致です。" -ForegroundColor Yellow
         Write-Host "        VM 停止中に再度 -Apply すると自動調整します (ずれたままでも動きますが理想は 1:1)。" -ForegroundColor Yellow
     }
 }
@@ -728,7 +729,7 @@ if ($Mode -eq "runtime") {
     # ======================== runtime モード ========================
     if ($schedNow -ne "root") {
         Write-Error ("runtime モードは root スケジューラ (クライアント既定) 専用ですが、現在は '$schedNow' です。`n" +
-            "full モードを使うか、.\10-cpu-partition.ps1 -Undo で既定に戻して再起動してください。")
+            "full モードを使うか、.\cpu-partition.ps1 -Undo で既定に戻して再起動してください。")
         exit 1
     }
     if (-not $bcd) { try { $bcd = Get-BcdHvSettings } catch { } }
@@ -748,7 +749,7 @@ if ($Mode -eq "runtime") {
         NoPriorityBoost = [bool]$NoPriorityBoost
         UpdatedAt = (Get-Date -Format "yyyy-MM-dd HH:mm:ss")
     })
-    Write-PinLog "Apply(runtime): ホスト=$hostText EdgeBox=$guestText"
+    Write-PinLog "Apply(runtime): ホスト=$hostText ゲスト=$guestText"
 
     Register-PinTask
     Write-Host "  VM 起動時に自動で固定し直すタスク '$PinTaskName' を登録しました" -ForegroundColor Green
@@ -759,14 +760,14 @@ if ($Mode -eq "runtime") {
         if ($msg -like "ok:*") { Write-Host "  即時適用: $($msg.Substring(4))" -ForegroundColor Green }
         else { Write-Host "  即時適用: $msg" -ForegroundColor Yellow }
     } else {
-        Write-Host "  VM は停止中です。次回起動時 (02-start-field-vm.ps1 または自動起動) に適用されます。"
+        Write-Host "  VM は停止中です。次回起動時に自動タスクが適用します。"
     }
 
     Write-Host ""
     Write-Host "適用しました (runtime モード)。" -ForegroundColor Green
-    Write-Host "  - EdgeBox の CPU 実行は CPU $guestText に物理固定されました"
+    Write-Host "  - ゲスト ($VMName) の CPU 実行は CPU $guestText に物理固定されました"
     Write-Host "  - Windows 側の処理は優先度で押し出されます (完全な締め出しは -Mode full)"
-    Write-Host "  - 効き具合の実測: .\10-cpu-partition.ps1 -Verify" -ForegroundColor Cyan
+    Write-Host "  - 効き具合の実測: .\cpu-partition.ps1 -Verify" -ForegroundColor Cyan
     exit 0
 }
 
@@ -805,14 +806,14 @@ if (-not $bcdReady) {
 
     Write-Host ""
     Write-Host "書き込みました。PC を再起動してから、もう一度同じコマンドを実行してください:" -ForegroundColor Green
-    Write-Host "    .\10-cpu-partition.ps1 -Apply -Mode full" -ForegroundColor Cyan
+    Write-Host "    .\cpu-partition.ps1 -Apply -Mode full" -ForegroundColor Cyan
     Write-Host "  (計画は保存済みのため、コア指定の再入力は不要です)"
     exit 0
 }
 
-# ---- 第 2 段階: 再起動後の確認と EdgeBox のコア固定 ----
+# ---- 第 2 段階: 再起動後の確認とゲストのコア固定 ----
 Write-Host ""
-Write-Host "【第 2 段階】再起動後の反映確認と EdgeBox のコア固定を行います。" -ForegroundColor Cyan
+Write-Host "【第 2 段階】再起動後の反映確認とゲスト VM のコア固定を行います。" -ForegroundColor Cyan
 
 $visibleLps = [Environment]::ProcessorCount
 # SMT なしの CPU では core 指定でも classic として動作・報告される (仕様) ため同一視する
@@ -827,7 +828,7 @@ if (-not $schedOk -or $visibleLps -ne $wantRootProc) {
         Write-Host "PC をまだ再起動していない場合は、再起動してから再実行してください。" -ForegroundColor Yellow
     } else {
         Write-Host "再起動済みでこの表示の場合、この PC では minroot が効いていません。" -ForegroundColor Red
-        Write-Host "  → .\10-cpu-partition.ps1 -Undo で戻したうえで、-Mode runtime をご利用ください。" -ForegroundColor Red
+        Write-Host "  → .\cpu-partition.ps1 -Undo で戻したうえで、-Mode runtime をご利用ください。" -ForegroundColor Red
     }
     exit 1
 }
@@ -840,7 +841,7 @@ try { Unregister-ScheduledTask -TaskName $PinTaskName -Confirm:$false -ErrorActi
 # --- CpuGroups.exe の用意 ---
 if (-not $exe) {
     Write-Host ""
-    Write-Host "EdgeBox 側の完全固定には Microsoft 製 CpuGroups.exe が必要です (未検出)。" -ForegroundColor Yellow
+    Write-Host "ゲスト側の完全固定には Microsoft 製 CpuGroups.exe が必要です (未検出)。" -ForegroundColor Yellow
     $dl = "n"
     if (-not $NoConfirm) { $dl = Read-Host "Microsoft Download Center から取得しますか? (y/N)" }
     if ($dl -eq "y") {
@@ -865,7 +866,7 @@ if (-not $exe) {
 $groupBound = $false
 if ($exe) {
     Write-Host ""
-    Write-Host "CPU グループで EdgeBox を CPU $guestText に固定します..." -ForegroundColor Cyan
+    Write-Host "CPU グループで VM '$VMName' を CPU $guestText に固定します..." -ForegroundColor Cyan
     # 作り直しに備えて一旦ほどく (存在しなければ単に失敗し、無視してよい)
     Invoke-CpuGroups $exe @("SetVmGroup", "/VmName:$VMName", "/GroupId:$NullGroupId") | Out-Null
     Invoke-CpuGroups $exe @("DeleteGroup", "/GroupId:$GroupId") | Out-Null
@@ -878,7 +879,7 @@ if ($exe) {
     }
     if ($rCreate.Ok -and $rBind -and $rBind.Ok) {
         $groupBound = $true
-        Write-Host "  CPU グループを作成し、EdgeBox を割り当てました" -ForegroundColor Green
+        Write-Host "  CPU グループを作成し、VM '$VMName' を割り当てました" -ForegroundColor Green
         $rShow = Invoke-CpuGroups $exe @("GetGroups")
         if ($rShow.Ok -and $rShow.Output) { Write-Host ($rShow.Output -replace "(?m)^", "    ") }
     } else {
@@ -887,7 +888,7 @@ if ($exe) {
         Write-Host "  CPU グループの作成に失敗しました: $failOut" -ForegroundColor Yellow
         Write-Host "  (CPU グループは Windows Server の機能で、クライアント版では動かない環境もあります)" -ForegroundColor Yellow
         if ($vm.State -ne "Off") {
-            Write-Host "  VM 実行中が原因の可能性もあります。VM を停止して再実行してみてください: .\02-start-field-vm.ps1 -Stop" -ForegroundColor Yellow
+            Write-Host "  VM 実行中が原因の可能性もあります。VM を停止して再実行してみてください: Stop-VM $VMName" -ForegroundColor Yellow
         }
     }
 }
@@ -914,11 +915,11 @@ Write-Host ""
 if ($groupBound) {
     Write-Host "完全分割が成立しました (Linux 主構成の isolcpus + vcpupin 相当)。" -ForegroundColor Green
     Write-Host "  - ホスト Windows : CPU $hostText から出られません (minroot)"
-    Write-Host "  - EdgeBox        : CPU $guestText から出られません (CPU グループ)"
+    Write-Host "  - ゲスト VM      : CPU $guestText から出られません (CPU グループ)"
 } else {
     Write-Host "準分割で適用しました。" -ForegroundColor Yellow
     Write-Host "  - ホスト Windows : CPU $hostText から出られません (minroot) ← ここは完全"
-    Write-Host "  - EdgeBox        : 空いている CPU $guestText 上でほぼ実行されます (ハイパーバイザー任せ + 予約で保証)"
+    Write-Host "  - ゲスト VM      : 空いている CPU $guestText 上でほぼ実行されます (ハイパーバイザー任せ + 予約で保証)"
 }
 Write-Host ""
-Write-Host "EdgeBox を起動して実測してください: .\02-start-field-vm.ps1 → .\10-cpu-partition.ps1 -Verify" -ForegroundColor Cyan
+Write-Host "VM を起動して実測してください: Start-VM $VMName → .\cpu-partition.ps1 -Verify" -ForegroundColor Cyan

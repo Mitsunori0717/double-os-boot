@@ -20,7 +20,7 @@ Windows 11(ホスト・ネイティブ動作 = メイン業務はフルスピー
 |---|---|---|
 | ホスト | Linux (Ubuntu) | Windows 11 Pro |
 | ネイティブ側 | Linux | **Windows(重い業務側が素で動く)** |
-| CPU 分割 | コア単位の厳密な固定 | **コア単位の固定割り当てに対応** ([CPU-PARTITION.md](CPU-PARTITION.md)。再起動不要の runtime と完全分割の full の 2 モード) |
+| CPU 分割 | コア単位の厳密な固定 | 標準では仮想プロセッサ数の割り当てのみ。**別口ツール ([../windows-cpu-partition/](../windows-cpu-partition/README.md)) でコア単位の固定割り当てが可能** (本構成とは独立・入れなくても本構成は完結) |
 | GPU | 2系統必要 | **1系統でよい**(専用機は画面をネットワーク経由で提供するため) |
 | 切り分け | GRUB でネイティブ比較 | UEFI 起動メニュー(F8)で専用機をネイティブ起動して比較 |
 
@@ -68,18 +68,18 @@ VM 起動 → サインイン → 左右モニターへの自動表示 (`03-fiel
 人の操作なしにそろいます。アカウント名とパスワードはデスクトップの
 『自動サインイン設定』アイコンからいつでも変更できます (`-Disable` で元に戻せます)。
 
-## CPU コアの分割割り当て (任意・推奨)
+## CPU コアの分割割り当て (任意・別口ツール)
 
-主構成の isolcpus + vcpupin に相当するコア分割を、Windows ホストでも行えます。
-Windows 側が重い処理をしても EdgeBox の収集がコアを奪われなくなります。
+主構成の isolcpus + vcpupin に相当するコア分割は、**独立ツール
+[../windows-cpu-partition/](../windows-cpu-partition/README.md)** で行えます
+(本構成のスクリプト・設定とは切り離されており、互いに干渉しません)。
+EdgeBox VM に使う場合は VM 名が既定値のため、そのまま実行できます:
 
 ```powershell
-.\10-cpu-partition.ps1 -HostCores 4                      # 分割案の確認 (何も変更しない)
-.\10-cpu-partition.ps1 -Apply -Mode runtime -HostCores 4 # 再起動不要で適用
-.\10-cpu-partition.ps1 -Verify                           # 実測 (各コアで誰が動いたか)
+cd ..\windows-cpu-partition
+.\cpu-partition.ps1 -Apply -Mode runtime -HostCores 4   # 再起動不要で適用
+.\cpu-partition.ps1 -Verify                             # 実測 (各コアで誰が動いたか)
 ```
-
-仕組み・full モード (完全分割)・P/E コア混成 CPU の指定方法は **[CPU-PARTITION.md](CPU-PARTITION.md)**。
 
 ## ネイティブ起動に戻す(切り分け・撤退手順)
 
