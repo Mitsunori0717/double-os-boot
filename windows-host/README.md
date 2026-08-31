@@ -39,17 +39,24 @@ Windows 11(ホスト・ネイティブ動作 = メイン業務はフルスピー
 # 1. Hyper-V 有効化 (未実施の場合。要再起動)
 ..\alternatives\hyperv\windows\01-enable-hyperv.ps1
 
-# 2. ディスク番号と NIC 名を確認
+# 2. ディスク番号・NIC 名・既存スイッチを確認
 Get-Disk
 Get-NetAdapter
+Get-VMSwitch
 
-# 3. VM 作成 (専用機ディスクが 0、有線 LAN が "イーサネット" の例)
-#    -NetAdapterName には Get-NetAdapter の「Name」を指定 (IP アドレスでも逆引きします)
+# 3-a. VM 作成 (既に外部スイッチがある場合はそれを指定するのが確実)
+.\01-create-field-vm.ps1 -DiskNumber 0 -SwitchName "EdgeBox-External"
+
+# 3-b. スイッチをこれから作る場合 (-NetAdapterName は Get-NetAdapter の「Name」。IP でも可)
 .\01-create-field-vm.ps1 -DiskNumber 0 -NetAdapterName "イーサネット"
 
 # 4. 起動
 .\02-start-field-vm.ps1
 ```
+
+> 1 枚の LAN ポートを 2 つの外部スイッチに割り当てることはできません。
+> 指定した NIC が既存スイッチに使われている場合は、**そのスイッチを自動で再利用**します
+> (新規作成しないため、ネットワークが切断されません)。
 
 起動後、`Get-VMNetworkAdapter -VMName EdgeBox` で IP を確認し、
 ブラウザでその IP を開けば専用機の管理画面が使えます(モニター2に全画面配置を推奨)。
