@@ -272,17 +272,48 @@ if ($Status) {
     exit 0
 }
 
+# 01 のスクリプトが使えない場合でも作成できるよう、同じ設定をここにも持つ
+function New-FieldVmHere {
+    $sw = $SwitchName
+    if (-not $sw) {
+        $ext = @(Get-VMSwitch -SwitchType External -ErrorAction SilentlyContinue)
+        if ($ext.Count -eq 1) { $sw = $ext[0].Name; Info "外部スイッチ『$sw』を使います" }
+        elseif ($ext.Count -gt 1) {
+            Fail ("外部スイッチが複数あります。-SwitchName で指定してください:`n" +
+                (($ext | ForEach-Object { "  " + $_.Name }) -join "`n"))
+        } else {
+            $sw = "Default Switch"
+            Warn "外部スイッチが無いため Default Switch (NAT) を使います (工作機械からは到達できません)"
+        }
+    }
+    New-VM -Name $VMName -Generation 2 -MemoryStartupBytes ($MemoryGB * 1GB) -NoVHD -SwitchName $sw | Out-Null
+    Set-VMFirmware  -VMName $VMName -EnableSecureBoot Off        # 専用機は独自の署名チェーン
+    Set-VMProcessor -VMName $VMName -Count $CpuCount
+    Add-VMHardDiskDrive -VMName $VMName -DiskNumber $diskNo      # 物理ディスクを無改造のまま接続
+    Set-VMFirmware  -VMName $VMName -FirstBootDevice (Get-VMHardDiskDrive -VMName $VMName)
+    Set-VM -Name $VMName -CheckpointType Disabled -AutomaticStopAction ShutDown
+}
+
 if (-not $targetVm) {
     Step "VM を作成"
     if (-not (Confirm-Step "VM『$VMName』を作成します。よろしいですか?")) { exit 0 }
-    $createArgs = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "`"$Script01`"",
-                    "-DiskNumber", "$diskNo", "-VMName", "`"$VMName`"",
-                    "-MemoryGB", "$MemoryGB", "-CpuCount", "$CpuCount", "-NoConfirm")
-    if ($SwitchName) { $createArgs += @("-SwitchName", "`"$SwitchName`"") }
-    $p = Start-Process powershell.exe -ArgumentList ($createArgs -join " ") -NoNewWindow -Wait -PassThru
-    if ($p.ExitCode -ne 0) { Fail "VM を作成できませんでした (終了コード $($p.ExitCode))。" }
+    $made = $false
+    if (Test-Path $Script01) {
+        $createArgs = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "`"$Script01`"",
+                        "-DiskNumber", "$diskNo", "-VMName", "`"$VMName`"",
+                        "-MemoryGB", "$MemoryGB", "-CpuCount", "$CpuCount", "-NoConfirm")
+        if ($SwitchName) { $createArgs += @("-SwitchName", "`"$SwitchName`"") }
+        $p = Start-Process powershell.exe -ArgumentList ($createArgs -join " ") -NoNewWindow -Wait -PassThru
+        $made = ($p.ExitCode -eq 0) -and [bool](Get-VM -Name $VMName -ErrorAction SilentlyContinue)
+        if (-not $made) { Warn "01-create-field-vm.ps1 では作成できませんでした。この画面の中で作成します。" }
+    } else {
+        Warn "01-create-field-vm.ps1 が見つからないため、この画面の中で作成します。"
+    }
+    if (-not $made) {
+        try { New-FieldVmHere } catch { Fail "VM を作成できませんでした: $($_.Exception.Message)" }
+    }
     $targetVm = Get-VM -Name $VMName -ErrorAction SilentlyContinue
-    if (-not $targetVm) { Write-Error "VM の作成に失敗しました。"; exit 1 }
+    if (-not $targetVm) { Fail "VM の作成に失敗しました。" }
     Ok "VM『$VMName』を作成しました"
 }
 
