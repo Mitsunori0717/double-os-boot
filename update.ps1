@@ -88,7 +88,10 @@ function Get-SourceViaZip {
 #  取得方式 2: ファイルを 1 つずつ取得 (ZIP が遮断されている環境向け)
 # ============================================================
 function Get-RepoEntries([string]$Path) {
-    $api = "https://api.github.com/repos/$Repo/contents/$Path" + "?ref=$BranchEnc"
+    # 末尾に / を付けると GitHub API が 400 を返すため、パス無しのときは付けない
+    $api = "https://api.github.com/repos/$Repo/contents"
+    if ($Path) { $api += "/$Path" }
+    $api += "?ref=$BranchEnc"
     $items = @(Invoke-RestMethod -Uri $api -UseBasicParsing -Headers $UA)
     $out = @()
     foreach ($i in $items) {
