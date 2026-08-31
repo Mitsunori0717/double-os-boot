@@ -550,12 +550,39 @@ if ($SelfTest) {
             return [int64](Get-Process -Id $pr.Vmmem.ProcessId -ErrorAction Stop).ProcessorAffinity
         } catch { return $null }
     }
-    function Invoke-Self([string[]]$Args) {
+    # 呼び出した子プロセスの出力は、NG が出たときだけ見せる (普段は邪魔なので伏せる)
+    $script:lastOut = ""
+    $script:lastOutShown = $true
+    function Show-LastOutput {
+        if ($script:lastOutShown -or -not $script:lastOut) { return }
+        Write-Host "      --- 呼び出したコマンドの出力 ---" -ForegroundColor DarkGray
+        foreach ($l in ($script:lastOut -split "`r?`n")) {
+            if ($l.Trim()) { Write-Host "      | $l" -ForegroundColor DarkGray }
+        }
+        $script:lastOutShown = $true
+    }
+
+    function Invoke-Self([string[]]$ScriptArgs) {
         # 実際に運用者が打つのと同じ形で呼び出す (別プロセス・終了コードで判定)
+        #
+        # 引数名に $Args は使えない。PowerShell の自動変数と衝突し、
+        # 渡したはずの引数が空になって「素の状態表示」が走ってしまう
+        # (この予行自体が最初それで誤判定した)。
         $q = '"' + $PSCommandPath + '"'
-        $all = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $q) + $Args
-        $p = Start-Process -FilePath "powershell.exe" -ArgumentList $all -Wait -PassThru -NoNewWindow
-        return $p.ExitCode
+        $all = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $q) + $ScriptArgs
+        $tmp = Join-Path $env:TEMP ("cpu-selftest-" + [Guid]::NewGuid().ToString("N") + ".txt")
+        try {
+            $p = Start-Process -FilePath "powershell.exe" -ArgumentList $all -Wait -PassThru `
+                -NoNewWindow -RedirectStandardOutput $tmp
+            $script:lastOut = ""
+            if (Test-Path $tmp) {
+                try { $script:lastOut = [string](Get-Content $tmp -Raw -Encoding UTF8) } catch { }
+            }
+            $script:lastOutShown = $false
+            return $p.ExitCode
+        } finally {
+            Remove-Item $tmp -Force -ErrorAction SilentlyContinue
+        }
     }
 
     $results = @()
@@ -564,6 +591,7 @@ if ($SelfTest) {
         $mark = if ($Ok) { "OK  " } else { "NG  " }
         $col  = if ($Ok) { "Green" } else { "Red" }
         Write-Host ("  {0}{1}{2}" -f $mark, $Name, $(if ($Detail) { " — $Detail" } else { "" })) -ForegroundColor $col
+        if (-not $Ok) { Show-LastOutput }
     }
 
     Write-Host ""
@@ -784,6 +812,27 @@ if ($Verify) {
             $lpsNow = @(0..62 | Where-Object { ($affNow -band ([int64]1 -shl $_)) -ne 0 })
             Write-Host "  現在の固定: vmmem(PID $($pm.Id)) = CPU $(ConvertTo-LpRangeText $lpsNow)  ← OS が保証する実行可能範囲"
         } catch { }
+    }
+
+    # 自動タスクの状態。
+    # LastRunTime / LastTaskResult は Get-ScheduledTask ではなく
+    # Get-ScheduledTaskInfo 側にあるため、ここで一緒に出しておく
+    # (Get-ScheduledTask | Select LastRunTime は常に空欄になり、
+    #  「一度も実行されていない」ように見えてしまう)。
+    $pinTask = Get-ScheduledTask -TaskName $PinTaskName -ErrorAction SilentlyContinue
+    if ($pinTask) {
+        $tinfo = $null
+        try { $tinfo = Get-ScheduledTaskInfo -TaskName $PinTaskName -ErrorAction Stop } catch { }
+        if ($tinfo -and $tinfo.LastRunTime -and $tinfo.LastRunTime.Year -gt 1999) {
+            $rtext = if ($tinfo.LastTaskResult -eq 0) { "成功" } else { "結果コード $($tinfo.LastTaskResult)" }
+            $rcol  = if ($tinfo.LastTaskResult -eq 0) { "Gray" } else { "Yellow" }
+            Write-Host ("  自動タスク: {0} / 前回実行 {1} ({2})" -f `
+                $pinTask.State, $tinfo.LastRunTime.ToString("yyyy-MM-dd HH:mm:ss"), $rtext) -ForegroundColor $rcol
+        } else {
+            Write-Host "  自動タスク: $($pinTask.State) / まだ一度も実行されていません (再起動・ログオン・VM 起動で走ります)" -ForegroundColor Yellow
+        }
+    } else {
+        Write-Host "  自動タスク: 未登録 — 再起動すると分割は外れます" -ForegroundColor Yellow
     }
 
     Write-Host "  採取中... (ゲスト VM に負荷がかかっているほど分かりやすい結果になります)"

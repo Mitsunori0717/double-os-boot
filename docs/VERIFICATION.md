@@ -138,15 +138,22 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\cpu-partition.ps1 -VMName 
 
 ```powershell
 # Windows を再起動し、サインイン後 5 分ほど待ってから
-powershell -NoProfile -ExecutionPolicy Bypass -File .\cpu-partition.ps1 -VMName FIELDsystem -Verify -Seconds 30
-Get-ScheduledTask -TaskName CpuPartition-Pin | Select-Object TaskName, State, LastRunTime, LastTaskResult
+powershell -NoProfile -ExecutionPolicy Bypass -File .\cpu-partition.ps1 -Verify -Seconds 30
+Get-ScheduledTaskInfo -TaskName CpuPartition-Pin | Select-Object TaskName, LastRunTime, LastTaskResult
 Get-Content .\cpu-partition-log.txt -Tail 20
 ```
+
+> ⚠️ `LastRunTime` / `LastTaskResult` は **`Get-ScheduledTaskInfo`** 側にあります。
+> `Get-ScheduledTask` に `Select LastRunTime` を付けても**常に空欄**になり、
+> 実際には走っていても「一度も実行されていない」ように見えます。
+> (`-Verify` の出力にも自動タスクの前回実行時刻を出すようにしたので、
+> 通常はそちらを見れば足ります。)
 
 **合格基準**:
 - 割合が 95% 以上に戻っていること
 - `LastTaskResult` が `0` であること
 - ログに再起動後の適用記録が残っていること
+- **`vmmem` の PID が再起動前と変わっていること** (本当に再起動した証拠)
 
 タスクは「起動 2 分後」「ログオン時」「VM 起動イベント」で走ります。
 5 分待っても戻らない場合は、上のログに理由が出ています。
