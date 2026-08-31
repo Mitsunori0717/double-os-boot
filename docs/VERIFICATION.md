@@ -119,21 +119,106 @@ Get-ScheduledTask -TaskName CpuPartition-Pin | Select TaskName, State
 
 **合格基準**: 適用前後でデータの欠落・遅延がないこと。
 
-### 1-4. VM 再起動後も効くか
+### 1-4. VM 起動で自動タスクが走るか (引き金の確認)
+
+自動タスクの**中身**(呼ばれたら固定を戻せる)は `-SelfTest` の [3/3] で確認済みです。
+ここで確かめるのは**引き金**、つまり「VM が起動したときにタスクが自動的に呼ばれるか」です。
+
+自動タスクは Hyper-V のイベントログ (`Microsoft-Windows-Hyper-V-Worker-Admin` の
+**イベント ID 18500** = VM の起動成功) を待ち受けています。
+このイベントは **VM 名で絞っていない**ため、**どの VM を起動しても引き金になります**。
+そこで、本番を止めない方法 A から試すのが安全です。
+
+#### 方法 A: ダミー VM で引き金だけ試す (収集を止めない・推奨)
+
+使い捨ての空 VM を作って起動するだけで、同じイベントが出ます。
+ディスクもネットワークも持たせないため、専用機のディスクには一切触れません。
 
 ```powershell
-Stop-VM FIELDsystem            # 収集を止めてよいタイミングで
-Start-VM FIELDsystem
-Start-Sleep -Seconds 60
-powershell -NoProfile -ExecutionPolicy Bypass -File .\cpu-partition.ps1 -VMName FIELDsystem -Verify -Seconds 30
+# 1. 前の状態を控える
+Get-ScheduledTaskInfo -TaskName CpuPartition-Pin | Select-Object LastRunTime, LastTaskResult
+
+# 2. 空の使い捨て VM を作る (ディスクなし・ネットワーク未接続)
+New-VM -Name CpuPinTest -MemoryStartupBytes 512MB -NoVHD -Generation 1 | Out-Null
+
+# 3. 起動する = イベント 18500 が出る (OS は入っていないので起動には失敗してよい)
+Start-VM CpuPinTest
+Start-Sleep -Seconds 45
+
+# 4. タスクが走ったか
+Get-ScheduledTaskInfo -TaskName CpuPartition-Pin | Select-Object LastRunTime, LastTaskResult
+Get-Content C:\double-os-boot\windows-cpu-partition\cpu-partition-log.txt -Tail 5
+
+# 5. 後片付け (必ず実施)
+Stop-VM CpuPinTest -TurnOff -Force
+Remove-VM CpuPinTest -Force
 ```
 
-**合格基準**: 再起動後も割合が 95% 前後を維持していること
-(自動タスク `CpuPartition-Pin` が効いている証拠)。
+**合格基準**: `LastRunTime` が手順 3 の時刻に更新され、`LastTaskResult` が `0`。
 
-> VM を再起動すると `vmmem` は**別のプロセス (別 PID) として作り直される**ため、
-> 手で入れたコア固定は必ず消えます。ここで割合が戻らない場合、自動タスクが
-> 効いていないということなので、**電源を切るたびに手作業が必要な状態**になります。
+タスクが走ると FIELDsystem の固定を確認し直しますが、既に正しければ何も変更しません
+(同じ値なら書き込まない実装のため、収集への影響はありません)。
+
+> イベントが出ているか自体を見たい場合:
+> ```powershell
+> Get-WinEvent -LogName Microsoft-Windows-Hyper-V-Worker-Admin -MaxEvents 10 |
+>   Select-Object TimeCreated, Id, @{n="Msg";e={$_.Message -replace "`r?`n"," "}} | Format-Table -Wrap
+> ```
+
+#### 方法 B: 本番の VM を再起動する (本来の 1-4)
+
+**⚠️ 収集が止まります** (停止から起動完了まで数分)。影響の少ない時間帯を選んでください。
+
+```powershell
+cd C:\double-os-boot\windows-cpu-partition
+
+# 1. 再起動前の vmmem の PID を控える (「現在の固定: vmmem(PID xxxx)」の行)
+.\cpu-partition.ps1 -Verify -Seconds 5
+
+# 2. 正常シャットダウンが使えるか確認する
+Get-VMIntegrationService -VMName FIELDsystem |
+    Select-Object Name, Enabled, PrimaryStatusDescription
+```
+
+**手順 2 の結果で止め方を決めます。**
+
+| `Shutdown` の状態 | 止め方 |
+|---|---|
+| Enabled=True かつ状態が OK | `Stop-VM FIELDsystem` (正常シャットダウン) |
+| 無効・応答なし | **専用機の管理画面から先にシャットダウン**してから `Stop-VM FIELDsystem -TurnOff` |
+
+> ⚠️ `-TurnOff` / `-Force` は**電源を引き抜くのと同じ**です。収集中のデータや
+> ファイルシステムを壊す可能性があるため、統合サービスが使えないなら
+> 必ず専用機側から先に落としてください。
+
+```powershell
+# 3. 停止 (State が Off になるまで待つ)
+Stop-VM FIELDsystem
+Get-VM FIELDsystem | Select-Object Name, State
+
+# 4. 起動
+Start-VM FIELDsystem
+
+# 5. 2 分ほど待ってから確認
+Start-Sleep -Seconds 120
+.\cpu-partition.ps1 -Verify -Seconds 30
+```
+
+> ⚠️ 起動中は **Ctrl キーを押しっぱなしにしないこと** (機種によっては
+> ファクトリーリセットが選択されます)。
+
+**合格基準**:
+- **`vmmem` の PID が手順 1 と変わっている** (本当に再起動した証拠)
+- 出力の「自動タスク: Ready / 前回実行 〈直近の時刻〉 (成功)」
+- 割合が 95% 以上
+
+#### うまくいかないとき
+
+| 症状 | 対処 |
+|---|---|
+| `Start-VM` が 0x80070020 で失敗 | `.\02-start-field-vm.ps1 -Repair` (ディスクの二重接続・オンライン化を自動で解消) |
+| 起動したが割合が戻らない | 慌てなくてよい。設定は消えていないので `.\cpu-partition.ps1 -Apply -Mode runtime` で即座に戻る。引き金が届いていないだけなので、**分割の機能そのものは無事** |
+| タスクが走った形跡がない | `Get-WinEvent` でイベント 18500 が出ているか確認 (上記)。出ていなければイベント トリガーが登録できていない環境なので、2 分ごとの定期実行で補われる (最大 2 分遅れて反映) |
 
 ### 1-5. Windows 再起動後も効くか (静かに失敗する経路)
 
