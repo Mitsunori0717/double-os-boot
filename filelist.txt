@@ -1,5 +1,6 @@
 # update.ps1 が使うファイル一覧 (自動生成)。
 # api.github.com が遮断された環境でも raw.githubusercontent.com だけで更新できます。
+# ドットファイル (.gitignore 等) は、/. を含む URL を遮断するプロキシがあるため除外しています。
 README.md
 alternatives/hyperv/README.md
 alternatives/hyperv/linux/setup-guest.sh
@@ -22,14 +23,12 @@ docs/TROUBLESHOOTING.md
 filelist.txt
 update.cmd
 update.ps1
-windows-cpu-partition/.gitignore
 windows-cpu-partition/README.md
 windows-cpu-partition/console.cmd
 windows-cpu-partition/cpu-apps.ps1
 windows-cpu-partition/cpu-console.ps1
 windows-cpu-partition/cpu-partition.ps1
 windows-cpu-partition/setup.cmd
-windows-host/.gitignore
 windows-host/00-field-launcher.ps1
 windows-host/01-create-field-vm.ps1
 windows-host/02-start-field-vm.ps1

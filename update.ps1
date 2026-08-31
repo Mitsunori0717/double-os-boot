@@ -134,14 +134,25 @@ function Get-SourceViaFiles {
     if ($entries.Count -eq 0) { $entries = @(Get-RepoEntries "") }
     if ($entries.Count -eq 0) { throw "ファイル一覧を取得できませんでした。" }
     Write-Host "  $($entries.Count) 件をダウンロードしています..."
-    $n = 0
+    $n = 0; $failed = @()
     foreach ($e in $entries) {
         $dst = Join-Path $root ($e.Rel -replace '/', '\')
         $dir = Split-Path $dst -Parent
         if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
-        Invoke-WebRequest -Uri $e.Url -OutFile $dst -UseBasicParsing -Headers $UA
-        $n++
-        if (($n % 10) -eq 0) { Write-Host "    $n / $($entries.Count)" }
+        try {
+            Invoke-WebRequest -Uri $e.Url -OutFile $dst -UseBasicParsing -Headers $UA
+            $n++
+        } catch {
+            # 1 つ失敗しても全体は止めない (プロキシが特定のパスだけ弾く環境があるため)
+            $failed += $e.Rel
+            Remove-Item $dst -Force -ErrorAction SilentlyContinue
+        }
+        if ((($n + $failed.Count) % 10) -eq 0) { Write-Host "    $($n + $failed.Count) / $($entries.Count)" }
+    }
+    if ($n -eq 0) { throw "1 件もダウンロードできませんでした。" }
+    if ($failed.Count -gt 0) {
+        Write-Host "  取得できなかったファイル ($($failed.Count) 件・そのまま残します):" -ForegroundColor Yellow
+        foreach ($f in $failed) { Write-Host "    - $f" -ForegroundColor Yellow }
     }
     return $root
 }
