@@ -16,6 +16,16 @@ LAN ポート5つ / 工作機械との接続は Ethernet。
 | ⑨ | モニター2 にブラウザ全画面 + 自動起動: `Set-VM -Name EdgeBox -AutomaticStartAction Start -AutomaticStartDelay 30` | 電源ONだけで収集開始 |
 | ⑩ | 予行: F8 からネイティブ起動できることを確認。撤退手順 (`Remove-VM` + `Set-Disk -IsOffline $false`) を把握 | ネイティブ起動を1回確認 |
 
+## いちばん簡単な導入・起動 (①〜⑥をまとめて行う)
+
+`field-start.cmd` をダブルクリックするだけで、既存 VM の検出 → 競合の片付け →
+(必要なら) VM 作成 → 起動 まで自動で進む。日常の起動もこれ 1 つで済む。
+
+```powershell
+.\00-field-launcher.ps1 -Status   # 何が使われるかだけ確認 (変更しない)
+.\00-field-launcher.ps1 -Setup    # デスクトップに『EdgeBox 起動』アイコンを作成
+```
+
 ## 運用ルール
 
 1. EdgeBox の起動画面で **Ctrl キーを押しっぱなしにしない** (Factory reset が選択される)
