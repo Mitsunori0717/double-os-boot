@@ -36,6 +36,8 @@ Add-Type -AssemblyName System.Drawing
 $EnginePath   = Join-Path $PSScriptRoot "cpu-partition.ps1"
 $ConfigFile   = Join-Path $PSScriptRoot "cpu-partition.json"
 $SnapshotFile = Join-Path $PSScriptRoot "cpu-topology.json"
+$AppsFile     = Join-Path $PSScriptRoot "cpu-apps.json"
+$AppsEngine   = Join-Path $PSScriptRoot "cpu-apps.ps1"
 $TaskName     = "CpuPartition-Console"
 
 function Test-Admin {
@@ -343,7 +345,7 @@ $ColNone  = [System.Drawing.Color]::FromArgb(232, 232, 232)
 
 $form = New-Object System.Windows.Forms.Form
 $form.Text = "CPU コア割り当て"
-$form.ClientSize = New-Object System.Drawing.Size(964, 742)
+$form.ClientSize = New-Object System.Drawing.Size(964, 790)
 $form.StartPosition = "CenterScreen"
 $form.FormBorderStyle = "FixedDialog"
 $form.MaximizeBox = $false
@@ -377,14 +379,14 @@ $grpMode.Controls.Add((New-Lbl "対象の VM:" 14 26))
 $script:cmbVm = New-Object System.Windows.Forms.ComboBox
 $script:cmbVm.Location = New-Object System.Drawing.Point(100, 23)
 $script:cmbVm.Size = New-Object System.Drawing.Size(200, 24)
-$script:cmbVm.DropDownStyle = "DropDownList"
+$script:cmbVm.DropDownStyle = "DropDown"   # 未作成の VM 名も入力できるようにする
 if ($script:HyperVOk) {
     foreach ($n in @(Get-VM -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Name | Sort-Object)) {
         [void]$script:cmbVm.Items.Add($n)
     }
 }
 if ($script:cmbVm.Items.Contains($script:VmNameSel)) { $script:cmbVm.SelectedItem = $script:VmNameSel }
-elseif ($script:cmbVm.Items.Count -gt 0) { $script:cmbVm.SelectedIndex = 0 }
+$script:cmbVm.Text = $script:VmNameSel
 $grpMode.Controls.Add($script:cmbVm)
 $script:lblVm = New-Lbl "" 314 26 610
 $grpMode.Controls.Add($script:lblVm)
@@ -553,42 +555,75 @@ $script:rtb.Font = New-Object System.Drawing.Font("Meiryo UI", 9)
 $grpChk.Controls.Add($script:rtb)
 $form.Controls.Add($grpChk)
 
+# --- アプリの割り当て (Windows 側アプリを特定コアに固定する) ---
+$grpApps = New-Object System.Windows.Forms.GroupBox
+$grpApps.Text = "アプリの割り当て (Windows 側のアプリを決めたコアで動かす)"
+$grpApps.Location = New-Object System.Drawing.Point(12, 700)
+$grpApps.Size = New-Object System.Drawing.Size(940, 56)
+$script:btnApps = New-Object System.Windows.Forms.Button
+$script:btnApps.Text = "アプリの割り当てを編集..."
+$script:btnApps.Location = New-Object System.Drawing.Point(14, 20)
+$script:btnApps.Size = New-Object System.Drawing.Size(200, 28)
+$grpApps.Controls.Add($script:btnApps)
+$script:lblApps = New-Lbl "" 228 26 700
+$grpApps.Controls.Add($script:lblApps)
+$form.Controls.Add($grpApps)
+
 # --- 操作ボタン ---
 $script:btnUndo = New-Object System.Windows.Forms.Button
 $script:btnUndo.Text = "分割を解除"
-$script:btnUndo.Location = New-Object System.Drawing.Point(12, 702)
+$script:btnUndo.Location = New-Object System.Drawing.Point(12, 762)
 $script:btnUndo.Size = New-Object System.Drawing.Size(140, 32)
 
 $script:btnVerify = New-Object System.Windows.Forms.Button
 $script:btnVerify.Text = "効き具合を実測"
-$script:btnVerify.Location = New-Object System.Drawing.Point(160, 702)
+$script:btnVerify.Location = New-Object System.Drawing.Point(160, 762)
 $script:btnVerify.Size = New-Object System.Drawing.Size(140, 32)
 
 $script:btnFix = New-Object System.Windows.Forms.Button
 $script:btnFix.Text = "full 用に並べ直す"
-$script:btnFix.Location = New-Object System.Drawing.Point(308, 702)
+$script:btnFix.Location = New-Object System.Drawing.Point(308, 762)
 $script:btnFix.Size = New-Object System.Drawing.Size(160, 32)
 $script:btnFix.Visible = $false
 
 $script:chkTools = New-Object System.Windows.Forms.CheckBox
 $script:chkTools.Text = "CpuGroups.exe を自動取得"
-$script:chkTools.Location = New-Object System.Drawing.Point(476, 707)
+$script:chkTools.Location = New-Object System.Drawing.Point(476, 767)
 $script:chkTools.Size = New-Object System.Drawing.Size(180, 24)
 $script:chkTools.Checked = $true
 $script:chkTools.Visible = $false
 
 $script:btnApply = New-Object System.Windows.Forms.Button
 $script:btnApply.Text = "この内容で適用"
-$script:btnApply.Location = New-Object System.Drawing.Point(660, 702)
+$script:btnApply.Location = New-Object System.Drawing.Point(660, 762)
 $script:btnApply.Size = New-Object System.Drawing.Size(170, 32)
 
 $btnClose = New-Object System.Windows.Forms.Button
 $btnClose.Text = "閉じる"
-$btnClose.Location = New-Object System.Drawing.Point(838, 702)
+$btnClose.Location = New-Object System.Drawing.Point(838, 762)
 $btnClose.Size = New-Object System.Drawing.Size(114, 32)
 $btnClose.DialogResult = "Cancel"
 $form.CancelButton = $btnClose
 $form.Controls.AddRange(@($script:btnUndo, $script:btnVerify, $script:btnFix, $script:chkTools, $script:btnApply, $btnClose))
+
+# ============================================================
+#  アプリの割り当て (cpu-apps.json / cpu-apps.ps1)
+# ============================================================
+function Read-AppsFile {
+    if (-not (Test-Path $AppsFile)) { return @() }
+    try { return @(Get-Content $AppsFile -Raw -Encoding UTF8 | ConvertFrom-Json) } catch { return @() }
+}
+
+function Save-AppsFile($Apps) {
+    $arr = @($Apps)
+    if ($arr.Count -eq 0) {
+        Set-Content -Path $AppsFile -Value "[]" -Encoding UTF8
+    } else {
+        (ConvertTo-Json -InputObject ([object[]]$arr) -Depth 4) | Set-Content -Path $AppsFile -Encoding UTF8
+    }
+}
+
+$script:Apps = Read-AppsFile
 
 # ============================================================
 #  検査 (矛盾・不可能な設定を洗い出し、適用の可否を決める)
@@ -652,8 +687,13 @@ function Update-Validation {
     if (-not $script:HyperVOk) {
         $errors += "Hyper-V が有効ではありません。先に Hyper-V を有効化して再起動してください。"
     }
-    if ($script:HyperVOk -and -not $script:Vm) {
-        $errors += "VM『$($script:VmNameSel)』が見つかりません。対象の VM を選び直してください。"
+    $script:VmMissing = ($script:HyperVOk -and -not $script:Vm)
+    if ($script:VmMissing) {
+        if (-not $script:VmNameSel) {
+            $errors += "対象の VM 名を入力してください。"
+        } else {
+            $warnings += "VM『$($script:VmNameSel)』はまだ見つかりません。この内容は保存され、VM を作成して起動した時点で自動的に適用されます。"
+        }
     }
 
     # --- 割り当ての量 ---
@@ -729,6 +769,16 @@ function Update-Validation {
     if ($script:UsedSnapshot) {
         $warnings += "一部のコアが Windows から見えないため、保存済みのコア構成を表示しています。"
     }
+    $appOnGuest = @()
+    foreach ($a in $script:Apps) {
+        $al = @([int[]]$a.Lps)
+        if (@($al | Where-Object { $sel.GuestLps -contains $_ }).Count -gt 0) { $appOnGuest += [string]$a.Name }
+    }
+    if ($appOnGuest.Count -gt 0) {
+        $warnings += "アプリ『$($appOnGuest -join '、')』が $($script:VmNameSel) 用コアに割り当てられています (VM と取り合いになります)。"
+    }
+    $script:lblApps.Text = "登録: $($script:Apps.Count) 件" +
+        $(if ($script:Apps.Count -gt 0) { "  (" + ((@($script:Apps | Select-Object -First 3 | ForEach-Object { $_.Name }) -join "、")) + $(if ($script:Apps.Count -gt 3) { " ほか" } else { "" }) + ")" } else { "" })
 
     # --- 表示 ---
     $script:rtb.Clear()
@@ -746,6 +796,8 @@ function Update-Validation {
         Add-Line "適用できます (上の注意点をご確認ください)。" ([System.Drawing.Color]::FromArgb(20, 120, 40))
     }
     $script:btnApply.Enabled = ($errors.Count -eq 0)
+    if ($script:VmMissing) { $script:btnApply.Text = "保存 (VM 検出後に自動適用)" }
+    else { $script:btnApply.Text = "この内容で適用" }
 }
 
 # ============================================================
@@ -764,9 +816,16 @@ function Refresh-All {
     Update-Validation
 }
 
+$script:btnApps.Add_Click({ Show-AppsDialog })
+
 $script:cmbVm.Add_SelectedIndexChanged({
     if ($script:cmbVm.SelectedItem) { $script:VmNameSel = [string]$script:cmbVm.SelectedItem }
     Refresh-All
+})
+# 一覧に無い VM 名 (これから作る VM) も入力できるようにする
+$script:cmbVm.Add_Leave({
+    $t = ([string]$script:cmbVm.Text).Trim()
+    if ($t -and $t -ne $script:VmNameSel) { $script:VmNameSel = $t; Refresh-All }
 })
 $script:rbRuntime.Add_CheckedChanged({ Update-Validation })
 $script:rbFull.Add_CheckedChanged({ Update-Validation })
@@ -785,7 +844,8 @@ $script:btnApply.Add_Click({
     $mode = if ($script:rbFull.Checked) { "full" } else { "runtime" }
     $hostText  = ConvertTo-LpRangeText $sel.HostLps
     $guestText = ConvertTo-LpRangeText $sel.GuestLps
-    $confirm = "次の内容で適用します。`n`n" +
+    $verb = if ($script:VmMissing) { "保存します (VM を作成・起動した時点で自動適用)" } else { "適用します" }
+    $confirm = "次の内容で${verb}。`n`n" +
         "  Windows            : CPU $hostText  ($($sel.HostCores) コア)`n" +
         "  $($script:VmNameSel) : CPU $guestText  ($($sel.GuestCores) コア)`n" +
         "  方式               : $mode`n`n" +
@@ -798,6 +858,7 @@ $script:btnApply.Add_Click({
     $a = @("-Apply", "-Mode", $mode, "-VMName", "`"$($script:VmNameSel)`"",
            "-HostLps", "`"$hostText`"", "-GuestLps", "`"$guestText`"", "-NoConfirm")
     if ($mode -eq "full" -and $script:chkTools.Checked) { $a += "-AutoGetTools" }
+    if ($script:VmMissing) { $a += "-AllowMissingVM" }
     $form.Enabled = $false
     try { $code = Invoke-Engine $a } finally { $form.Enabled = $true }
     Refresh-All
@@ -817,7 +878,13 @@ $script:btnApply.Add_Click({
         if ($r2 -eq [System.Windows.Forms.DialogResult]::Yes) { Restart-Computer -Force }
         return
     }
+    if ($script:VmMissing) {
+        Show-Info ("保存しました。`n`n  Windows            : CPU $hostText`n  $($script:VmNameSel) : CPU $guestText`n`n" +
+            "VM『$($script:VmNameSel)』を作成して起動すると、この割り当てが自動で適用されます。`n" +
+            "(常駐タスク CpuPartition-Pin が VM の起動を検出して適用します)")
+    } else {
     Show-Info "適用しました。`n`n  Windows            : CPU $hostText`n  $($script:VmNameSel) : CPU $guestText`n`n[効き具合を実測] で、実際にどのコアで動いているか確認できます。"
+    }
 })
 
 $script:btnUndo.Add_Click({
@@ -847,6 +914,331 @@ $script:btnVerify.Add_Click({
     Start-Process powershell.exe -ArgumentList (
         "-NoProfile -NoExit -ExecutionPolicy Bypass -File `"$EnginePath`" -Verify -VMName `"$($script:VmNameSel)`"")
 })
+
+
+# ============================================================
+#  コアを選ぶダイアログ (アプリ用)
+# ============================================================
+function Show-CoreChooser([int[]]$Preselect, [string]$Title, [int[]]$GuestLps) {
+    $d = New-Object System.Windows.Forms.Form
+    $d.Text = $Title
+    $d.ClientSize = New-Object System.Drawing.Size(700, 470)
+    $d.StartPosition = "CenterParent"
+    $d.FormBorderStyle = "FixedDialog"
+    $d.MaximizeBox = $false
+    $d.Font = New-Object System.Drawing.Font("Meiryo UI", 9)
+
+    $lbl = New-Lbl "このアプリを動かすコアを選びます (複数選択可)。緑はゲスト VM 用のコアです。" 12 10 660
+    $d.Controls.Add($lbl)
+
+    $fp = New-Object System.Windows.Forms.FlowLayoutPanel
+    $fp.Location = New-Object System.Drawing.Point(12, 36)
+    $fp.Size = New-Object System.Drawing.Size(676, 340)
+    $fp.AutoScroll = $true
+    $fp.WrapContents = $true
+    $d.Controls.Add($fp)
+
+    $boxes = @{}
+    foreach ($c in $script:Cores) {
+        $cb = New-Object System.Windows.Forms.CheckBox
+        $cb.Text = "{0}  (CPU {1})" -f $c.Label, (ConvertTo-LpRangeText $c.Lps)
+        $cb.Size = New-Object System.Drawing.Size(158, 24)
+        $cb.Margin = New-Object System.Windows.Forms.Padding(3)
+        $cb.Tag = $c.Id
+        $cb.Checked = (@($c.Lps | Where-Object { $Preselect -contains $_ }).Count -gt 0)
+        if (@($c.Lps | Where-Object { $GuestLps -contains $_ }).Count -gt 0) { $cb.BackColor = $ColGuest }
+        $boxes[$c.Id] = $cb
+        $fp.Controls.Add($cb)
+    }
+
+    $setBoxes = {
+        param([string]$Kind)
+        foreach ($c in $script:Cores) {
+            $b = $boxes[$c.Id]
+            switch ($Kind) {
+                "host"  { $b.Checked = ($c.State -eq "Host") }
+                "p"     { $b.Checked = ($c.Kind -eq "P" -and $c.State -ne "Guest") }
+                "e"     { $b.Checked = ($c.Kind -eq "E" -and $c.State -ne "Guest") }
+                default { $b.Checked = $false }
+            }
+        }
+    }
+    $qx = 12
+    foreach ($q in @(
+        @{ T = "Windows 側すべて"; K = "host"; W = 150 },
+        @{ T = "P コアのみ";       K = "p";    W = 110 },
+        @{ T = "E コアのみ";       K = "e";    W = 110 },
+        @{ T = "クリア";           K = "none"; W = 90  })) {
+        $b = New-Object System.Windows.Forms.Button
+        $b.Text = $q.T
+        $b.Location = New-Object System.Drawing.Point($qx, 386)
+        $b.Size = New-Object System.Drawing.Size($q.W, 28)
+        $kind = $q.K
+        $b.Add_Click({ & $setBoxes $kind }.GetNewClosure())
+        $d.Controls.Add($b)
+        $qx += $q.W + 8
+    }
+
+    $ok = New-Object System.Windows.Forms.Button
+    $ok.Text = "OK"; $ok.DialogResult = "OK"
+    $ok.Location = New-Object System.Drawing.Point(464, 428)
+    $ok.Size = New-Object System.Drawing.Size(110, 30)
+    $ng = New-Object System.Windows.Forms.Button
+    $ng.Text = "キャンセル"; $ng.DialogResult = "Cancel"
+    $ng.Location = New-Object System.Drawing.Point(580, 428)
+    $ng.Size = New-Object System.Drawing.Size(108, 30)
+    $d.Controls.AddRange(@($ok, $ng))
+    $d.AcceptButton = $ok; $d.CancelButton = $ng
+
+    if ($d.ShowDialog() -ne "OK") { return $null }
+    $lps = @()
+    foreach ($c in $script:Cores) { if ($boxes[$c.Id].Checked) { $lps += $c.Lps } }
+    $lps = @($lps | Sort-Object -Unique)
+    if ($lps.Count -eq 0) {
+        Show-Info "コアが 1 つも選ばれていません。変更しませんでした。" "Warning"
+        return $null
+    }
+    return ,$lps
+}
+
+# ============================================================
+#  実行中のアプリから選ぶダイアログ
+# ============================================================
+function Show-ProcessPicker {
+    $d = New-Object System.Windows.Forms.Form
+    $d.Text = "実行中のアプリから選ぶ"
+    $d.ClientSize = New-Object System.Drawing.Size(660, 460)
+    $d.StartPosition = "CenterParent"
+    $d.FormBorderStyle = "FixedDialog"
+    $d.MaximizeBox = $false
+    $d.Font = New-Object System.Drawing.Font("Meiryo UI", 9)
+    $d.Controls.Add((New-Lbl "登録したいアプリを選んでください (ウィンドウを持つアプリを上に表示します)。" 12 10 630))
+
+    $lb = New-Object System.Windows.Forms.ListBox
+    $lb.Location = New-Object System.Drawing.Point(12, 34)
+    $lb.Size = New-Object System.Drawing.Size(636, 370)
+    $d.Controls.Add($lb)
+
+    $entries = @()
+    $groups = @(Get-Process -ErrorAction SilentlyContinue |
+        Where-Object { $_.ProcessName -notmatch '^(Idle|System|Registry|Memory Compression)$' } |
+        Group-Object ProcessName)
+    foreach ($g in $groups) {
+        $path = $null
+        $titled = $false
+        foreach ($pr in $g.Group) {
+            try { if (-not $path -and $pr.Path) { $path = $pr.Path } } catch { }
+            try { if ($pr.MainWindowHandle -ne 0) { $titled = $true } } catch { }
+        }
+        $entries += [pscustomobject]@{
+            Name = $g.Name; Exe = $path; Count = $g.Count; Titled = $titled
+        }
+    }
+    $entries = @($entries | Sort-Object @{ Expression = "Titled"; Descending = $true }, Name)
+    foreach ($e in $entries) {
+        [void]$lb.Items.Add(("{0}  ({1} 個)   {2}" -f $e.Name, $e.Count, $(if ($e.Exe) { $e.Exe } else { "(パス不明)" })))
+    }
+
+    $ok = New-Object System.Windows.Forms.Button
+    $ok.Text = "追加"; $ok.DialogResult = "OK"
+    $ok.Location = New-Object System.Drawing.Point(424, 416)
+    $ok.Size = New-Object System.Drawing.Size(110, 30)
+    $ng = New-Object System.Windows.Forms.Button
+    $ng.Text = "キャンセル"; $ng.DialogResult = "Cancel"
+    $ng.Location = New-Object System.Drawing.Point(540, 416)
+    $ng.Size = New-Object System.Drawing.Size(108, 30)
+    $d.Controls.AddRange(@($ok, $ng))
+    $d.AcceptButton = $ok; $d.CancelButton = $ng
+
+    if ($d.ShowDialog() -ne "OK" -or $lb.SelectedIndex -lt 0) { return $null }
+    return $entries[$lb.SelectedIndex]
+}
+
+# ============================================================
+#  アプリの割り当てダイアログ
+# ============================================================
+function Show-AppsDialog {
+    $sel = Get-Selection
+    $work = New-Object System.Collections.ArrayList
+    foreach ($a in $script:Apps) {
+        [void]$work.Add([pscustomobject]@{
+            Name = [string]$a.Name; Exe = [string]$a.Exe; Match = [string]$a.Match
+            Lps = @([int[]]$a.Lps); Priority = $(if ($a.Priority) { [string]$a.Priority } else { "通常" })
+        })
+    }
+
+    $d = New-Object System.Windows.Forms.Form
+    $d.Text = "アプリの割り当て"
+    $d.ClientSize = New-Object System.Drawing.Size(880, 540)
+    $d.StartPosition = "CenterParent"
+    $d.FormBorderStyle = "FixedDialog"
+    $d.MaximizeBox = $false
+    $d.Font = New-Object System.Drawing.Font("Meiryo UI", 9)
+
+    $d.Controls.Add((New-Lbl "登録したアプリは、起動のたびに指定したコアへ自動で固定されます (1 分ごとに確認)。" 12 10 850))
+
+    $lv = New-Object System.Windows.Forms.ListView
+    $lv.Location = New-Object System.Drawing.Point(12, 34)
+    $lv.Size = New-Object System.Drawing.Size(856, 330)
+    $lv.View = "Details"
+    $lv.FullRowSelect = $true
+    $lv.MultiSelect = $false
+    $lv.GridLines = $true
+    [void]$lv.Columns.Add("アプリ名", 190)
+    [void]$lv.Columns.Add("実行ファイル", 380)
+    [void]$lv.Columns.Add("割り当てコア", 170)
+    [void]$lv.Columns.Add("優先度", 80)
+    $d.Controls.Add($lv)
+
+    function Sync-AppList {
+        $lv.BeginUpdate()
+        $lv.Items.Clear()
+        foreach ($a in $work) {
+            $it = New-Object System.Windows.Forms.ListViewItem([string]$a.Name)
+            [void]$it.SubItems.Add($(if ($a.Exe) { [string]$a.Exe } else { "(名前で照合: " + $a.Match + ")" }))
+            [void]$it.SubItems.Add((ConvertTo-LpRangeText @([int[]]$a.Lps)))
+            [void]$it.SubItems.Add([string]$a.Priority)
+            [void]$lv.Items.Add($it)
+        }
+        $lv.EndUpdate()
+    }
+
+    function Get-SelectedApp {
+        if ($lv.SelectedIndices.Count -eq 0) { return $null }
+        return $work[$lv.SelectedIndices[0]]
+    }
+
+    function Add-App([string]$Name, [string]$Exe, [string]$Match) {
+        $defaultLps = @($sel.HostLps)
+        if ($defaultLps.Count -eq 0) { $defaultLps = @(0) }
+        [void]$work.Add([pscustomobject]@{
+            Name = $Name; Exe = $Exe; Match = $Match; Lps = $defaultLps; Priority = "通常"
+        })
+        Sync-AppList
+        $lv.Items[$work.Count - 1].Selected = $true
+    }
+
+    $bx = 12
+    $btnFile = New-Object System.Windows.Forms.Button
+    $btnFile.Text = "ファイルから追加..."
+    $btnFile.Location = New-Object System.Drawing.Point($bx, 374)
+    $btnFile.Size = New-Object System.Drawing.Size(160, 30)
+    $btnFile.Add_Click({
+        $ofd = New-Object System.Windows.Forms.OpenFileDialog
+        $ofd.Filter = "実行ファイル (*.exe)|*.exe|すべてのファイル (*.*)|*.*"
+        $ofd.Title = "登録するアプリの実行ファイルを選んでください"
+        if ($ofd.ShowDialog() -eq "OK") {
+            $base = [System.IO.Path]::GetFileNameWithoutExtension($ofd.FileName)
+            Add-App $base $ofd.FileName $base
+        }
+    })
+    $bx += 168
+
+    $btnRun = New-Object System.Windows.Forms.Button
+    $btnRun.Text = "実行中のアプリから追加..."
+    $btnRun.Location = New-Object System.Drawing.Point($bx, 374)
+    $btnRun.Size = New-Object System.Drawing.Size(200, 30)
+    $btnRun.Add_Click({
+        $e = Show-ProcessPicker
+        if ($e) { Add-App $e.Name $(if ($e.Exe) { $e.Exe } else { "" }) $e.Name }
+    })
+    $bx += 208
+
+    $btnCores = New-Object System.Windows.Forms.Button
+    $btnCores.Text = "コアを編集..."
+    $btnCores.Location = New-Object System.Drawing.Point($bx, 374)
+    $btnCores.Size = New-Object System.Drawing.Size(140, 30)
+    $btnCores.Add_Click({
+        $a = Get-SelectedApp
+        if (-not $a) { Show-Info "一覧からアプリを選んでください。" "Warning"; return }
+        $lps = Show-CoreChooser @([int[]]$a.Lps) ("コアの選択 - " + $a.Name) @($sel.GuestLps)
+        if ($lps) { $a.Lps = @($lps); Sync-AppList }
+    })
+    $bx += 148
+
+    $btnDel = New-Object System.Windows.Forms.Button
+    $btnDel.Text = "削除"
+    $btnDel.Location = New-Object System.Drawing.Point($bx, 374)
+    $btnDel.Size = New-Object System.Drawing.Size(100, 30)
+    $btnDel.Add_Click({
+        if ($lv.SelectedIndices.Count -eq 0) { Show-Info "一覧からアプリを選んでください。" "Warning"; return }
+        $work.RemoveAt($lv.SelectedIndices[0])
+        Sync-AppList
+    })
+    $d.Controls.AddRange(@($btnFile, $btnRun, $btnCores, $btnDel))
+
+    $d.Controls.Add((New-Lbl "選んだアプリの優先度:" 12 418))
+    $cmbPri = New-Object System.Windows.Forms.ComboBox
+    $cmbPri.Location = New-Object System.Drawing.Point(170, 415)
+    $cmbPri.Size = New-Object System.Drawing.Size(120, 24)
+    $cmbPri.DropDownStyle = "DropDownList"
+    [void]$cmbPri.Items.AddRange(@("通常", "高", "低"))
+    $cmbPri.SelectedIndex = 0
+    $cmbPri.Add_SelectedIndexChanged({
+        $a = Get-SelectedApp
+        if ($a -and $a.Priority -ne [string]$cmbPri.SelectedItem) {
+            $a.Priority = [string]$cmbPri.SelectedItem
+            Sync-AppList
+        }
+    })
+    $d.Controls.Add($cmbPri)
+    $lv.Add_SelectedIndexChanged({
+        $a = Get-SelectedApp
+        if ($a) { $cmbPri.SelectedItem = [string]$a.Priority }
+    })
+
+    $note = New-Lbl "『高』は取り合いになったときに優先されます。ゲスト VM 用のコアは避けてください (VM と取り合いになります)。" 12 448 850
+    $note.ForeColor = [System.Drawing.Color]::DimGray
+    $d.Controls.Add($note)
+
+    $ok = New-Object System.Windows.Forms.Button
+    $ok.Text = "保存して適用"; $ok.DialogResult = "OK"
+    $ok.Location = New-Object System.Drawing.Point(624, 490)
+    $ok.Size = New-Object System.Drawing.Size(130, 32)
+    $ng = New-Object System.Windows.Forms.Button
+    $ng.Text = "キャンセル"; $ng.DialogResult = "Cancel"
+    $ng.Location = New-Object System.Drawing.Point(760, 490)
+    $ng.Size = New-Object System.Drawing.Size(108, 32)
+    $d.Controls.AddRange(@($ok, $ng))
+    $d.CancelButton = $ng
+
+    Sync-AppList
+    if ($d.ShowDialog() -ne "OK") { return }
+
+    # --- 一覧から外したアプリは、いま動いている分の固定を解除しておく ---
+    $keep = @($work | ForEach-Object { [string]$_.Match })
+    $total = [Math]::Min($script:TotalLps, 63)
+    $allMask = [int64]0
+    for ($i = 0; $i -lt $total; $i++) { $allMask = $allMask -bor ([int64]1 -shl $i) }
+    foreach ($old in $script:Apps) {
+        if ($keep -contains [string]$old.Match) { continue }
+        foreach ($pr in @(Get-Process -Name ([string]$old.Match) -ErrorAction SilentlyContinue)) {
+            try {
+                $pr.ProcessorAffinity = [IntPtr]$allMask
+                $pr.PriorityClass = [System.Diagnostics.ProcessPriorityClass]::Normal
+            } catch { }
+        }
+    }
+
+    # --- 保存して即適用 (以後は自動タスクが 1 分ごとに適用し直す) ---
+    $script:Apps = @($work)
+    Save-AppsFile $script:Apps
+    if (Test-Path $AppsEngine) {
+        $argLine = "-NoProfile -ExecutionPolicy Bypass -File `"$AppsEngine`" -Apply -Quiet"
+        if ($script:Apps.Count -gt 0) { $argLine += " -Install" }
+        try {
+            Start-Process powershell.exe -ArgumentList $argLine -WindowStyle Hidden -Wait
+        } catch { }
+        if ($script:Apps.Count -eq 0) {
+            try {
+                Start-Process powershell.exe -WindowStyle Hidden -Wait -ArgumentList (
+                    "-NoProfile -ExecutionPolicy Bypass -File `"$AppsEngine`" -Uninstall -Quiet")
+            } catch { }
+        }
+    }
+    Update-Validation
+    Show-Info "アプリの割り当てを保存しました ($($script:Apps.Count) 件)。`n実行中のアプリには今すぐ反映し、以後は起動のたびに自動で固定します。"
+}
 
 # ============================================================
 #  表示
