@@ -117,6 +117,18 @@ function Say([string]$Text, [string]$Color = "Gray") {
     if (-not $Quiet) { Write-Host $Text -ForegroundColor $Color }
 }
 
+# 途中で失敗しても、必ず理由をログと画面に残す (設定コンソールはこのログを表示する)
+trap {
+    $msg = $_.Exception.Message
+    $at  = ""
+    try { $at = ($_.InvocationInfo.PositionMessage -split "`n")[0].Trim() } catch { }
+    try { Write-PinLog "エラー: $msg  $at" } catch { }
+    Write-Host ""
+    Write-Host "エラー: $msg" -ForegroundColor Red
+    if ($at) { Write-Host "  $at" -ForegroundColor DarkGray }
+    exit 1
+}
+
 # --- CPU トポロジ (物理コア数・論理 CPU 数・SMT・P/E 混成の疑い) ---
 function Get-CpuTopology {
     $procs = @(Get-CimInstance Win32_Processor)
@@ -400,23 +412,53 @@ function Set-RuntimePin([int[]]$HostArr, [int[]]$GuestArr, [bool]$Boost) {
 }
 
 # VM 起動を検出して自動で再適用するタスク (SYSTEM 権限)
+# 戻り値: 使えたトリガーの説明 (環境によりイベント検出が作れない場合は定期実行で代替)
 function Register-PinTask {
-    $xml = '<QueryList><Query Id="0" Path="Microsoft-Windows-Hyper-V-Worker-Admin">' +
-           '<Select Path="Microsoft-Windows-Hyper-V-Worker-Admin">' +
-           "*[System[Provider[@Name='Microsoft-Windows-Hyper-V-Worker'] and EventID=18500]]" +
-           '</Select></Query></QueryList>'
-    $evClass   = Get-CimClass -Namespace "Root/Microsoft/Windows/TaskScheduler" -ClassName "MSFT_TaskEventTrigger"
-    $evTrigger = New-CimInstance -CimClass $evClass -ClientOnly -Property @{ Enabled = $true; Subscription = $xml }
+    $triggers = @()
+    $note = ""
+
+    # VM 起動イベント (最速で反映される)。作れない環境ではスキップする
+    try {
+        $xml = '<QueryList><Query Id="0" Path="Microsoft-Windows-Hyper-V-Worker-Admin">' +
+               '<Select Path="Microsoft-Windows-Hyper-V-Worker-Admin">' +
+               "*[System[Provider[@Name='Microsoft-Windows-Hyper-V-Worker'] and EventID=18500]]" +
+               '</Select></Query></QueryList>'
+        $evClass = Get-CimClass -Namespace "Root/Microsoft/Windows/TaskScheduler" `
+            -ClassName "MSFT_TaskEventTrigger" -ErrorAction Stop
+        $triggers += New-CimInstance -CimClass $evClass -ClientOnly `
+            -Property @{ Enabled = $true; Subscription = $xml } -ErrorAction Stop
+    } catch {
+        $note = "VM 起動イベントのトリガーは作れなかったため、定期実行で補います"
+        Write-PinLog "Register-PinTask: イベントトリガー不可 ($($_.Exception.Message))"
+    }
+
     $bootTrigger = New-ScheduledTaskTrigger -AtStartup
-    $bootTrigger.Delay = "PT2M"
+    try { $bootTrigger.Delay = "PT2M" } catch { }
+    $triggers += $bootTrigger
+
+    # ログオン時 + 2 分ごとの再適用 (取りこぼしと、上のイベント不可を補う保険)
     $logonTrigger = New-ScheduledTaskTrigger -AtLogOn
+    try {
+        $logonTrigger.Repetition = (New-ScheduledTaskTrigger -Once -At (Get-Date) `
+            -RepetitionInterval (New-TimeSpan -Minutes 2) `
+            -RepetitionDuration ([TimeSpan]::MaxValue)).Repetition
+    } catch {
+        try {
+            $logonTrigger.Repetition = (New-ScheduledTaskTrigger -Once -At (Get-Date) `
+                -RepetitionInterval (New-TimeSpan -Minutes 2) `
+                -RepetitionDuration (New-TimeSpan -Days 3650)).Repetition
+        } catch { }
+    }
+    $triggers += $logonTrigger
+
     $action = New-ScheduledTaskAction -Execute "powershell.exe" `
         -Argument "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$PSCommandPath`" -ApplyRuntime -Quiet"
     $principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
     $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
         -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 10)
-    Register-ScheduledTask -TaskName $PinTaskName -Trigger @($evTrigger, $bootTrigger, $logonTrigger) `
+    Register-ScheduledTask -TaskName $PinTaskName -Trigger $triggers `
         -Action $action -Principal $principal -Settings $settings -Force | Out-Null
+    return $note
 }
 
 # ============================================================ -ApplyRuntime (内部用)
@@ -763,8 +805,9 @@ if ($Mode -eq "runtime") {
     })
     Write-PinLog "Apply(runtime): ホスト=$hostText ゲスト=$guestText"
 
-    Register-PinTask
+    $taskNote = Register-PinTask
     Write-Host "  VM 起動時に自動で固定し直すタスク '$PinTaskName' を登録しました" -ForegroundColor Green
+    if ($taskNote) { Write-Host "  ($taskNote)" -ForegroundColor Yellow }
 
     if ($vm -and $vm.State -eq "Running") {
         $msg = Set-RuntimePin $plan.HostLps $plan.GuestLps (-not $NoPriorityBoost)

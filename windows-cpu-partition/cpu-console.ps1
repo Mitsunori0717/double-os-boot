@@ -864,7 +864,18 @@ $script:btnApply.Add_Click({
     Refresh-All
 
     if ($code -ne 0) {
-        Show-Info "適用できませんでした (終了コード $code)。`n`n表示されたウィンドウの内容と cpu-partition-log.txt をご確認ください。" "Warning"
+        # 失敗の理由はエンジンがログへ必ず書くので、その末尾をここに出す
+        $tail = ""
+        try {
+            $logPath = Join-Path $PSScriptRoot "cpu-partition-log.txt"
+            if (Test-Path $logPath) {
+                $tail = ((Get-Content $logPath -Encoding UTF8 -Tail 8) -join "`n")
+            }
+        } catch { }
+        $msg = "適用できませんでした (終了コード $code)。"
+        if ($tail) { $msg += "`n`n--- cpu-partition-log.txt の末尾 ---`n$tail" }
+        else { $msg += "`n`n表示されたウィンドウの内容をご確認ください。" }
+        Show-Info $msg "Warning"
         return
     }
     # full の第 1 段階 (設定書き込み済み・未反映) なら再起動を案内する

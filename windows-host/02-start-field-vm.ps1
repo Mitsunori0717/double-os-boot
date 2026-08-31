@@ -15,7 +15,11 @@ param(
     [switch]$Status,
     # ディスクが「別のプロセスが使用中」で起動できないときの自動修復
     # (重複した接続の削除 / ディスクのオフライン化。他 VM の設定には触れない)
-    [switch]$Repair
+    [switch]$Repair,
+
+    # -Repair と併用。同じディスクを掴んでいる他の VM から、その接続だけを外す
+    # (VM 自体もディスクの中身も消しません。対象 VM が停止中のときのみ実行)
+    [switch]$DetachOthers
 )
 
 $ErrorActionPreference = "Stop"
@@ -76,7 +80,18 @@ function Test-DiskReady([switch]$Fix) {
     # 2) 他の VM が同じ物理ディスクを掴んでいないか (旧構成の VM が残っている等)
     foreach ($other in @(Get-VM | Where-Object { $_.Name -ne $VMName })) {
         foreach ($d in (Get-PassthroughDisks $other.Name)) {
-            if ($diskNums -contains $d.DiskNumber) {
+            if ($diskNums -notcontains $d.DiskNumber) { continue }
+            if ($Fix -and $DetachOthers) {
+                if ($other.State -ne "Off") {
+                    $problems += "VM『$($other.Name)』が動作中のため接続を外せません (先に停止してください)"
+                    continue
+                }
+                Remove-VMHardDiskDrive -VMName $other.Name `
+                    -ControllerType $d.ControllerType `
+                    -ControllerNumber $d.ControllerNumber `
+                    -ControllerLocation $d.ControllerLocation
+                Write-Host "  VM『$($other.Name)』からディスク $($d.DiskNumber) の接続を外しました (VM とデータは残ります)" -ForegroundColor Green
+            } else {
                 $problems += "VM『$($other.Name)』も同じディスク $($d.DiskNumber) を使っています (同時には使えません)"
             }
         }
@@ -107,6 +122,8 @@ function Show-DiskHelp($Problems) {
     Write-Host ""
     Write-Host "対処:" -ForegroundColor Cyan
     Write-Host "  1. 自動で直せる分を直す : .\02-start-field-vm.ps1 -Repair"
+    Write-Host "     他 VM の接続も外す   : .\02-start-field-vm.ps1 -Repair -DetachOthers"
+    Write-Host "                            (その VM とディスクの中身は消えません)"
     Write-Host "  2. WSL を切り離す       : wsl --unmount \\.\PHYSICALDRIVE0   (その後 wsl --shutdown)"
     Write-Host "  3. 他 VM が使っている場合: その VM を停止し、Hyper-V マネージャーでディスク接続を外す"
     Write-Host "  4. それでも駄目なら PC を再起動すると、掴んでいたプロセスごと解放されます"
