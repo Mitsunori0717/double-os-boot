@@ -29,6 +29,9 @@
 param(
     [string]$Repo   = "Mitsunori0717/double-os-boot",
     [string]$Branch = "claude/windows-linux-dual-boot-lwgj28",
+    # 取得するコミット (省略時はブランチの最新)。
+    # GitHub の配信キャッシュで古い内容が返るときは、コミット ID を指定すると確実
+    [string]$Ref = "",
     [ValidateSet("auto", "zip", "files")]
     [string]$Method = "auto",
     [switch]$Check,      # 変更せず、更新される内容だけ表示
@@ -41,7 +44,8 @@ $ErrorActionPreference = "Stop"
 try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch { }
 $UA = @{ "User-Agent" = "double-os-boot-updater" }   # GitHub API は User-Agent 必須
 
-$BranchEnc = [uri]::EscapeDataString($Branch)
+if (-not $Ref) { $Ref = $Branch }
+$BranchEnc = [uri]::EscapeDataString($Ref)
 $ZipUrl    = "https://github.com/$Repo/archive/refs/heads/$Branch.zip"
 $tmpRoot   = Join-Path $env:TEMP ("dob-update-" + [Guid]::NewGuid().ToString("N").Substring(0, 8))
 
@@ -54,7 +58,7 @@ if ($Diagnose) {
     $targets = [ordered]@{
         "GitHub 本体          " = "https://github.com/$Repo"
         "ZIP 配信 (codeload)  " = $ZipUrl
-        "個別取得 (raw)       " = "https://raw.githubusercontent.com/$Repo/$Branch/README.md"
+        "個別取得 (raw)       " = "https://raw.githubusercontent.com/$Repo/$Ref/README.md"
         "一覧取得 (api)       " = "https://api.github.com/repos/$Repo"
     }
     foreach ($k in $targets.Keys) {
@@ -90,7 +94,7 @@ function Get-SourceViaZip {
 # 同梱のファイル一覧 (filelist.txt) から取得する。api.github.com が
 # 遮断されている環境でも、raw.githubusercontent.com だけで完結する
 function Get-EntriesFromFileList {
-    $url = "https://raw.githubusercontent.com/$Repo/$Branch/filelist.txt"
+    $url = "https://raw.githubusercontent.com/$Repo/$Ref/filelist.txt"
     $txt = (Invoke-WebRequest -Uri $url -UseBasicParsing -Headers $UA).Content
     $out = @()
     foreach ($line in ($txt -split "`r?`n")) {
@@ -98,7 +102,7 @@ function Get-EntriesFromFileList {
         if (-not $rel -or $rel.StartsWith("#")) { continue }
         $out += [pscustomobject]@{
             Rel = $rel
-            Url = "https://raw.githubusercontent.com/$Repo/$Branch/$rel"
+            Url = "https://raw.githubusercontent.com/$Repo/$Ref/$rel"
         }
     }
     return $out
@@ -162,7 +166,7 @@ function Get-SourceViaFiles {
 # ============================================================
 Write-Host ""
 Write-Host "===== ツール一式の更新 =====" -ForegroundColor White
-Write-Host "  取得元 : $Repo ($Branch)"
+Write-Host "  取得元 : $Repo ($Ref)"
 Write-Host "  更新先 : $PSScriptRoot"
 
 New-Item -ItemType Directory -Path $tmpRoot -Force | Out-Null
