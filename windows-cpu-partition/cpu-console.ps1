@@ -62,6 +62,49 @@ if (-not (Test-Path $EnginePath)) {
 # ============================================================
 #  デスクトップアイコンの作成 (-Setup)
 # ============================================================
+# 一般的なアプリらしく見せるためのアイコンを作る (失敗しても致命的ではない)
+function New-ConsoleIcon([string]$Path) {
+    Add-Type -AssemblyName System.Drawing -ErrorAction Stop
+    $sz  = 256
+    $bmp = New-Object System.Drawing.Bitmap $sz, $sz
+    $g   = [System.Drawing.Graphics]::FromImage($bmp)
+    $g.Clear([System.Drawing.Color]::Transparent)
+
+    $body = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb(38, 62, 110))
+    $pins = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb(150, 168, 196))
+    $win  = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb(80, 148, 232))
+    $vm   = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb(104, 196, 138))
+
+    foreach ($i in 0..3) {                      # CPU の足
+        $o = 62 + $i * 40
+        $g.FillRectangle($pins, $o, 18, 18, 30)
+        $g.FillRectangle($pins, $o, 208, 18, 30)
+        $g.FillRectangle($pins, 18, $o, 30, 18)
+        $g.FillRectangle($pins, 208, $o, 30, 18)
+    }
+    $g.FillRectangle($body, 46, 46, 164, 164)   # パッケージ
+    $g.FillRectangle($win, 76, 76, 46, 104)     # 内側を 2 色に分けて「分割」を表す
+    $g.FillRectangle($vm, 134, 76, 46, 104)
+    $g.Dispose()
+
+    $ms = New-Object System.IO.MemoryStream
+    $bmp.Save($ms, [System.Drawing.Imaging.ImageFormat]::Png)
+    $bmp.Dispose()
+    $png = $ms.ToArray()
+    $ms.Dispose()
+
+    # PNG を ICO のヘッダで包む (256x256 は幅・高さを 0 で表す決まり)
+    $fs = [System.IO.File]::Create($Path)
+    $bw = New-Object System.IO.BinaryWriter $fs
+    $bw.Write([uint16]0); $bw.Write([uint16]1); $bw.Write([uint16]1)
+    $bw.Write([byte]0);   $bw.Write([byte]0)
+    $bw.Write([byte]0);   $bw.Write([byte]0)
+    $bw.Write([uint16]1); $bw.Write([uint16]32)
+    $bw.Write([uint32]$png.Length); $bw.Write([uint32]22)
+    $bw.Write($png)
+    $bw.Close(); $fs.Close()
+}
+
 if ($Setup) {
     if (-not (Test-Admin)) {
         Show-Info "管理者権限で実行してください (右クリック →『管理者として実行』)。" "Warning"
@@ -73,17 +116,51 @@ if ($Setup) {
     $ts = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -ExecutionTimeLimit (New-TimeSpan -Hours 2)
     Register-ScheduledTask -TaskName $TaskName -Action $action -Settings $ts -RunLevel Highest -Force | Out-Null
 
-    $lnkPath = Join-Path ([Environment]::GetFolderPath("Desktop")) "CPU割り当て.lnk"
+    # schtasks を直接ショートカットにすると一瞬だけ黒い窓が出る。
+    # wscript から呼べば窓は一切出ない (ウィンドウ スタイル 0)
+    $vbsPath = Join-Path $PSScriptRoot "launch-console.vbs"
+    $vbs = @(
+        "' CPU コア割り当て — 設定コンソールの起動用",
+        "' 黒いコンソール窓を出さずにタスクを起動するためのラッパー",
+        "CreateObject(""WScript.Shell"").Run ""schtasks.exe /run /tn """"$TaskName"""""", 0, False"
+    )
+    # VBScript は ANSI として読まれるため、UTF-8 ではなくシステム既定の文字コードで書く
+    Set-Content -Path $vbsPath -Value $vbs -Encoding Default
+
+    $icoPath = Join-Path $PSScriptRoot "cpu-console.ico"
+    $iconRef = "shell32.dll,27"
+    try {
+        New-ConsoleIcon $icoPath
+        if (Test-Path $icoPath) { $iconRef = "$icoPath,0" }
+    } catch {
+        Write-Host "  (アイコンを作成できなかったため、標準のアイコンを使います)" -ForegroundColor Yellow
+    }
+
+    # デスクトップとスタートメニューの両方に置く。
+    # スタートメニューに入れると検索から名前で開けるようになり、
+    # 右クリックからタスクバーへピン留めもできる (ピン留めは Windows の仕様上、手動のみ)
+    $targets = @(
+        (Join-Path ([Environment]::GetFolderPath("Desktop"))  "CPU割り当て.lnk"),
+        (Join-Path ([Environment]::GetFolderPath("Programs")) "CPU割り当て.lnk")
+    )
     $shell = New-Object -ComObject WScript.Shell
-    $lnk = $shell.CreateShortcut($lnkPath)
-    $lnk.TargetPath = "schtasks.exe"
-    $lnk.Arguments  = "/run /tn `"$TaskName`""
-    $lnk.WorkingDirectory = $PSScriptRoot
-    $lnk.WindowStyle  = 7   # 最小化 (schtasks の黒い窓を見せない)
-    $lnk.IconLocation = "shell32.dll,27"
-    $lnk.Description  = "CPU コア割り当ての設定コンソール"
-    $lnk.Save()
-    Write-Host "デスクトップに『CPU割り当て』アイコンを作成しました (UAC 確認なしで開けます)。" -ForegroundColor Green
+    foreach ($lnkPath in $targets) {
+        $dir = Split-Path $lnkPath -Parent
+        if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+        $lnk = $shell.CreateShortcut($lnkPath)
+        $lnk.TargetPath       = Join-Path $env:SystemRoot "System32\wscript.exe"
+        $lnk.Arguments        = "`"$vbsPath`""
+        $lnk.WorkingDirectory = $PSScriptRoot
+        $lnk.IconLocation     = $iconRef
+        $lnk.Description      = "CPU コア割り当ての設定コンソール"
+        $lnk.Save()
+    }
+
+    Write-Host "『CPU割り当て』を登録しました。" -ForegroundColor Green
+    Write-Host "  - デスクトップのアイコン" -ForegroundColor Green
+    Write-Host "  - スタートメニュー (「CPU」で検索しても出ます)" -ForegroundColor Green
+    Write-Host "  PowerShell を開く必要はありません。黒い窓も出ません。" -ForegroundColor Green
+    Write-Host "  タスクバーに置くには、スタートメニューで右クリック →『タスクバーにピン留めする』" -ForegroundColor Cyan
     exit 0
 }
 
