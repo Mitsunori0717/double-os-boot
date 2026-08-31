@@ -95,10 +95,18 @@ Restart-Computer                                      # ② 再起動
 
 コマンドを打たずに、画面でコアを選んで割り当てられます。
 
+**`setup.cmd` をダブルクリック** してください。管理者への昇格・ファイルのブロック解除・
+デスクトップアイコンの作成まで一度に済みます (以後はデスクトップの『CPU割り当て』アイコン)。
+
+PowerShell から実行する場合は、実行ポリシーを回避する形で起動します:
+
 ```powershell
-.\cpu-console.ps1 -Setup   # 最初に一度: デスクトップに『CPU割り当て』アイコンを作成
-.\cpu-console.ps1          # コンソールを開く (以後はアイコンをダブルクリック)
+powershell -NoProfile -ExecutionPolicy Bypass -File .\cpu-console.ps1 -Setup
+powershell -NoProfile -ExecutionPolicy Bypass -File .\cpu-console.ps1
 ```
+
+> `.\cpu-console.ps1` と直接打つと、環境によっては
+> 「デジタル署名されていません」と拒否されます (下の「最初につまずく点」参照)。
 
 ```
  この PC の CPU   Core i7-14700 - 20 コア / 28 スレッド (P コア 8 + E コア 12)
@@ -189,6 +197,26 @@ Restart-Computer                                      # ② 再起動
 
 ## トラブルシューティング
 
+### 最初につまずく点: 「デジタル署名されていません」で実行できない
+
+PowerShell の実行ポリシーによる拒否で、スクリプトの不具合ではありません。
+原因は次のどちらかです。
+
+```powershell
+Get-ExecutionPolicy -List                                    # 適用中のポリシーを確認
+Get-Item .\cpu-console.ps1 -Stream Zone.Identifier            # 表示されればネット由来のブロック有り
+```
+
+| 原因 | 対処 |
+|---|---|
+| ZIP でダウンロードしたファイルにブロック印 (Mark of the Web) が付いている | `Get-ChildItem C:\double-os-boot -Recurse | Unblock-File` で解除 (`setup.cmd` は自動で実行します) |
+| 実行ポリシーが Restricted / AllSigned | 都度回避: `powershell -NoProfile -ExecutionPolicy Bypass -File .\cpu-console.ps1`  /  恒久設定: `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` |
+
+いずれの場合も **`setup.cmd` から始めれば回避できます** (ブロック解除と Bypass 起動を代行)。
+`setup.cmd` が作るデスクトップアイコンも Bypass 付きで登録されるため、以後は問題になりません。
+
+### その他
+
 | 症状 | 対処 |
 |---|---|
 | `-Verify` でゲスト実行がホスト用コアに出る | `-Apply` 後に VM を再起動したか確認 → 自動タスク `CpuPartition-Pin` の登録を `Get-ScheduledTask` で確認 → だめなら再度 `-Apply` |
@@ -218,6 +246,9 @@ Windows が起動できない場合 (通常起きません) は、回復環境 (
 | `cpu-topology.json` | 検出したコア構成の控え (minroot でコアが見えなくなったとき表示に使う) |
 | `cpu-partition-log.txt` | 自動適用の記録 (直近 200 行) |
 | `tools\CpuGroups.exe` | full モード用の Microsoft 公式ツール (任意) |
+
+なお `setup.cmd` / `console.cmd` は、PowerShell の実行ポリシーに関係なく
+コンソールを開くための入口です (中身は cpu-console.ps1 を Bypass で起動するだけ)。
 
 削除して元に戻す場合は、先に `.\cpu-partition.ps1 -Undo` を実行してから
 フォルダごと削除してください (自動タスクと bcdedit 設定が残らないように)。
