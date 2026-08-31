@@ -143,11 +143,20 @@ function Get-SourceViaFiles {
         $dst = Join-Path $root ($e.Rel -replace '/', '\')
         $dir = Split-Path $dst -Parent
         if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
-        try {
-            Invoke-WebRequest -Uri $e.Url -OutFile $dst -UseBasicParsing -Headers $UA
+        # 一時的な失敗 (混雑・throttle) に備えて数回試す
+        $got = $false
+        for ($try = 1; $try -le 3 -and -not $got; $try++) {
+            try {
+                Invoke-WebRequest -Uri $e.Url -OutFile $dst -UseBasicParsing -Headers $UA
+                $got = $true
+            } catch {
+                if ($try -lt 3) { Start-Sleep -Milliseconds (400 * $try) }
+            }
+        }
+        if ($got) {
             $n++
-        } catch {
-            # 1 つ失敗しても全体は止めない (プロキシが特定のパスだけ弾く環境があるため)
+        } else {
+            # それでも駄目なら飛ばす (プロキシが特定のパスだけ弾く環境があるため)
             $failed += $e.Rel
             Remove-Item $dst -Force -ErrorAction SilentlyContinue
         }
