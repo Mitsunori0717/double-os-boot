@@ -243,7 +243,7 @@ $bootDisk = Get-VMHardDiskDrive -VMName $VMName
 Set-VMFirmware -VMName $VMName -FirstBootDevice $bootDisk
 
 # 物理ディスクのためチェックポイントは使用不可。自動停止はシャットダウン要求に
-Set-VM -VMName $VMName -CheckpointType Disabled -AutomaticStopAction ShutDown
+Set-VM -Name $VMName -CheckpointType Disabled -AutomaticStopAction ShutDown
 
 Write-Host ""
 Write-Host "作成しました。" -ForegroundColor Green
