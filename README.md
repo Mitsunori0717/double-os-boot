@@ -96,11 +96,25 @@ KVM が担うのは「どのハードをどちらが所有するか」の調停�
 端末ごとの設定ファイル (画面設定・CPU 割り当て・ディスク記録など) は
 GitHub 側に無いため上書きされず、そのまま残ります。
 
-初回だけ手で取得する場合は、次の URL をブラウザで開いてください
-(「Download ZIP」ボタンではなくこの形式なら確実です):
+### ZIP が取得できない環境の場合
 
+工場内ネットワークなどでは、ZIP の配信元 (codeload.github.com) が遮断されていて
+`400 Bad Request` になることがあります。その場合は **ファイル単位の取得**に切り替わります
+(自動で切り替わりますが、明示もできます):
+
+```powershell
+.\update.ps1 -Diagnose       # どの取得先に到達できるか調べる
+.\update.ps1 -Method files   # 個別取得を明示 (raw.githubusercontent.com から)
 ```
-https://github.com/Mitsunori0717/double-os-boot/archive/refs/heads/claude/windows-linux-dual-boot-lwgj28.zip
+
+初回だけ手で用意する場合は、この 1 行で更新スクリプト自体を取得できます:
+
+```powershell
+cd C:\double-os-boot
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+$b = "claude/windows-linux-dual-boot-lwgj28"
+Invoke-WebRequest "https://raw.githubusercontent.com/Mitsunori0717/double-os-boot/$b/update.ps1" -OutFile .\update.ps1 -UseBasicParsing
+powershell -NoProfile -ExecutionPolicy Bypass -File .\update.ps1 -Method files
 ```
 
 ## セットアップ手順
