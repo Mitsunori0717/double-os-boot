@@ -712,7 +712,11 @@ if (-not $Apply) {
         Write-Host "  ホスト Windows : CPU $(ConvertTo-LpRangeText $plan.HostLps) ($($plan.HostLps.Count) 論理)"
         Write-Host "  ゲスト VM      : CPU $(ConvertTo-LpRangeText $plan.GuestLps) ($($plan.GuestLps.Count) 論理)"
         Write-Host ""
-        Write-Host "  適用するには: .\cpu-partition.ps1 -Apply -Mode runtime $(if ($HostLps) { "-HostLps `"$HostLps`"" } else { "-HostCores $HostCores" })$(if ($GuestLps) { " -GuestLps `"$GuestLps`"" })" -ForegroundColor Cyan
+        # 文字列の中に $( ... "..." ... ) を書くと Windows PowerShell 5.1 が解釈できないため、
+        # 引数の文面は先に組み立ててから埋め込む
+        $applyHint = if ($HostLps) { "-HostLps `"$HostLps`"" } else { "-HostCores $HostCores" }
+        if ($GuestLps) { $applyHint += " -GuestLps `"$GuestLps`"" }
+        Write-Host "  適用するには: .\cpu-partition.ps1 -Apply -Mode runtime $applyHint" -ForegroundColor Cyan
         Write-Host "    -Mode runtime : 再起動不要。ゲスト VM を専用コアへ固定 (まず推奨)"
         Write-Host "    -Mode full    : 再起動 2 回で完全分割 (ホスト側もコアから締め出す)"
     } else {
