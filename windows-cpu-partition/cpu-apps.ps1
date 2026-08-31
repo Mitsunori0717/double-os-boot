@@ -34,6 +34,20 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+function Test-Admin {
+    ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
+        ).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+}
+
+# 管理者でないと、自動適用タスクの登録も、昇格されたアプリ・他ユーザーのアプリへの
+# 固定もできない。黙って一部だけ失敗すると原因が分からなくなるため先に止める
+# (-Show は読み取りだけなので管理者でなくてよい)
+if (-not $Show -and -not (Test-Admin)) {
+    Write-Error ("管理者権限の PowerShell で実行してください。`n" +
+        "設定コンソール (cpu-console.ps1) の『アプリの割り当て』から操作すれば自動で昇格します。")
+    exit 1
+}
+
 $AppsFile = Join-Path $PSScriptRoot "cpu-apps.json"
 $LogFile  = Join-Path $PSScriptRoot "cpu-apps-log.txt"
 $TaskName = "CpuPartition-Apps"
@@ -75,7 +89,9 @@ function ConvertTo-LpRangeText([int[]]$Lps) {
 function Get-LpMask([int[]]$Lps) {
     $mask = [int64]0
     foreach ($i in $Lps) {
-        if ($i -ge 63) { continue }   # 論理 CPU 63 以上は対象外 (アフィニティの表現上の制限)
+        # 黙って切り捨てると「指定したのに効かない」ことになるため、明示的に止める
+        # (cpu-partition.ps1 の Get-LpMask と同じ扱い)
+        if ($i -ge 63) { throw "論理 CPU 63 以上のピン留めは本スクリプト未対応です (指定: $i)" }
         $mask = $mask -bor ([int64]1 -shl $i)
     }
     return $mask
