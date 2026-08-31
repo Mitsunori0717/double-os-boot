@@ -62,6 +62,62 @@ if ($DiskNumber -eq $sysDisk) {
     exit 1
 }
 
+# --- ネットワーク NIC の確認 (ディスクに触れる前に済ませる) ---
+# 名前・IP アドレス・説明のどれで指定されても、実際のアダプター名に解決する
+function Show-NetAdapters {
+    Write-Host ""
+    Write-Host "この PC の LAN アダプター一覧:" -ForegroundColor Cyan
+    $rows = @(Get-NetAdapter -ErrorAction SilentlyContinue | Sort-Object Name)
+    foreach ($a in $rows) {
+        $ips = @(Get-NetIPAddress -InterfaceIndex $a.ifIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+            ForEach-Object { $_.IPAddress })
+        Write-Host ("  名前: {0,-22} 状態: {1,-8} IP: {2,-16} {3}" -f `
+            $a.Name, $a.Status, $(if ($ips.Count -gt 0) { $ips -join "," } else { "(なし)" }), $a.InterfaceDescription)
+    }
+    Write-Host ""
+    Write-Host "  -NetAdapterName には上の『名前』を指定してください (例: -NetAdapterName 'イーサネット 2')" -ForegroundColor Yellow
+}
+
+function Resolve-NetAdapterName([string]$Spec) {
+    $a = Get-NetAdapter -Name $Spec -ErrorAction SilentlyContinue
+    if ($a) { return $a.Name }
+    # IPv4 アドレスで指定された場合は、そのアドレスを持つアダプターを探す
+    if ($Spec -match '^\d{1,3}(\.\d{1,3}){3}$') {
+        $ip = @(Get-NetIPAddress -IPAddress $Spec -AddressFamily IPv4 -ErrorAction SilentlyContinue)[0]
+        if ($ip) {
+            $byIp = Get-NetAdapter -InterfaceIndex $ip.InterfaceIndex -ErrorAction SilentlyContinue
+            if ($byIp) {
+                Write-Host "IP $Spec は LAN アダプター『$($byIp.Name)』のものでした。これを使います。" -ForegroundColor Cyan
+                return $byIp.Name
+            }
+        }
+        return $null
+    }
+    # 製品名 (説明) の一部でも探す
+    $byDesc = @(Get-NetAdapter -ErrorAction SilentlyContinue | Where-Object { $_.InterfaceDescription -like "*$Spec*" })
+    if ($byDesc.Count -eq 1) {
+        Write-Host "『$Spec』は LAN アダプター『$($byDesc[0].Name)』と判断しました。" -ForegroundColor Cyan
+        return $byDesc[0].Name
+    }
+    return $null
+}
+
+if ($NetAdapterName) {
+    $resolvedNic = Resolve-NetAdapterName $NetAdapterName
+    if (-not $resolvedNic) {
+        Write-Host ""
+        Write-Host "LAN アダプター『$NetAdapterName』が見つかりません。" -ForegroundColor Red
+        if ($NetAdapterName -match '^\d{1,3}(\.\d{1,3}){3}$') {
+            Write-Host "  IP アドレスで指定されましたが、その IP を持つアダプターはこの PC にありません。" -ForegroundColor Yellow
+            Write-Host "  (工作機械や EdgeBox 側の IP ではなく、この PC の LAN ポートを指定してください)" -ForegroundColor Yellow
+        }
+        Show-NetAdapters
+        Write-Host "ディスクには何も変更していません。上の一覧から名前を選んで実行し直してください。" -ForegroundColor Green
+        exit 1
+    }
+    $NetAdapterName = $resolvedNic
+}
+
 $disk = Get-Disk -Number $DiskNumber
 Write-Host "対象ディスク:" -ForegroundColor Cyan
 Write-Host ("  番号 {0}: {1} ({2:N0} GB)" -f $disk.Number, $disk.FriendlyName, ($disk.Size / 1GB))

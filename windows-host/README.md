@@ -44,6 +44,7 @@ Get-Disk
 Get-NetAdapter
 
 # 3. VM 作成 (専用機ディスクが 0、有線 LAN が "イーサネット" の例)
+#    -NetAdapterName には Get-NetAdapter の「Name」を指定 (IP アドレスでも逆引きします)
 .\01-create-field-vm.ps1 -DiskNumber 0 -NetAdapterName "イーサネット"
 
 # 4. 起動
