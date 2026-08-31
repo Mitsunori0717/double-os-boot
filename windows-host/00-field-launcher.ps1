@@ -222,7 +222,10 @@ foreach ($other in @(Get-VM | Where-Object { -not $targetVm -or $_.Name -ne $tar
         Warn "VM『$($other.Name)』が同じディスク $diskNo を掴んでいます (このままでは起動できません)"
         if ($Status) { $blocked = $true; continue }
         if ($other.State -ne "Off") {
-            Warn "  『$($other.Name)』が動作中です。先に停止してください: Stop-VM '$($other.Name)'"
+            # 起動中ということは、専用機が既にその VM で動いている可能性が高い
+            Warn "  『$($other.Name)』は【起動中】です。専用機は既にそちらで動いている可能性があります。"
+            Info "    そのまま使う場合   : .\00-field-launcher.ps1 -VMName `"$($other.Name)`""
+            Info "    こちらに切り替える : Stop-VM '$($other.Name)' で停止してから、もう一度実行"
             $blocked = $true
             continue
         }
