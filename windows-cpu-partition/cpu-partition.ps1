@@ -786,6 +786,27 @@ if ($Verify) {
         } catch { }
     }
 
+    # 自動タスクの状態。
+    # LastRunTime / LastTaskResult は Get-ScheduledTask ではなく
+    # Get-ScheduledTaskInfo 側にあるため、ここで一緒に出しておく
+    # (Get-ScheduledTask | Select LastRunTime は常に空欄になり、
+    #  「一度も実行されていない」ように見えてしまう)。
+    $pinTask = Get-ScheduledTask -TaskName $PinTaskName -ErrorAction SilentlyContinue
+    if ($pinTask) {
+        $tinfo = $null
+        try { $tinfo = Get-ScheduledTaskInfo -TaskName $PinTaskName -ErrorAction Stop } catch { }
+        if ($tinfo -and $tinfo.LastRunTime -and $tinfo.LastRunTime.Year -gt 1999) {
+            $rtext = if ($tinfo.LastTaskResult -eq 0) { "成功" } else { "結果コード $($tinfo.LastTaskResult)" }
+            $rcol  = if ($tinfo.LastTaskResult -eq 0) { "Gray" } else { "Yellow" }
+            Write-Host ("  自動タスク: {0} / 前回実行 {1} ({2})" -f `
+                $pinTask.State, $tinfo.LastRunTime.ToString("yyyy-MM-dd HH:mm:ss"), $rtext) -ForegroundColor $rcol
+        } else {
+            Write-Host "  自動タスク: $($pinTask.State) / まだ一度も実行されていません (再起動・ログオン・VM 起動で走ります)" -ForegroundColor Yellow
+        }
+    } else {
+        Write-Host "  自動タスク: 未登録 — 再起動すると分割は外れます" -ForegroundColor Yellow
+    }
+
     Write-Host "  採取中... (ゲスト VM に負荷がかかっているほど分かりやすい結果になります)"
 
     function Get-CounterMap($ClassName) {
