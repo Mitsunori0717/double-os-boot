@@ -82,6 +82,27 @@ KVM が担うのは「どのハードをどちらが所有するか」の調停�
 | メモリ | 32 GB 推奨 (Windows に 16 GB 固定割り当ての場合) |
 | Linux | Ubuntu 24.04 LTS を想定 (Debian 系なら概ね動作) |
 
+## 更新のしかた (update.cmd)
+
+このリポジトリのブランチ名には `/` が含まれるため、GitHub の「Download ZIP」
+ボタンがうまく動かないことがあります。更新は同梱の **`update.cmd` をダブルクリック**
+するのが確実です (ZIP の取得・展開・上書き・ブロック解除まで自動)。
+
+```powershell
+.\update.ps1           # 最新版に更新
+.\update.ps1 -Check    # 更新される内容だけ確認 (変更しない)
+```
+
+端末ごとの設定ファイル (画面設定・CPU 割り当て・ディスク記録など) は
+GitHub 側に無いため上書きされず、そのまま残ります。
+
+初回だけ手で取得する場合は、次の URL をブラウザで開いてください
+(「Download ZIP」ボタンではなくこの形式なら確実です):
+
+```
+https://github.com/Mitsunori0717/double-os-boot/archive/refs/heads/claude/windows-linux-dual-boot-lwgj28.zip
+```
+
 ## セットアップ手順
 
 ### STEP 0: デュアルブートの構築 (未構築の場合)
