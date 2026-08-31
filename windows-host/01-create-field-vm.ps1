@@ -203,6 +203,20 @@ if ($SwitchName) {
     }
 }
 
+# --- 同じ物理ディスクを既に他の VM が使っていないか (同時使用は不可) ---
+foreach ($other in @(Get-VM -ErrorAction SilentlyContinue)) {
+    foreach ($d in @(Get-VMHardDiskDrive -VMName $other.Name -ErrorAction SilentlyContinue)) {
+        if ($d.DiskNumber -eq $DiskNumber) {
+            Write-Host ""
+            Write-Host "ディスク $DiskNumber は既に VM『$($other.Name)』が使っています。" -ForegroundColor Red
+            Write-Host "  1 つの物理ディスクを 2 つの VM から同時に使うことはできません。" -ForegroundColor Yellow
+            Write-Host "  旧構成の VM が残っている場合は、先に削除してください: Remove-VM '$($other.Name)' -Force" -ForegroundColor Yellow
+            Write-Host "ディスクには何も変更していません。" -ForegroundColor Green
+            exit 1
+        }
+    }
+}
+
 $disk = Get-Disk -Number $DiskNumber
 Write-Host "対象ディスク:" -ForegroundColor Cyan
 Write-Host ("  番号 {0}: {1} ({2:N0} GB)" -f $disk.Number, $disk.FriendlyName, ($disk.Size / 1GB))
