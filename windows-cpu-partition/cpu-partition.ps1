@@ -72,6 +72,7 @@ param(
     [switch]$NoPriorityBoost,   # runtime: vmmem の優先度昇格をしない
     [switch]$NoReserve,         # full: CPU グループ不成立時の処理能力予約をしない
     [switch]$AutoGetTools,      # full: CpuGroups.exe を確認なしで取得する (設定コンソール用)
+    [switch]$AllowMissingVM,    # VM が未作成でも計画を保存する (作成・起動後に自動タスクが適用)
 
     # --- 確認・解除 ---
     [switch]$Verify,            # 実測 (各論理 CPU のゲスト/合計実行率を採取)
@@ -244,7 +245,8 @@ function Save-Config($Obj) {
 
 # --- VM に対応する vmwp / vmmem プロセスを探す ---
 function Get-VmProcesses([string]$Name) {
-    $vm = Get-VM -Name $Name -ErrorAction Stop
+    $vm = Get-VM -Name $Name -ErrorAction SilentlyContinue
+    if (-not $vm) { return [pscustomobject]@{ Vm = $null; Vmwp = $null; Vmmem = $null } }
     $vmId = $vm.Id.Guid
     $vmwp = $null; $vmmem = $null
     foreach ($w in @(Get-CimInstance Win32_Process -Filter "Name='vmwp.exe'")) {
@@ -352,6 +354,9 @@ function Resolve-Plan([object]$Topo, [string]$PlanMode) {
 # vmmem をゲスト用コアへ、vmwp をホスト用コアへ固定する。戻り値: 結果の説明文字列
 function Set-RuntimePin([int[]]$HostArr, [int[]]$GuestArr, [bool]$Boost) {
     $procs = Get-VmProcesses $VMName
+    if (-not $procs.Vm) {
+        return "skip: VM '$VMName' はまだ作成されていません (作成して起動すれば自動で適用します)"
+    }
     if ($procs.Vm.State -ne "Running") {
         return "skip: VM '$VMName' が実行中でないため何もしませんでした ($($procs.Vm.State))"
     }
@@ -686,9 +691,13 @@ if ($Mode -eq "") {
     Write-Error "-Apply には -Mode runtime か -Mode full を指定してください (違いはヘルプ参照)。迷ったら runtime。"
     exit 1
 }
-if (-not $vm) {
-    Write-Error "VM '$VMName' がありません。-VMName で対象の VM 名を指定してください (一覧: Get-VM)。"
+if (-not $vm -and -not $AllowMissingVM) {
+    Write-Error ("VM '$VMName' がありません。-VMName で対象の VM 名を指定してください (一覧: Get-VM)。`n" +
+        "まだ VM を作っていない場合は -AllowMissingVM を付けると、計画だけ保存して VM の作成・起動後に自動適用します。")
     exit 1
+}
+if (-not $vm) {
+    Write-Host "VM '$VMName' は未作成です。計画を保存し、VM を作成・起動した時点で自動適用します。" -ForegroundColor Yellow
 }
 
 # 適用のたびに指定がなければ、保存済み計画を引き継ぐ (full の 2 段階目で同じ指定を省略可能に)
@@ -715,8 +724,9 @@ Write-Host "  ホスト Windows : CPU $hostText ($($plan.HostLps.Count) 論理)"
 Write-Host "  ゲスト VM      : CPU $guestText ($($plan.GuestLps.Count) 論理)"
 
 # vCPU 数とゲスト用コア数の一致を確認 (1 論理 CPU = 1 仮想プロセッサが理想形)
-$vcpu = (Get-VMProcessor -VMName $VMName).Count
-if ($vcpu -ne $plan.GuestLps.Count) {
+$vcpu = 0
+if ($vm) { $vcpu = [int](Get-VMProcessor -VMName $VMName).Count }
+if ($vm -and $vcpu -ne $plan.GuestLps.Count) {
     if ($vm.State -eq "Off") {
         Write-Host "  仮想プロセッサ数を $vcpu → $($plan.GuestLps.Count) に合わせます (1 コア = 1 仮想プロセッサが理想のため)" -ForegroundColor Cyan
         Set-VMProcessor -VMName $VMName -Count $plan.GuestLps.Count
@@ -748,6 +758,7 @@ if ($Mode -eq "runtime") {
         Mode = "runtime"; VMName = $VMName
         HostLps = $plan.HostLps; GuestLps = $plan.GuestLps
         NoPriorityBoost = [bool]$NoPriorityBoost
+        PendingVM = (-not $vm)     # VM 未作成のまま保存した計画かどうか
         UpdatedAt = (Get-Date -Format "yyyy-MM-dd HH:mm:ss")
     })
     Write-PinLog "Apply(runtime): ホスト=$hostText ゲスト=$guestText"
@@ -755,13 +766,15 @@ if ($Mode -eq "runtime") {
     Register-PinTask
     Write-Host "  VM 起動時に自動で固定し直すタスク '$PinTaskName' を登録しました" -ForegroundColor Green
 
-    if ($vm.State -eq "Running") {
+    if ($vm -and $vm.State -eq "Running") {
         $msg = Set-RuntimePin $plan.HostLps $plan.GuestLps (-not $NoPriorityBoost)
         Write-PinLog "Apply(runtime) 即時適用: $msg"
         if ($msg -like "ok:*") { Write-Host "  即時適用: $($msg.Substring(4))" -ForegroundColor Green }
         else { Write-Host "  即時適用: $msg" -ForegroundColor Yellow }
-    } else {
+    } elseif ($vm) {
         Write-Host "  VM は停止中です。次回起動時に自動タスクが適用します。"
+    } else {
+        Write-Host "  VM が未作成のため、作成して起動した時点で自動タスクが適用します。" -ForegroundColor Yellow
     }
 
     Write-Host ""
@@ -876,8 +889,10 @@ if ($exe) {
     $affinityArg = ($plan.GuestLps -join ",")
     $rCreate = Invoke-CpuGroups $exe @("CreateGroup", "/GroupId:$GroupId", "/GroupAffinity:$affinityArg")
     $rBind = $null
-    if ($rCreate.Ok) {
+    if ($rCreate.Ok -and $vm) {
         $rBind = Invoke-CpuGroups $exe @("SetVmGroup", "/VmName:$VMName", "/GroupId:$GroupId")
+    } elseif ($rCreate.Ok) {
+        Write-Host "  CPU グループを作成しました (VM 未作成のため割り当ては VM 作成後に -Apply し直してください)" -ForegroundColor Yellow
     }
     if ($rCreate.Ok -and $rBind -and $rBind.Ok) {
         $groupBound = $true
@@ -889,14 +904,14 @@ if ($exe) {
         if (-not $rCreate.Ok) { $failOut = $rCreate.Output } elseif ($rBind) { $failOut = $rBind.Output }
         Write-Host "  CPU グループの作成に失敗しました: $failOut" -ForegroundColor Yellow
         Write-Host "  (CPU グループは Windows Server の機能で、クライアント版では動かない環境もあります)" -ForegroundColor Yellow
-        if ($vm.State -ne "Off") {
+        if ($vm -and $vm.State -ne "Off") {
             Write-Host "  VM 実行中が原因の可能性もあります。VM を停止して再実行してみてください: Stop-VM $VMName" -ForegroundColor Yellow
         }
     }
 }
 
 # --- CPU グループが使えない場合の処理能力予約 (準分割の仕上げ) ---
-if (-not $groupBound -and -not $NoReserve) {
+if (-not $groupBound -and -not $NoReserve -and $vm) {
     if ($vm.State -eq "Off") {
         Set-VMProcessor -VMName $VMName -Reserve 100
         Write-Host "  代わりに処理能力予約 (Reserve 100%) を設定しました ($Scheduler スケジューラでは有効に機能します)" -ForegroundColor Green
@@ -909,6 +924,7 @@ Save-Config ([pscustomobject]@{
     Mode = "full"; VMName = $VMName
     HostLps = $plan.HostLps; GuestLps = $plan.GuestLps
     Scheduler = $Scheduler; GroupBound = $groupBound; NoPriorityBoost = $false
+    PendingVM = (-not $vm)
     UpdatedAt = (Get-Date -Format "yyyy-MM-dd HH:mm:ss")
 })
 Write-PinLog "Apply(full) 第2段階: groupBound=$groupBound"
