@@ -32,10 +32,13 @@ param(
     [int]$MemoryGB    = 8,
     [int]$CpuCount    = 6,
 
-    # 外部スイッチを作る物理 NIC 名 (Get-NetAdapter で確認)。
+    # 外部スイッチを作る物理 NIC 名 (Get-NetAdapter で確認)。IP アドレスでも指定できます。
     # 省略時は Default Switch (NAT) になり、工作機械から VM に到達できないため
     # 収集運用では必ず指定を推奨
-    [string]$NetAdapterName = ""
+    [string]$NetAdapterName = "",
+
+    # 既にある Hyper-V 仮想スイッチをそのまま使う場合はこちら (Get-VMSwitch で確認)
+    [string]$SwitchName = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -78,6 +81,37 @@ function Show-NetAdapters {
     Write-Host "  -NetAdapterName には上の『名前』を指定してください (例: -NetAdapterName 'イーサネット 2')" -ForegroundColor Yellow
 }
 
+function Show-VMSwitches {
+    $sws = @(Get-VMSwitch -ErrorAction SilentlyContinue)
+    Write-Host ""
+    if ($sws.Count -eq 0) {
+        Write-Host "この PC には Hyper-V 仮想スイッチがまだありません。" -ForegroundColor Cyan
+        return
+    }
+    Write-Host "既にある Hyper-V 仮想スイッチ:" -ForegroundColor Cyan
+    foreach ($sw in $sws) {
+        Write-Host ("  名前: {0,-24} 種類: {1,-10} {2}" -f $sw.Name, $sw.SwitchType, $sw.NetAdapterInterfaceDescription)
+    }
+    Write-Host "  既存のものを使う場合: -SwitchName '<上の名前>'" -ForegroundColor Yellow
+}
+
+# ホスト側の仮想アダプター名 (vEthernet (X)) から、その仮想スイッチを探す
+function Get-SwitchByHostAdapter([string]$AdapterName) {
+    foreach ($sw in @(Get-VMSwitch -ErrorAction SilentlyContinue)) {
+        if ($AdapterName -eq ("vEthernet (" + $sw.Name + ")")) { return $sw }
+    }
+    return $null
+}
+
+# 物理 NIC が既にどれかの外部スイッチに割り当て済みかを調べる
+function Get-SwitchByPhysicalNic($Nic) {
+    if (-not $Nic) { return $null }
+    foreach ($sw in @(Get-VMSwitch -SwitchType External -ErrorAction SilentlyContinue)) {
+        if ($sw.NetAdapterInterfaceDescription -eq $Nic.InterfaceDescription) { return $sw }
+    }
+    return $null
+}
+
 function Resolve-NetAdapterName([string]$Spec) {
     $a = Get-NetAdapter -Name $Spec -ErrorAction SilentlyContinue
     if ($a) { return $a.Name }
@@ -102,7 +136,24 @@ function Resolve-NetAdapterName([string]$Spec) {
     return $null
 }
 
-if ($NetAdapterName) {
+# 使用するスイッチ名 ($useSwitch) と、新規作成が必要なら元になる NIC ($createFrom) を決める
+$useSwitch = ""
+$createFrom = ""
+
+if ($SwitchName) {
+    # --- 既にあるスイッチを指定された ---
+    $sw = Get-VMSwitch -Name $SwitchName -ErrorAction SilentlyContinue
+    if (-not $sw) {
+        Write-Host ""
+        Write-Host "仮想スイッチ『$SwitchName』がありません。" -ForegroundColor Red
+        Show-VMSwitches
+        Write-Host "ディスクには何も変更していません。" -ForegroundColor Green
+        exit 1
+    }
+    $useSwitch = $sw.Name
+    Write-Host "既存の仮想スイッチ『$useSwitch』($($sw.SwitchType)) を使います。" -ForegroundColor Cyan
+
+} elseif ($NetAdapterName) {
     $resolvedNic = Resolve-NetAdapterName $NetAdapterName
     if (-not $resolvedNic) {
         Write-Host ""
@@ -112,10 +163,44 @@ if ($NetAdapterName) {
             Write-Host "  (工作機械や EdgeBox 側の IP ではなく、この PC の LAN ポートを指定してください)" -ForegroundColor Yellow
         }
         Show-NetAdapters
-        Write-Host "ディスクには何も変更していません。上の一覧から名前を選んで実行し直してください。" -ForegroundColor Green
+        Show-VMSwitches
+        Write-Host "ディスクには何も変更していません。上の一覧から選んで実行し直してください。" -ForegroundColor Green
         exit 1
     }
-    $NetAdapterName = $resolvedNic
+
+    # 指定されたのが仮想スイッチ側のアダプター (vEthernet (X)) なら、そのスイッチを使う
+    $sw = Get-SwitchByHostAdapter $resolvedNic
+    if (-not $sw) {
+        # 物理 NIC が既に外部スイッチへ割り当て済みなら、それを再利用する
+        # (1 枚の NIC を 2 つの外部スイッチに割り当てることはできないため)
+        $sw = Get-SwitchByPhysicalNic (Get-NetAdapter -Name $resolvedNic -ErrorAction SilentlyContinue)
+    }
+    if ($sw) {
+        $useSwitch = $sw.Name
+        Write-Host "『$resolvedNic』は既存の仮想スイッチ『$useSwitch』のものでした。これをそのまま使います。" -ForegroundColor Cyan
+        Write-Host "  (新しいスイッチは作らないため、ネットワークは切断されません)"
+    } else {
+        $useSwitch = "EdgeBox-External"
+        $createFrom = $resolvedNic
+    }
+
+} else {
+    # --- 指定なし: 外部スイッチが 1 つだけならそれを使う ---
+    $ext = @(Get-VMSwitch -SwitchType External -ErrorAction SilentlyContinue)
+    if ($ext.Count -eq 1) {
+        $useSwitch = $ext[0].Name
+        Write-Host "外部スイッチ『$useSwitch』が 1 つだけあるため、これを使います。" -ForegroundColor Cyan
+    } elseif ($ext.Count -gt 1) {
+        Write-Host ""
+        Write-Host "外部スイッチが複数あります。どれを使うか -SwitchName で指定してください。" -ForegroundColor Red
+        Show-VMSwitches
+        Write-Host "ディスクには何も変更していません。" -ForegroundColor Green
+        exit 1
+    } else {
+        $useSwitch = "Default Switch"
+        Write-Host "警告: Default Switch (NAT) を使用します。工作機械から VM に到達できません。" -ForegroundColor Yellow
+        Write-Host "      収集運用では -NetAdapterName または -SwitchName を指定してください。"
+    }
 }
 
 $disk = Get-Disk -Number $DiskNumber
@@ -133,18 +218,11 @@ if (-not $disk.IsOffline) {
     Set-Disk -Number $DiskNumber -IsOffline $true
 }
 
-# --- ネットワークスイッチ ---
-if ($NetAdapterName) {
-    $switchName = "EdgeBox-External"
-    if (-not (Get-VMSwitch -Name $switchName -ErrorAction SilentlyContinue)) {
-        Write-Host "外部スイッチ '$switchName' を作成しています (NIC: $NetAdapterName)..." -ForegroundColor Cyan
-        Write-Host "  ※ 作成の瞬間、ネットワークが数秒切断されます。"
-        New-VMSwitch -Name $switchName -NetAdapterName $NetAdapterName -AllowManagementOS $true | Out-Null
-    }
-} else {
-    $switchName = "Default Switch"
-    Write-Host "警告: Default Switch (NAT) を使用します。工作機械から VM に到達できません。" -ForegroundColor Yellow
-    Write-Host "      収集運用では -NetAdapterName で物理 NIC を指定してください。"
+# --- ネットワークスイッチ (必要な場合のみ新規作成) ---
+if ($createFrom) {
+    Write-Host "外部スイッチ '$useSwitch' を作成しています (NIC: $createFrom)..." -ForegroundColor Cyan
+    Write-Host "  ※ 作成の瞬間、ネットワークが数秒切断されます。"
+    New-VMSwitch -Name $useSwitch -NetAdapterName $createFrom -AllowManagementOS $true | Out-Null
 }
 
 Write-Host "VM '$VMName' を作成しています..." -ForegroundColor Cyan
@@ -152,7 +230,7 @@ New-VM -Name $VMName `
     -Generation 2 `
     -MemoryStartupBytes ($MemoryGB * 1GB) `
     -NoVHD `
-    -SwitchName $switchName | Out-Null
+    -SwitchName $useSwitch | Out-Null
 
 # 専用機は独自の署名済みブートチェーンを持つため、MS のセキュアブートは無効化
 Set-VMFirmware -VMName $VMName -EnableSecureBoot Off
@@ -172,7 +250,7 @@ Write-Host "作成しました。" -ForegroundColor Green
 Write-Host "  VM 名      : $VMName"
 Write-Host "  ディスク   : 物理ディスク $DiskNumber (無改造・専有)"
 Write-Host "  CPU        : ${CpuCount} 仮想プロセッサ / メモリ: ${MemoryGB}GB (固定)"
-Write-Host "  スイッチ   : $switchName"
+Write-Host "  スイッチ   : $useSwitch"
 Write-Host ""
 Write-Host "起動するには: .\02-start-field-vm.ps1" -ForegroundColor Cyan
 Write-Host ""
