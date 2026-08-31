@@ -43,14 +43,24 @@ LAN ポート5つ / 工作機械との接続は Ethernet。
 
 どの切替も可逆でデータには触れない。再起動 1〜2 回で必ずどれかの層に確定する。
 
-## CPU の取り分保証 (任意)
+## CPU の取り分保証 (任意・別口ツール)
 
-物理コア固定は Windows クライアント版 Hyper-V では不可のため、代わりに処理能力の予約で保証する:
+CPU コアを Windows と EdgeBox に分割して固定割り当てできる。構成Bからは独立した
+別口ツール `..\windows-cpu-partition\` として保存してある (互いに干渉しない)。
+再起動不要の runtime モードと、完全分割の full モードの 2 段階。詳細はそのフォルダの README。
 
 ```powershell
-# VM 停止中に実行。割り当て vCPU 数ぶんの処理能力を常時確保
-Set-VMProcessor -VMName EdgeBox -Reserve 100
+cd ..\windows-cpu-partition
+.\cpu-partition.ps1 -HostCores 4                      # 分割案の確認 (変更なし)
+.\cpu-partition.ps1 -Apply -Mode runtime -HostCores 4 # 適用 (EdgeBox を専用コアへ固定)
+.\cpu-partition.ps1 -Verify                           # 実測 (各コアで誰が動いたか)
+.\cpu-partition.ps1 -Undo                             # 全解除
 ```
+
+> 旧手順の `Set-VMProcessor -VMName EdgeBox -Reserve 100` は、クライアント版 Windows の
+> 既定構成 (root スケジューラ) では **機能しない** ことが判明したため撤回
+> (処理能力の予約・上限・重みはハイパーバイザーがスケジュールする構成でのみ有効という公式仕様)。
+> 設定済みでも害はないが、保証にはなっていない。上記スクリプトが正しい代替。
 
 ## 便利機能 (手順⑨の代わり/追加)
 
@@ -64,6 +74,10 @@ Set-VMProcessor -VMName EdgeBox -Reserve 100
 VM の起動と Web 画面の応答を待ってから、サブモニターに Edge キオスクモード (枠なし全画面) で表示する。
 これと `Set-VM -AutomaticStartAction Start` の組み合わせで、電源 ON → ログオンだけで
 「モニター1 = Windows / モニター2 = EdgeBox 全画面」になる。終了は Alt+F4。
+
+コンソール表示 (console 指定) は、EdgeBox の起動を確認した約 30 秒後に **自動で閉じる**
+(起動後のコンソールは黒い画面が残るだけのため。土台の黒背景も一緒に消える)。
+残しておきたい場合は『設定』の[画面表示]でオフにできる。02 スクリプトの手動起動時も同様。
 
 ### ワンクリックで EdgeBox 単独起動 (04-reboot-to-field-native.ps1)
 

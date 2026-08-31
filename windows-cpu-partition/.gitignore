@@ -1,0 +1,5 @@
+# 端末固有の状態・記録・取得ツールはリポジトリに含めない
+cpu-partition.json
+cpu-partition-log.txt
+tools/
+cpu-topology.json
