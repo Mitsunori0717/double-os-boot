@@ -87,10 +87,12 @@ Windows 側の FsBP 専用アプリの接続先にも、この IP を設定し�
 ## 自動起動 (PC 起動時に専用機も自動で立ち上げる)
 
 ```powershell
-Set-VM -Name EdgeBox -AutomaticStartAction Start -AutomaticStartDelay 30
+.\03-field-display-kiosk.ps1 -Install   # ログオン時の自動表示 + VM の自動起動 (30 秒後) を設定
 powercfg /h off                  # 高速スタートアップ無効 (自動起動を確実にする)
 .\06-auto-logon.ps1 -Setup       # サインイン画面を省略し、電源 ON で直接デスクトップへ
 ```
+
+VM の自動起動だけを手で入れる場合: `Set-VM -Name <VM名> -AutomaticStartAction Start -AutomaticStartDelay 30`
 
 `06-auto-logon.ps1` でロック画面とパスワード入力を省略すると、電源 ON だけで
 VM 起動 → サインイン → 左右モニターへの自動表示 (`03-field-display-kiosk.ps1`) まで
