@@ -24,9 +24,9 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-# -VMName を明示していない場合、既定名の VM が無ければ、専用機のディスク
+# -VMName を明示していない場合、既定名の VM が無ければ、EdgeBox のディスク
 # (物理ディスクのパススルー) を持つ VM を探して使う。00-field-launcher.ps1 と
-# 同じ考え方で、VM 名が「EdgeBox」でなくても (例: FIELDsystem) そのまま動くようにする
+# 同じ考え方で、VM 名が「EdgeBox」でなくても (旧名称のままでも) そのまま動くようにする
 if (-not $PSBoundParameters.ContainsKey("VMName") -and
     -not (Get-VM -Name $VMName -ErrorAction SilentlyContinue)) {
     $foundVms = @()
@@ -68,7 +68,7 @@ if ($Status) {
 
 if ($Stop) {
     if ($vm.State -eq "Running") {
-        Stop-VM -Name $VMName   # ACPI シャットダウン要求 (専用機側が正常終了処理を行う)
+        Stop-VM -Name $VMName   # ACPI シャットダウン要求 (EdgeBox 側が正常終了処理を行う)
         Write-Host "シャットダウンを要求しました。"
     } else {
         Write-Host "VM は起動していません ($($vm.State))。"
@@ -219,7 +219,7 @@ if ($vm.State -ne "Running") {
     }
 }
 
-# コンソール画面 (起動ログ・専用機の画面) を表示。モニター2に置いて監視用に
+# コンソール画面 (起動ログ・EdgeBox の画面) を表示。モニター2に置いて監視用に
 Start-Process "vmconnect.exe" -ArgumentList "localhost", $VMName
 
 # いま起動したときだけ: EdgeBox の起動を確認したら監視画面を自動で閉じる

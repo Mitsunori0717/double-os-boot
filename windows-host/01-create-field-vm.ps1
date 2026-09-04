@@ -1,12 +1,12 @@
 ﻿<#
 .SYNOPSIS
-    メーカー専用機 Linux (FANUC EdgeBox 等) の物理ディスクを、
+    EdgeBox (メーカー製の専用機 Linux) の物理ディスクを、
     Windows ホスト上の Hyper-V VM としてそのまま起動する定義を作成します。
 
 .DESCRIPTION
     - 対象ディスクを Windows からオフライン化し (誤操作・同時アクセス防止)、
       無改造のまま VM に接続します (イメージのコピーや変換はしません)
-    - セキュアブートを無効化します (専用機は独自の署名チェーンを持つため)
+    - セキュアブートを無効化します (EdgeBox は独自の署名チェーンを持つため)
     - メモリは固定割り当て、チェックポイントは無効 (物理ディスクのため)
     - ネットワークは外部スイッチ推奨 (工作機械が VM に到達できる必要があるため)
 
@@ -24,7 +24,7 @@
 #>
 [CmdletBinding()]
 param(
-    # 専用機 Linux が入っている物理ディスク番号 (Get-Disk で確認)
+    # EdgeBox が入っている物理ディスク番号 (Get-Disk で確認)
     [Parameter(Mandatory = $true)]
     [int]$DiskNumber,
 
@@ -64,7 +64,7 @@ if (Get-VM -Name $VMName -ErrorAction SilentlyContinue) {
 # --- 安全確認: システムディスク (C:) ではないこと ---
 $sysDisk = (Get-Partition -DriveLetter C).DiskNumber
 if ($DiskNumber -eq $sysDisk) {
-    Write-Error "ディスク $DiskNumber は Windows のシステムディスクです。専用機 Linux のディスク番号を指定してください。"
+    Write-Error "ディスク $DiskNumber は Windows のシステムディスクです。EdgeBox のディスク番号を指定してください。"
     exit 1
 }
 
@@ -251,7 +251,7 @@ New-VM -Name $VMName `
     -NoVHD `
     -SwitchName $useSwitch | Out-Null
 
-# 専用機は独自の署名済みブートチェーンを持つため、MS のセキュアブートは無効化
+# EdgeBox は独自の署名済みブートチェーンを持つため、MS のセキュアブートは無効化
 Set-VMFirmware -VMName $VMName -EnableSecureBoot Off
 
 Set-VMProcessor -VMName $VMName -Count $CpuCount

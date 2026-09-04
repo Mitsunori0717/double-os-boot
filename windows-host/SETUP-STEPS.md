@@ -1,6 +1,6 @@
 # 構成B セットアップ手順書 (①〜⑩)
 
-対象環境: Windows 11 Pro (ディスク1=SanDisk) / FANUC EdgeBox (ディスク0=KIOXIA) /
+対象環境: Windows 11 Pro (ディスク1=SanDisk) / EdgeBox (ディスク0=KIOXIA) /
 LAN ポート5つ / 工作機械との接続は Ethernet。
 
 | 手順 | 内容 | 完了確認 |
@@ -12,8 +12,8 @@ LAN ポート5つ / 工作機械との接続は Ethernet。
 | ⑤ | VM 作成: `.\01-create-field-vm.ps1 -DiskNumber 0 -NetAdapterName "<Name>"` (確認プロンプトで KIOXIA を確認して y)。**既に外部スイッチがある環境では `-SwitchName "<Get-VMSwitch の名前>"` を使う** | Hyper-V マネージャーに EdgeBox |
 | ⑥ | 初回起動: `.\02-start-field-vm.ps1`。起動中 **Ctrl 長押し厳禁** (工場出荷リセット) | コンソールに EdgeBox の画面 |
 | ⑦ | IP 確認: `Get-VMNetworkAdapter -VMName EdgeBox`。ブラウザで管理画面を開く | 管理画面が開き収集再開 |
-| ⑧ | Windows 側 FsBP アプリの接続先に ⑦ の IP を設定 | アプリからデータが見える |
-| ⑨ | 起動時の自動表示 + VM 自動起動: `.\03-field-display-kiosk.ps1 -Install` (VM の自動起動も一緒に設定される。VM 名が EdgeBox でなくても自動で見つける) | 電源ONだけで収集開始・左に FsBP・右に管理画面 |
+| ⑧ | Windows 側 EdgeBox アプリの接続先に ⑦ の IP を設定 | アプリからデータが見える |
+| ⑨ | 起動時の自動表示 + VM 自動起動: `.\03-field-display-kiosk.ps1 -Install` (VM の自動起動も一緒に設定される。VM 名が EdgeBox でなくても自動で見つける) | 電源ONだけで収集開始・左に EdgeBox・右に管理画面 |
 | ⑩ | 予行: F8 からネイティブ起動できることを確認。撤退手順 (`Remove-VM` + `Set-Disk -IsOffline $false`) を把握 | ネイティブ起動を1回確認 |
 
 ## いちばん簡単な導入・起動 (①〜⑥をまとめて行う)
@@ -37,7 +37,7 @@ LAN ポート5つ / 工作機械との接続は Ethernet。
 - 夕: `.\02-start-field-vm.ps1 -Stop` → Windows をシャットダウン
 - 切り分け: 問題発生時は F8 → KIOXIA を選択して EdgeBox をネイティブ起動し、再現比較
 
-## 不具合時の切り分けフロー (Windows か / FsBP か / VM か)
+## 不具合時の切り分けフロー (Windows か / EdgeBox か / VM か)
 
 3つの切替スイッチで層を確定する:
 
@@ -47,7 +47,7 @@ LAN ポート5つ / 工作機械との接続は Ethernet。
 | ② Hyper-V 一時停止 | `bcdedit /set hypervisorlaunchtype off` → 再起動 (復帰は `auto`) | 仮想化層ゼロの素の Windows |
 | ③ 管理画面直接アクセス | ブラウザで EdgeBox の IP | アプリを介さない到達確認 |
 
-- 収集が止まった → ①で再現するなら FsBP 側 (FANUC に相談可)。再現しないなら VM 層
+- 収集が止まった → ①で再現するなら EdgeBox 側 (メーカーに相談可)。再現しないなら VM 層
 - アプリが繋がらない → ③で開けるならアプリ/Windows 側。開けないなら EdgeBox/VM 側 → ①へ
 - Windows が不調 → ②で再現するなら Windows/アプリ自体。再現しないなら Hyper-V との干渉
 
@@ -81,9 +81,9 @@ cd ..\windows-cpu-partition
 .\03-field-display-kiosk.ps1 -Install   # ログオン時の自動表示を登録 (VM の自動起動も設定)
 ```
 
-既定は **左 = EdgeBox のコンソール (FsBP の起動画面) / 右 = 管理画面 `https://192.168.0.205/`**。
+既定は **左 = EdgeBox のコンソール (EdgeBox の起動画面) / 右 = 管理画面 `https://192.168.0.205/`**。
 右画面の URL は『EdgeBox設定』の[画面表示]タブで変更できる (再登録は不要)。
-VM 名が EdgeBox でなくても (例: FIELDsystem)、専用機のディスクを持つ VM を自動で見つける。
+VM 名が EdgeBox でなくても (旧名称のままでも)、EdgeBox のディスクを持つ VM を自動で見つける。
 
 VM の起動と Web 画面の応答を待ってから、サブモニターに Edge キオスクモード (枠なし全画面) で表示する。
 これと `Set-VM -AutomaticStartAction Start` の組み合わせで、電源 ON → ログオンだけで

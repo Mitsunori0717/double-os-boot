@@ -297,7 +297,7 @@ baremetal/04-setup-file-sharing.sh   Samba によるデータ共有
 baremetal/05-share-keyboard-mouse.sh 1組のキーボード/マウスを両OSで共有
 baremetal/06-tune-resources.sh       CPU/メモリ配分の確認と調整 (運用しながら変更可)
 baremetal/07-connect-app-network.sh  Windows アプリ ⇔ Linux Fsbp のネットワーク接続設定
-windows-host/                        構成B: Linux 側がメーカー専用機の場合 (Windows をホストに反転)
+windows-host/                        構成B: Linux 側が EdgeBox (メーカー製の専用機) の場合 (Windows をホストに反転)
 windows-cpu-partition/               (別口) Windows ホスト用 CPU コア分割ツール — Hyper-V VM にコアを固定割り当て (構成Bと独立・干渉なし)
 docs/DUAL-BOOT-SETUP.md              ネイティブ・デュアルブートの構築手順
 docs/ARCHITECTURE.md                 技術解説 (なぜこの設計か・何がどこまで可能か)
@@ -306,11 +306,11 @@ docs/VERIFICATION.md                 検証手順書 (未検証部分の確か�
 alternatives/hyperv/                 (参考) Hyper-V による簡易構成。GPU 専有なし・要件が緩い
 ```
 
-**重要な分岐**: Linux 側が自分でインストールした Ubuntu ではなく、**メーカー製の専用機
-システム**(FANUC FIELD system / FsBP 等の署名検証付きイメージ)である場合、その Linux は
+**重要な分岐**: Linux 側が自分でインストールした Ubuntu ではなく、**EdgeBox** のような
+メーカー製の専用機(署名検証付きの改造不可イメージ)である場合、その Linux は
 ホスト役にできないため、本 README の主構成は適用できません。その場合は
 **[windows-host/README.md](windows-host/README.md)(構成B: Windows をホストに反転)** に
-従ってください。専用機ディスクを無改造のまま Hyper-V で同時起動します。
+従ってください。EdgeBox のディスクを無改造のまま Hyper-V で同時起動します。
 
 ## 制約と注意点 (正直な列挙)
 

@@ -1,6 +1,6 @@
 ﻿<#
 .SYNOPSIS
-    EdgeBox (FIELD system) をワンクリックで起動します。
+    EdgeBox をワンクリックで起動します。
     VM があればそのまま起動し、無ければ作成してから起動します。
 
 .DESCRIPTION
@@ -8,7 +8,7 @@
 
       1. 既存 VM を探す
          - 指定名の VM があればそれを使う
-         - 名前が違っても、専用機のディスクを使っている VM があればそれを使う
+         - 名前が違っても、EdgeBox のディスクを使っている VM があればそれを使う
            (旧構成の VM がそのまま活きるので、作り直す必要がありません)
       2. 対象ディスクを決める
          - 既存 VM が使っているディスク / 前回の記録 / 指定 / 自動検出 の順
@@ -99,7 +99,7 @@ if ($Setup) {
     $lnk.WorkingDirectory = $PSScriptRoot
     $lnk.WindowStyle  = 7
     $lnk.IconLocation = "shell32.dll,15"
-    $lnk.Description  = "EdgeBox (FIELD system) を起動する (VM が無ければ作成してから起動)"
+    $lnk.Description  = "EdgeBox を起動する (VM が無ければ作成してから起動)"
     $lnk.Save()
     Write-Host "デスクトップに『EdgeBox 起動』アイコンを作成しました (UAC 確認なしで起動できます)。" -ForegroundColor Green
     exit 0
@@ -132,7 +132,7 @@ $targetVm = Get-VM -Name $VMName -ErrorAction SilentlyContinue
 if ($targetVm) {
     Info "VM『$VMName』が見つかりました (状態: $($targetVm.State))"
 } else {
-    # 名前が違っても、物理ディスクを起動している VM があればそれが専用機の VM
+    # 名前が違っても、物理ディスクを起動している VM があればそれが EdgeBox の VM
     $candidates = @()
     foreach ($vm in @(Get-VM)) {
         foreach ($d in (Get-PassthroughDisks $vm.Name)) {
@@ -145,13 +145,13 @@ if ($targetVm) {
     if ($candidates.Count -eq 1) {
         $targetVm = $candidates[0].VM
         $VMName = $targetVm.Name
-        Ok "名前は違いますが、専用機ディスクを起動する VM『$VMName』が見つかりました。これを使います。"
+        Ok "名前は違いますが、EdgeBox のディスクを起動する VM『$VMName』が見つかりました。これを使います。"
     } elseif ($candidates.Count -gt 1) {
         foreach ($c in $candidates) { Info "  $($c.VM.Name)  (ディスク $($c.Disk) / 状態 $($c.VM.State))" }
         Fail ("物理ディスクを使う VM が複数あります。-VMName でどれを使うか指定してください:`n" +
             (($candidates | ForEach-Object { "  " + $_.VM.Name }) -join "`n"))
     } else {
-        Info "専用機の VM はまだありません (このあと作成します)"
+        Info "EdgeBox の VM はまだありません (このあと作成します)"
     }
 }
 
@@ -175,15 +175,15 @@ if ($diskNo -lt 0) {
     if ($others.Count -eq 1) {
         $diskNo = [int]$others[0].Number
         Info "システムディスク以外はディスク $diskNo だけでした: $($others[0].FriendlyName)"
-        if (-not (Confirm-Step "このディスクを専用機のディスクとして使いますか?")) { exit 0 }
+        if (-not (Confirm-Step "このディスクを EdgeBox のディスクとして使いますか?")) { exit 0 }
     } elseif ($others.Count -gt 1) {
         foreach ($o in $others) {
             Info ("  ディスク {0}: {1} ({2:N0} GB / オフライン={3})" -f $o.Number, $o.FriendlyName, ($o.Size / 1GB), $o.IsOffline)
         }
-        Fail ("専用機のディスクを特定できません。-DiskNumber で指定してください:`n" +
+        Fail ("EdgeBox のディスクを特定できません。-DiskNumber で指定してください:`n" +
             (($others | ForEach-Object { "  ディスク {0}: {1}" -f $_.Number, $_.FriendlyName }) -join "`n"))
     } else {
-        Write-Error "システムディスク以外の物理ディスクが見つかりません。専用機のディスクが接続されているか確認してください。"
+        Write-Error "システムディスク以外の物理ディスクが見つかりません。EdgeBox のディスクが接続されているか確認してください。"
         exit 1
     }
 }
@@ -222,8 +222,8 @@ foreach ($other in @(Get-VM | Where-Object { -not $targetVm -or $_.Name -ne $tar
         Warn "VM『$($other.Name)』が同じディスク $diskNo を掴んでいます (このままでは起動できません)"
         if ($Status) { $blocked = $true; continue }
         if ($other.State -ne "Off") {
-            # 起動中ということは、専用機が既にその VM で動いている可能性が高い
-            Warn "  『$($other.Name)』は【起動中】です。専用機は既にそちらで動いている可能性があります。"
+            # 起動中ということは、EdgeBox が既にその VM で動いている可能性が高い
+            Warn "  『$($other.Name)』は【起動中】です。EdgeBox は既にそちらで動いている可能性があります。"
             Info "    そのまま使う場合   : .\00-field-launcher.ps1 -VMName `"$($other.Name)`""
             Info "    こちらに切り替える : Stop-VM '$($other.Name)' で停止してから、もう一度実行"
             $blocked = $true
@@ -290,7 +290,7 @@ function New-FieldVmHere {
         }
     }
     New-VM -Name $VMName -Generation 2 -MemoryStartupBytes ($MemoryGB * 1GB) -NoVHD -SwitchName $sw | Out-Null
-    Set-VMFirmware  -VMName $VMName -EnableSecureBoot Off        # 専用機は独自の署名チェーン
+    Set-VMFirmware  -VMName $VMName -EnableSecureBoot Off        # EdgeBox は独自の署名チェーン
     Set-VMProcessor -VMName $VMName -Count $CpuCount
     Add-VMHardDiskDrive -VMName $VMName -DiskNumber $diskNo      # 物理ディスクを無改造のまま接続
     Set-VMFirmware  -VMName $VMName -FirstBootDevice (Get-VMHardDiskDrive -VMName $VMName)
