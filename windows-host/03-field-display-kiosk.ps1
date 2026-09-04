@@ -331,6 +331,12 @@ if (-not (Test-Path $ConfigFile)) {
     Write-Host "設定ファイルを作成しました: $ConfigFile" -ForegroundColor Cyan
 }
 $cfg = Get-Content $ConfigFile -Raw -Encoding UTF8 | ConvertFrom-Json
+# 旧版の仮の URL (.200) が設定ファイルに残っている場合は、実機の管理画面 (.205) に置き換える。
+# .200 はどの環境にも合っていない初期値だったため、残しておく理由がない
+if ([string]$cfg.RightUrl -eq "https://192.168.0.200/") {
+    $cfg.RightUrl = [string]$DefaultConfig["RightUrl"]
+    try { $cfg | ConvertTo-Json | Set-Content -Path $ConfigFile -Encoding UTF8 } catch { }
+}
 if (-not $PSBoundParameters.ContainsKey("RightUrl")) { $RightUrl = [string]$cfg.RightUrl }
 if (-not $PSBoundParameters.ContainsKey("LeftUrl"))  { $LeftUrl  = [string]$cfg.LeftUrl }
 # 左右それぞれの全画面指定。設定が無い場合は旧バージョンの設定から引き継ぐ
