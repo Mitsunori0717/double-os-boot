@@ -39,6 +39,10 @@ $SnapshotFile = Join-Path $PSScriptRoot "cpu-topology.json"
 $AppsFile     = Join-Path $PSScriptRoot "cpu-apps.json"
 $AppsEngine   = Join-Path $PSScriptRoot "cpu-apps.ps1"
 $AppsLog      = Join-Path $PSScriptRoot "cpu-apps-log.txt"
+# メモリ割り当ての検査基準 (cpu-partition.ps1 と同じ値)
+$MemHostReserveGB = 8    # Windows 側に最低限残す量
+$MemGuestMinGB    = 4    # VM の最低量
+$MemGuestRecGB    = 8    # VM の推奨量
 $TaskName     = "CpuPartition-Console"
 
 function Test-Admin {
@@ -366,6 +370,16 @@ function Update-Environment {
             try { $script:Vcpu = [int](Get-VMProcessor -VMName $script:VmNameSel).Count } catch { $script:Vcpu = 0 }
         }
     }
+    # メモリ: PC 全体と VM の設定値
+    $script:MemTotalGB = 0.0; $script:MemVmGB = 0.0; $script:MemDynamic = $false
+    try { $script:MemTotalGB = [Math]::Round(([double](Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory) / 1GB, 1) } catch { }
+    if ($script:Vm) {
+        try {
+            $m = Get-VMMemory -VMName $script:VmNameSel -ErrorAction Stop
+            $script:MemVmGB   = [Math]::Round(([double]$m.Startup) / 1GB, 1)
+            $script:MemDynamic = [bool]$m.DynamicMemoryEnabled
+        } catch { }
+    }
 }
 
 # ============================================================
@@ -423,7 +437,7 @@ $ColNone  = [System.Drawing.Color]::FromArgb(232, 232, 232)
 
 $form = New-Object System.Windows.Forms.Form
 $form.Text = "CPU コア割り当て"
-$form.ClientSize = New-Object System.Drawing.Size(964, 790)
+$form.ClientSize = New-Object System.Drawing.Size(964, 862)
 $form.StartPosition = "CenterScreen"
 $form.FormBorderStyle = "FixedDialog"
 $form.MaximizeBox = $false
@@ -633,10 +647,39 @@ $script:rtb.Font = New-Object System.Drawing.Font("Meiryo UI", 9)
 $grpChk.Controls.Add($script:rtb)
 $form.Controls.Add($grpChk)
 
+# --- メモリの割り当て ---
+$grpMem = New-Object System.Windows.Forms.GroupBox
+$grpMem.Text = "メモリの割り当て (PC 全体のメモリを Windows と EdgeBox で分ける)"
+$grpMem.Location = New-Object System.Drawing.Point(12, 700)
+$grpMem.Size = New-Object System.Drawing.Size(940, 66)
+$script:lblMemPc = New-Lbl "" 14 24 240
+$grpMem.Controls.Add($script:lblMemPc)
+$script:lblMemVm = New-Lbl "" 258 24 120
+$grpMem.Controls.Add($script:lblMemVm)
+$script:numMem = New-Object System.Windows.Forms.NumericUpDown
+$script:numMem.Location = New-Object System.Drawing.Point(380, 21)
+$script:numMem.Size = New-Object System.Drawing.Size(64, 24)
+$script:numMem.Minimum = 1
+$script:numMem.Maximum = 4096
+$script:numMem.Value = 8
+$grpMem.Controls.Add($script:numMem)
+$grpMem.Controls.Add((New-Lbl "GB" 448 24))
+$script:lblMemHost = New-Lbl "" 480 24 280
+$grpMem.Controls.Add($script:lblMemHost)
+$script:btnMem = New-Object System.Windows.Forms.Button
+$script:btnMem.Text = "メモリを適用"
+$script:btnMem.Location = New-Object System.Drawing.Point(776, 19)
+$script:btnMem.Size = New-Object System.Drawing.Size(150, 28)
+$grpMem.Controls.Add($script:btnMem)
+$script:lblMemNote = New-Lbl "" 14 44 910
+$script:lblMemNote.ForeColor = [System.Drawing.Color]::DimGray
+$grpMem.Controls.Add($script:lblMemNote)
+$form.Controls.Add($grpMem)
+
 # --- アプリの割り当て (Windows 側アプリを特定コアに固定する) ---
 $grpApps = New-Object System.Windows.Forms.GroupBox
 $grpApps.Text = "アプリの割り当て (Windows 側のアプリを決めたコアで動かす)"
-$grpApps.Location = New-Object System.Drawing.Point(12, 700)
+$grpApps.Location = New-Object System.Drawing.Point(12, 772)
 $grpApps.Size = New-Object System.Drawing.Size(940, 56)
 $script:btnApps = New-Object System.Windows.Forms.Button
 $script:btnApps.Text = "アプリの割り当てを編集..."
@@ -650,35 +693,35 @@ $form.Controls.Add($grpApps)
 # --- 操作ボタン ---
 $script:btnUndo = New-Object System.Windows.Forms.Button
 $script:btnUndo.Text = "分割を解除"
-$script:btnUndo.Location = New-Object System.Drawing.Point(12, 762)
+$script:btnUndo.Location = New-Object System.Drawing.Point(12, 834)
 $script:btnUndo.Size = New-Object System.Drawing.Size(140, 32)
 
 $script:btnVerify = New-Object System.Windows.Forms.Button
 $script:btnVerify.Text = "効き具合を実測"
-$script:btnVerify.Location = New-Object System.Drawing.Point(160, 762)
+$script:btnVerify.Location = New-Object System.Drawing.Point(160, 834)
 $script:btnVerify.Size = New-Object System.Drawing.Size(140, 32)
 
 $script:btnFix = New-Object System.Windows.Forms.Button
 $script:btnFix.Text = "full 用に並べ直す"
-$script:btnFix.Location = New-Object System.Drawing.Point(308, 762)
+$script:btnFix.Location = New-Object System.Drawing.Point(308, 834)
 $script:btnFix.Size = New-Object System.Drawing.Size(160, 32)
 $script:btnFix.Visible = $false
 
 $script:chkTools = New-Object System.Windows.Forms.CheckBox
 $script:chkTools.Text = "CpuGroups.exe を自動取得"
-$script:chkTools.Location = New-Object System.Drawing.Point(476, 767)
+$script:chkTools.Location = New-Object System.Drawing.Point(476, 839)
 $script:chkTools.Size = New-Object System.Drawing.Size(180, 24)
 $script:chkTools.Checked = $true
 $script:chkTools.Visible = $false
 
 $script:btnApply = New-Object System.Windows.Forms.Button
 $script:btnApply.Text = "この内容で適用"
-$script:btnApply.Location = New-Object System.Drawing.Point(660, 762)
+$script:btnApply.Location = New-Object System.Drawing.Point(660, 834)
 $script:btnApply.Size = New-Object System.Drawing.Size(170, 32)
 
 $btnClose = New-Object System.Windows.Forms.Button
 $btnClose.Text = "閉じる"
-$btnClose.Location = New-Object System.Drawing.Point(838, 762)
+$btnClose.Location = New-Object System.Drawing.Point(838, 834)
 $btnClose.Size = New-Object System.Drawing.Size(114, 32)
 $btnClose.DialogResult = "Cancel"
 $form.CancelButton = $btnClose
@@ -734,7 +777,8 @@ function Update-Header {
     $mr = if ($script:UnderMinroot) { "有効 — Windows は $($script:VisibleLps) 論理 CPU に封じ込め中" } else { "未使用" }
     $script:lblCpu2.Text = "ハイパーバイザーのスケジューラ: {0}    minroot: {1}" -f $script:Scheduler, $mr
     if ($script:Vm) {
-        $script:lblVm.Text = "状態: {0}    仮想プロセッサ: {1}" -f $script:Vm.State, $script:Vcpu
+        $script:lblVm.Text = "状態: {0}    仮想プロセッサ: {1}    メモリ: {2} GB{3}" -f $script:Vm.State, $script:Vcpu,
+            $script:MemVmGB, $(if ($script:MemDynamic) { " (動的)" } else { "" })
     } elseif ($script:HyperVOk) {
         $script:lblVm.Text = "この名前の VM が見つかりません"
     } else {
@@ -881,6 +925,55 @@ function Update-Validation {
 # ============================================================
 #  操作 (適用・解除・実測はすべて cpu-partition.ps1 に任せる)
 # ============================================================
+# --- メモリ欄の表示と検査 (適用そのものは cpu-partition.ps1 -MemoryGB に任せる) ---
+function Update-MemoryUi {
+    $total = [double]$script:MemTotalGB
+    $script:lblMemPc.Text = if ($total -gt 0) { "この PC のメモリ: $total GB" } else { "この PC のメモリ: (取得できません)" }
+    $script:lblMemVm.Text = "$($script:VmNameSel) に:"
+    if (-not $script:Vm) {
+        $script:lblMemHost.Text = ""
+        $script:lblMemNote.Text = "VM が見つからないため、メモリは変更できません (VM を作成・検出してから)。"
+        $script:lblMemNote.ForeColor = [System.Drawing.Color]::DimGray
+        $script:btnMem.Enabled = $false; $script:numMem.Enabled = $false
+        return
+    }
+    $script:numMem.Enabled = $true
+    $g = [int]$script:numMem.Value
+    $hostGB = [Math]::Round($total - $g, 1)
+    $script:lblMemHost.Text = if ($total -gt 0) { "→ Windows に残る: $hostGB GB" } else { "" }
+    $errs = @(); $warns = @()
+    if ($g -lt $MemGuestMinGB) { $errs += "最低 $MemGuestMinGB GB 必要" }
+    if ($total -gt 0 -and $hostGB -lt $MemHostReserveGB) {
+        $errs += "Windows 側に最低 $MemHostReserveGB GB 残す必要 (最大 $([int][Math]::Floor($total - $MemHostReserveGB)) GB まで)"
+    }
+    if ($g -lt $MemGuestRecGB) { $warns += "推奨は $MemGuestRecGB GB 以上" }
+    if ($total -gt 0 -and $g -gt ($total / 2)) { $warns += "PC の半分以上を割り当てています" }
+    $cur  = "現在の設定: $($script:MemVmGB) GB" + $(if ($script:MemDynamic) { " (動的)" } else { "" })
+    $same = ($g -eq [int][Math]::Round($script:MemVmGB) -and -not $script:MemDynamic)
+    if ($errs.Count -gt 0) {
+        $script:lblMemNote.Text = "$cur    [不可] " + ($errs -join " / ")
+        $script:lblMemNote.ForeColor = [System.Drawing.Color]::Firebrick
+        $script:btnMem.Enabled = $false
+        return
+    }
+    $st = if ($same) { "変更なし" }
+          elseif ([string]$script:Vm.State -ne "Off") { "VM は実行中のため、反映には VM の再起動が必要です (適用時に確認します)" }
+          else { "VM は停止中のため、すぐに反映できます" }
+    $script:lblMemNote.Text = "$cur    " + $(if ($warns.Count -gt 0) { "[注意] " + ($warns -join " / ") + "    " } else { "" }) + $st
+    $script:lblMemNote.ForeColor = if ($warns.Count -gt 0) { [System.Drawing.Color]::FromArgb(180, 95, 0) } else { [System.Drawing.Color]::DimGray }
+    $script:btnMem.Enabled = (-not $same)
+}
+
+function Sync-MemoryControl {
+    # 読み直した値を入力欄に反映する (上限は PC の実メモリ)
+    if ($script:MemTotalGB -gt 0) { $script:numMem.Maximum = [Math]::Max(1, [int][Math]::Floor($script:MemTotalGB)) }
+    if ($script:MemVmGB -gt 0) {
+        $v = [int][Math]::Round($script:MemVmGB)
+        $script:numMem.Value = [Math]::Max([int]$script:numMem.Minimum, [Math]::Min([int]$script:numMem.Maximum, $v))
+    }
+    Update-MemoryUi
+}
+
 function Invoke-Engine([string[]]$EngineArgs) {
     $argLine = "-NoProfile -ExecutionPolicy Bypass -File `"$EnginePath`" " + ($EngineArgs -join " ")
     $p = Start-Process powershell.exe -ArgumentList $argLine -WindowStyle Normal -PassThru -Wait
@@ -888,9 +981,10 @@ function Invoke-Engine([string[]]$EngineArgs) {
 }
 
 function Refresh-All {
-    Update-Environment                       # スケジューラ・bcd・VM 状態を読み直す
+    Update-Environment                       # スケジューラ・bcd・VM 状態・メモリを読み直す
     $script:UnderMinroot = ($script:VisibleLps -lt $script:TotalLps)
     Update-Header
+    Sync-MemoryControl
     Update-Validation
 }
 
@@ -908,6 +1002,42 @@ $script:cmbVm.Add_Leave({
 $script:rbRuntime.Add_CheckedChanged({ Update-Validation })
 $script:rbFull.Add_CheckedChanged({ Update-Validation })
 $script:numMin.Add_ValueChanged({ Update-Validation })
+$script:numMem.Add_ValueChanged({ Update-MemoryUi })
+
+$script:btnMem.Add_Click({
+    $g = [int]$script:numMem.Value
+    $running = ($script:Vm -and ([string]$script:Vm.State -ne "Off"))
+    $hostGB = [Math]::Round($script:MemTotalGB - $g, 1)
+    $msg = "VM『$($script:VmNameSel)』のメモリを $($script:MemVmGB) GB → $g GB に変更します。`n" +
+           "Windows 側に残るメモリ: $hostGB GB`n`n"
+    if ($running) {
+        $msg += "VM は実行中です。反映には VM の再起動が必要です。`n" +
+                "今すぐ『停止 → 設定 → 起動』を行いますか?`n" +
+                "(収集が数分止まります。正常にシャットダウンできない場合は何も変更せず中止します)"
+    } else {
+        $msg += "VM は停止中のため、すぐに反映されます。よろしいですか?"
+    }
+    $r = [System.Windows.Forms.MessageBox]::Show($msg, "メモリの割り当て",
+        [System.Windows.Forms.MessageBoxButtons]::YesNo, [System.Windows.Forms.MessageBoxIcon]::Question)
+    if ($r -ne [System.Windows.Forms.DialogResult]::Yes) { return }
+
+    $a = @("-MemoryGB", "$g", "-VMName", "`"$($script:VmNameSel)`"", "-NoConfirm")
+    if ($running) { $a += "-RestartVM" }
+    $form.Enabled = $false
+    try { $code = Invoke-Engine $a } finally { $form.Enabled = $true }
+    Refresh-All
+    if ($code -eq 0) {
+        Show-Info "メモリを設定しました。`n`n  Windows            : $hostGB GB`n  $($script:VmNameSel) : $g GB"
+    } else {
+        $tail = ""
+        try {
+            $lp = Join-Path $PSScriptRoot "cpu-partition-log.txt"
+            if (Test-Path $lp) { $tail = ((Get-Content $lp -Encoding UTF8 -Tail 6) -join "`n") }
+        } catch { }
+        Show-Info ("メモリを変更できませんでした (終了コード $code)。`n表示されたウィンドウの内容をご確認ください。" +
+            $(if ($tail) { "`n`n--- 記録の末尾 ---`n$tail" } else { "" })) "Warning"
+    }
+})
 
 $script:btnFix.Add_Click({
     $n = @($script:Cores | Where-Object { $_.State -eq "Host" }).Count
@@ -1353,5 +1483,6 @@ function Show-AppsDialog {
 # ============================================================
 Sync-AllTiles
 Update-Header
+Sync-MemoryControl
 $form.Add_Shown({ Update-Validation })
 [void]$form.ShowDialog()
