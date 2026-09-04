@@ -1,23 +1,26 @@
 ﻿<#
 .SYNOPSIS
-    既存環境の名称を FIELDsystem から EdgeBox に切り替える移行スクリプト (1回だけ実行)。
+    名称を EdgeBox に統一する移行スクリプト (1 回だけ実行)。
 
 .DESCRIPTION
     やること:
       1. 仮想マシン名を FIELDsystem → EdgeBox に変更 (中身・ディスクには一切触れません)
+         実行中でも変更できます (収集は止まりません)
       2. 仮想スイッチ名を FIELD-External → EdgeBox-External に変更
-      3. 古い名前のタスク (FIELD-*) を削除
-      4. 古い名前のデスクトップアイコンを削除
+      3. CPU コア分割の設定 (cpu-partition.json) の VM 名を書き換え、固定を適用し直す
+         ※ これを忘れると、自動タスクが VM を見つけられず、コア分割が静かに外れます
+      4. 古い名前のタスク・デスクトップアイコンを削除
       5. 新しい名前でタスクとアイコンを登録し直す
 
     VM の設定・ディスク・データは変わりません。名前だけの変更です。
 
 .EXAMPLE
-    .\09-rename-to-edgebox.ps1            # 実行 (VM は停止しておくこと)
+    .\09-rename-to-edgebox.ps1            # 実行
     .\09-rename-to-edgebox.ps1 -WhatIf    # 何が起きるか確認するだけ
 
 .NOTES
-    管理者権限が必要です。VM は停止中に実行してください。
+    管理者権限が必要です。
+    コンソール窓 (vmconnect) を開いている場合は、名前変更後に開き直してください。
 #>
 [CmdletBinding(SupportsShouldProcess = $true)]
 param(
@@ -35,7 +38,7 @@ if (-not $isAdmin) {
 }
 
 Write-Host "==============================================" -ForegroundColor Cyan
-Write-Host " 名称を EdgeBox に切り替えます"
+Write-Host " 名称を $NewName に統一します"
 Write-Host "==============================================" -ForegroundColor Cyan
 
 # --- 1. 仮想マシン名 ---
@@ -45,8 +48,7 @@ if ($vmNew) {
     Write-Host "仮想マシン: すでに '$NewName' です。変更は不要です。" -ForegroundColor Green
 } elseif ($vmOld) {
     if ($vmOld.State -ne "Off") {
-        Write-Error "仮想マシン '$OldName' が動作中です。『全部シャットダウン』で終了してから実行してください。"
-        exit 1
+        Write-Host "仮想マシン '$OldName' は実行中ですが、名前の変更は実行中でも行えます (収集は止まりません)。" -ForegroundColor Yellow
     }
     if ($PSCmdlet.ShouldProcess($OldName, "仮想マシン名を $NewName に変更")) {
         Rename-VM -Name $OldName -NewName $NewName
@@ -61,12 +63,46 @@ if (Get-VMSwitch -Name "EdgeBox-External" -ErrorAction SilentlyContinue) {
     Write-Host "仮想スイッチ: すでに 'EdgeBox-External' です。" -ForegroundColor Green
 } elseif (Get-VMSwitch -Name "FIELD-External" -ErrorAction SilentlyContinue) {
     if ($PSCmdlet.ShouldProcess("FIELD-External", "仮想スイッチ名を EdgeBox-External に変更")) {
-        Rename-VMSwitch -Name "FIELD-External" -NewName "EdgeBox-External"
-        Write-Host "仮想スイッチ名を 'FIELD-External' → 'EdgeBox-External' に変更しました。" -ForegroundColor Green
+        try {
+            Rename-VMSwitch -Name "FIELD-External" -NewName "EdgeBox-External"
+            Write-Host "仮想スイッチ名を 'FIELD-External' → 'EdgeBox-External' に変更しました。" -ForegroundColor Green
+        } catch {
+            Write-Host "仮想スイッチ名は変更できませんでした (動作には影響しません): $($_.Exception.Message)" -ForegroundColor Yellow
+        }
     }
 }
 
-# --- 3. 古い名前のタスクを削除 ---
+# --- 3. CPU コア分割の設定を新しい名前に合わせる ---
+# 自動タスク (CpuPartition-Pin) は cpu-partition.json の VM 名で VM を探す。
+# ここを書き換えないと、名前変更のあと VM が見つからず、コア分割が静かに外れる
+$cpuDir  = Join-Path (Split-Path $PSScriptRoot -Parent) "windows-cpu-partition"
+$cpuJson = Join-Path $cpuDir "cpu-partition.json"
+$cpuPs1  = Join-Path $cpuDir "cpu-partition.ps1"
+if (Test-Path $cpuJson) {
+    $cpuCfg = $null
+    try { $cpuCfg = Get-Content $cpuJson -Raw -Encoding UTF8 | ConvertFrom-Json } catch { }
+    if ($cpuCfg -and [string]$cpuCfg.VMName -eq $OldName) {
+        if ($PSCmdlet.ShouldProcess("cpu-partition.json", "CPU コア分割の VM 名を $NewName に書き換えて適用し直す")) {
+            $cpuCfg.VMName = $NewName
+            $cpuCfg | ConvertTo-Json -Depth 4 | Set-Content -Path $cpuJson -Encoding UTF8
+            Write-Host "CPU コア分割の設定: VM 名を '$NewName' に書き換えました。" -ForegroundColor Green
+            if (Test-Path $cpuPs1) {
+                & $cpuPs1 -ApplyRuntime -Quiet
+                if ($LASTEXITCODE -eq 0) {
+                    Write-Host "CPU コア分割: 新しい名前で固定を適用し直しました。" -ForegroundColor Green
+                } else {
+                    Write-Host "CPU コア分割の再適用に失敗しました。あとで確認してください: $cpuPs1 -Verify" -ForegroundColor Yellow
+                }
+            }
+        }
+    } elseif ($cpuCfg) {
+        Write-Host "CPU コア分割の設定: VM 名は既に '$($cpuCfg.VMName)' です。" -ForegroundColor Green
+    }
+} else {
+    Write-Host "CPU コア分割: 設定なし (未適用)。" -ForegroundColor Gray
+}
+
+# --- 4. 古い名前のタスク・アイコンを削除 ---
 foreach ($t in "FIELD-Display-Kiosk", "FIELD-Display-Kiosk-Splash",
                 "FIELD-Native-Boot", "FIELD-Shutdown-All", "FIELD-Settings-Console") {
     if (Get-ScheduledTask -TaskName $t -ErrorAction SilentlyContinue) {
@@ -76,8 +112,6 @@ foreach ($t in "FIELD-Display-Kiosk", "FIELD-Display-Kiosk-Splash",
         }
     }
 }
-
-# --- 4. 古い名前のデスクトップアイコンを削除 ---
 $desktop = [Environment]::GetFolderPath("Desktop")
 foreach ($n in "FIELD system 単独起動.lnk", "FIELD表示設定.lnk", "FIELD設定.lnk", "自動サインイン設定.lnk") {
     $p = Join-Path $desktop $n
@@ -92,14 +126,16 @@ foreach ($n in "FIELD system 単独起動.lnk", "FIELD表示設定.lnk", "FIELD�
 if ($WhatIfPreference) { Write-Host "`n(確認モードのため、実際の変更は行っていません)" -ForegroundColor Yellow; exit 0 }
 
 # --- 5. 新しい名前で登録し直す ---
+# 表示タスクは VM 名を焼き込んでいるため、必ず登録し直す
 Write-Host ""
 Write-Host "新しい名前でタスクとアイコンを登録し直します..." -ForegroundColor Cyan
-& (Join-Path $PSScriptRoot "03-field-display-kiosk.ps1") -Install
-& (Join-Path $PSScriptRoot "08-settings-console.ps1")    -Setup
-& (Join-Path $PSScriptRoot "05-shutdown-all.ps1")        -Setup
-& (Join-Path $PSScriptRoot "04-reboot-to-field-native.ps1") -Setup
+& (Join-Path $PSScriptRoot "03-field-display-kiosk.ps1")     -Install -VMName $NewName
+& (Join-Path $PSScriptRoot "08-settings-console.ps1")        -Setup   -VMName $NewName
+& (Join-Path $PSScriptRoot "05-shutdown-all.ps1")            -Setup   -VMName $NewName
+& (Join-Path $PSScriptRoot "04-reboot-to-field-native.ps1")  -Setup   -VMName $NewName
+& (Join-Path $PSScriptRoot "00-field-launcher.ps1")          -Setup   -VMName $NewName
 
 Write-Host ""
-Write-Host "移行が完了しました。" -ForegroundColor Green
-Write-Host "デスクトップのアイコン: 『設定』『EdgeBox 単独起動』『全部シャットダウン』"
-Write-Host "この後 .\02-start-field-vm.ps1 で EdgeBox を起動できます。"
+Write-Host "移行が完了しました。以後はすべて '$NewName' の名前で動きます。" -ForegroundColor Green
+Write-Host "  確認: cd ..\windows-cpu-partition ; .\cpu-partition.ps1 -Verify -Seconds 10"
+Write-Host "  コンソール窓を開いていた場合は、開き直してください (.\03-field-display-kiosk.ps1)。"

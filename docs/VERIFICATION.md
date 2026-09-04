@@ -34,9 +34,9 @@
 >
 > なお 1-4 を方法 A (ダミー VM) で行った場合、**「起動直後でまだ vmmem が
 > 出そろっていない VM を待って固定する」経路だけは通っていません**
-> (ダミー VM の起動時、FIELDsystem の vmmem は既に存在していたため)。
+> (ダミー VM の起動時、EdgeBox の vmmem は既に存在していたため)。
 > スクリプトはこの場合に最大 60 秒待つ実装で、仮に取りこぼしても
-> 2 分ごとの定期実行が拾います。次に FIELDsystem を何かの都合で
+> 2 分ごとの定期実行が拾います。次に EdgeBox を何かの都合で
 > 再起動したときに `-Verify` を 1 回見れば、この経路も確認できます
 > (そのためだけに止める必要はありません)。
 | アプリ単位の割り当て (`cpu-apps.ps1`) | ⬜ 未確認 (段階 2) |
@@ -56,14 +56,14 @@
 cd C:\double-os-boot\windows-cpu-partition
 
 # 1. CPU 構成と現在の割り当て状況
-powershell -NoProfile -ExecutionPolicy Bypass -File .\cpu-partition.ps1 -VMName FIELDsystem > baseline-status.txt
+powershell -NoProfile -ExecutionPolicy Bypass -File .\cpu-partition.ps1 -VMName EdgeBox > baseline-status.txt
 
 # 2. 分割なしの状態での実測 (30秒採取)
-powershell -NoProfile -ExecutionPolicy Bypass -File .\cpu-partition.ps1 -VMName FIELDsystem -Verify -Seconds 30 > baseline-verify.txt
+powershell -NoProfile -ExecutionPolicy Bypass -File .\cpu-partition.ps1 -VMName EdgeBox -Verify -Seconds 30 > baseline-verify.txt
 
 # 3. VM の設定
-Get-VM FIELDsystem | Format-List Name, State, Uptime, ProcessorCount, MemoryAssigned > baseline-vm.txt
-Get-VMProcessor -VMName FIELDsystem | Format-List * >> baseline-vm.txt
+Get-VM EdgeBox | Format-List Name, State, Uptime, ProcessorCount, MemoryAssigned > baseline-vm.txt
+Get-VMProcessor -VMName EdgeBox | Format-List * >> baseline-vm.txt
 ```
 
 **合格基準**: 3 つのファイルが作成され、`baseline-verify.txt` に各 CPU の
@@ -82,21 +82,21 @@ Get-VMProcessor -VMName FIELDsystem | Format-List * >> baseline-vm.txt
 ### 1-1. 適用
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\cpu-console.ps1 -Setup -VMName FIELDsystem
+powershell -NoProfile -ExecutionPolicy Bypass -File .\cpu-console.ps1 -Setup -VMName EdgeBox
 ```
 デスクトップの『CPU割り当て』アイコンから、i7-14700 なら
-**「P コア = Windows / E コア = FIELDsystem (推奨)」** を選んで [この内容で適用]。
+**「P コア = Windows / E コア = EdgeBox (推奨)」** を選んで [この内容で適用]。
 
 コマンドで行う場合:
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\cpu-partition.ps1 `
-  -Apply -Mode runtime -VMName FIELDsystem -HostLps "0-15" -GuestLps "16-27"
+  -Apply -Mode runtime -VMName EdgeBox -HostLps "0-15" -GuestLps "16-27"
 ```
 
 ### 1-2. 効いているかの実測
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\cpu-partition.ps1 -VMName FIELDsystem -Verify -Seconds 30
+powershell -NoProfile -ExecutionPolicy Bypass -File .\cpu-partition.ps1 -VMName EdgeBox -Verify -Seconds 30
 ```
 
 **合格基準**:
@@ -121,7 +121,7 @@ Get-ScheduledTask -TaskName CpuPartition-Pin | Select TaskName, State
 
 ### 1-3. 収集が止まっていないことの確認 (最重要)
 
-適用直後と **30分後・翌日** に、専用機の管理画面 (`https://192.168.0.205/`) で
+適用直後と **30分後・翌日** に、EdgeBox の管理画面 (`https://192.168.0.205/`) で
 データが継続して入っているか確認してください。
 
 **合格基準**: 適用前後でデータの欠落・遅延がないこと。
@@ -139,7 +139,7 @@ Get-ScheduledTask -TaskName CpuPartition-Pin | Select TaskName, State
 #### 方法 A: ダミー VM で引き金だけ試す (収集を止めない・推奨)
 
 使い捨ての空 VM を作って起動するだけで、同じイベントが出ます。
-ディスクもネットワークも持たせないため、専用機のディスクには一切触れません。
+ディスクもネットワークも持たせないため、EdgeBox のディスクには一切触れません。
 
 ```powershell
 # 1. 前の状態を控える
@@ -160,7 +160,7 @@ Get-Content C:\double-os-boot\windows-cpu-partition\cpu-partition-log.txt -Tail 
 Stop-VM CpuPinTest -TurnOff -Force
 Remove-VM CpuPinTest -Force
 
-# 6. 後片付けができたことを確認する (FIELDsystem だけが残っていること)
+# 6. 後片付けができたことを確認する (EdgeBox だけが残っていること)
 Get-VM | Select-Object Name, State
 ```
 
@@ -170,7 +170,7 @@ Get-VM | Select-Object Name, State
 
 **合格基準**: `LastRunTime` が手順 3 の時刻に更新され、`LastTaskResult` が `0`。
 
-タスクが走ると FIELDsystem の固定を確認し直しますが、既に正しければ何も変更しません
+タスクが走ると EdgeBox の固定を確認し直しますが、既に正しければ何も変更しません
 (同じ値なら書き込まない実装のため、収集への影響はありません)。
 
 > イベントが出ているか自体を見たい場合:
@@ -190,7 +190,7 @@ cd C:\double-os-boot\windows-cpu-partition
 .\cpu-partition.ps1 -Verify -Seconds 5
 
 # 2. 正常シャットダウンが使えるか確認する
-Get-VMIntegrationService -VMName FIELDsystem |
+Get-VMIntegrationService -VMName EdgeBox |
     Select-Object Name, Enabled, PrimaryStatusDescription
 ```
 
@@ -198,20 +198,20 @@ Get-VMIntegrationService -VMName FIELDsystem |
 
 | `Shutdown` の状態 | 止め方 |
 |---|---|
-| Enabled=True かつ状態が OK | `Stop-VM FIELDsystem` (正常シャットダウン) |
-| 無効・応答なし | **専用機の管理画面から先にシャットダウン**してから `Stop-VM FIELDsystem -TurnOff` |
+| Enabled=True かつ状態が OK | `Stop-VM EdgeBox` (正常シャットダウン) |
+| 無効・応答なし | **EdgeBox の管理画面から先にシャットダウン**してから `Stop-VM EdgeBox -TurnOff` |
 
 > ⚠️ `-TurnOff` / `-Force` は**電源を引き抜くのと同じ**です。収集中のデータや
 > ファイルシステムを壊す可能性があるため、統合サービスが使えないなら
-> 必ず専用機側から先に落としてください。
+> 必ず EdgeBox 側から先に落としてください。
 
 ```powershell
 # 3. 停止 (State が Off になるまで待つ)
-Stop-VM FIELDsystem
-Get-VM FIELDsystem | Select-Object Name, State
+Stop-VM EdgeBox
+Get-VM EdgeBox | Select-Object Name, State
 
 # 4. 起動
-Start-VM FIELDsystem
+Start-VM EdgeBox
 
 # 5. 2 分ほど待ってから確認
 Start-Sleep -Seconds 120
@@ -268,7 +268,7 @@ Get-Content .\cpu-partition-log.txt -Tail 20
 **ライン稼働のピーク時**に一度採り直してください。
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\cpu-partition.ps1 -VMName FIELDsystem -Verify -Seconds 60
+powershell -NoProfile -ExecutionPolicy Bypass -File .\cpu-partition.ps1 -VMName EdgeBox -Verify -Seconds 60
 ```
 
 **合格基準**: 「VM の実行合計」がゲスト用コアの総容量 (6 コアなら 600%) に対して
@@ -278,7 +278,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\cpu-partition.ps1 -VMName 
 ### 戻し方
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\cpu-partition.ps1 -Undo -VMName FIELDsystem -NoConfirm
+powershell -NoProfile -ExecutionPolicy Bypass -File .\cpu-partition.ps1 -Undo -VMName EdgeBox -NoConfirm
 ```
 即座に元へ戻ります (再起動不要)。
 
@@ -339,7 +339,7 @@ $p = Get-Process notepad
 
 ### 2-3. 本番アプリへの適用
 
-FsBP クライアントアプリを [ファイルから追加...] で登録し、**Windows 側コア (P コア)** を割り当て。
+EdgeBox クライアントアプリを [ファイルから追加...] で登録し、**Windows 側コア (P コア)** を割り当て。
 優先度は業務上重要なら『高』。
 
 **合格基準**: アプリが通常どおり動作し、上記と同じ方法で固定を確認できること。
@@ -396,7 +396,7 @@ Windows が起動しない事態は通常起きませんが、その場合は回
 ### 戻し方
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\cpu-partition.ps1 -Undo -VMName FIELDsystem -NoConfirm
+powershell -NoProfile -ExecutionPolicy Bypass -File .\cpu-partition.ps1 -Undo -VMName EdgeBox -NoConfirm
 Restart-Computer
 ```
 
@@ -404,7 +404,7 @@ Restart-Computer
 
 ## 段階 4: 主構成 (Linux ホスト + KVM/VFIO)
 
-**この PC では検証できません。** 現在の構成 (Windows ホスト + 専用機 VM) とは
+**この PC では検証できません。** 現在の構成 (Windows ホスト + EdgeBox の VM) とは
 ホストとゲストが逆で、次の条件がすべて必要です:
 
 - Ubuntu 24.04 を入れる**別の物理ディスク**
@@ -419,8 +419,8 @@ Restart-Computer
 
 ### 現実的な判断
 
-**現在の運用 (FANUC 専用機 + Windows) では、主構成は使えません。**
-専用機はメーカー署名付きの改造不可イメージのため、ホスト役にできないからです
+**現在の運用 (EdgeBox + Windows) では、主構成は使えません。**
+EdgeBox はメーカー署名付きの改造不可イメージのため、ホスト役にできないからです
 (これが構成B を作った理由です)。
 
 したがって **主構成の未検証は、現在の運用上のリスクではありません**。

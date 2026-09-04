@@ -787,7 +787,7 @@ function Update-Validation {
         $warnings += "未割当のコアが $($sel.NoneCores) 個あります (どちらからも積極的には使われません)。"
     }
     if ($sel.GuestLps.Count -gt 0 -and $sel.GuestLps.Count -lt 8) {
-        $warnings += "$($script:VmNameSel) 側が $($sel.GuestLps.Count) スレッドです (専用機によくある 4 コア 8 スレッド構成を下回ります)。"
+        $warnings += "$($script:VmNameSel) 側が $($sel.GuestLps.Count) スレッドです (EdgeBox の元の構成 4 コア 8 スレッドを下回ります)。"
     }
 
     # --- 方式ごとの成立条件 ---
