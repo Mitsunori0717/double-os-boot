@@ -38,6 +38,8 @@
     .\cpu-partition.ps1 -Apply -Mode full    -HostCores 4 # 完全分割 (再起動→もう一度同じコマンド)
     .\cpu-partition.ps1 -Verify                           # 実測: 各コアで誰が実行されているか
     .\cpu-partition.ps1 -SelfTest                         # 撤退手順の予行 (収集は止まらない)
+    .\cpu-partition.ps1 -MemoryGB 12                      # VM のメモリを 12 GB に (VM 停止中に反映)
+    .\cpu-partition.ps1 -MemoryGB 12 -RestartVM           # 今すぐ反映 (VM を停止→設定→起動)
     .\cpu-partition.ps1 -Undo                             # 全て元に戻す
 
 .EXAMPLE
@@ -80,6 +82,10 @@ param(
     [int]$Seconds = 5,          # -Verify の採取時間
     [switch]$Undo,              # 全設定の解除
     [switch]$SelfTest,          # 撤退手順の予行 (-Undo → 再適用 まで自動。収集は止まらない)
+
+    # --- メモリ ---
+    [int]$MemoryGB = 0,         # VM に割り当てるメモリ (GB)。0 = 変更しない
+    [switch]$RestartVM,         # -MemoryGB: VM が実行中なら 停止→設定→起動 で今すぐ反映する
 
     # --- 内部用 (自動タスクが呼ぶ) ---
     [switch]$ApplyRuntime,
@@ -255,6 +261,49 @@ function Get-SavedConfig {
 
 function Save-Config($Obj) {
     $Obj | ConvertTo-Json -Depth 4 | Set-Content -Path $ConfigFile -Encoding UTF8
+}
+
+# --- メモリ ---
+# PC 全体のメモリを Windows と VM で分ける。VM は固定メモリ (動的メモリは
+# 専用機のような装置には向かない: バルーン ドライバー前提で、収集中の挙動が読めない)
+$MemHostReserveGB = 8    # Windows 側に最低限残す量 (Windows 11 + アプリ + Hyper-V 自身)
+$MemGuestMinGB    = 4    # VM の最低量
+$MemGuestRecGB    = 8    # VM の推奨量 (EdgeBox の元の構成に相当)
+
+function Get-MemoryInfo([string]$Name) {
+    # 戻り値: TotalGB (PC 全体) / VmGB (VM の設定値) / Dynamic (動的メモリか) / Vm
+    $totalGB = 0.0
+    try { $totalGB = [Math]::Round(([double](Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory) / 1GB, 1) } catch { }
+    $vmGB = 0.0; $dyn = $false; $vm = $null
+    if (Get-Command Get-VMMemory -ErrorAction SilentlyContinue) {
+        $vm = Get-VM -Name $Name -ErrorAction SilentlyContinue
+        if ($vm) {
+            try {
+                $m = Get-VMMemory -VMName $Name -ErrorAction Stop
+                $vmGB = [Math]::Round(([double]$m.Startup) / 1GB, 1)
+                $dyn  = [bool]$m.DynamicMemoryEnabled
+            } catch { }
+        }
+    }
+    return [pscustomobject]@{ TotalGB = $totalGB; VmGB = $vmGB; Dynamic = $dyn; Vm = $vm }
+}
+
+function Test-MemoryPlan([double]$TotalGB, [int]$GuestGB, [string]$Name) {
+    # PC の実メモリに対して、その割り当てが成り立つかを検査する
+    $errors = @(); $warnings = @()
+    $hostGB = [Math]::Round($TotalGB - $GuestGB, 1)
+    if ($GuestGB -lt $MemGuestMinGB) {
+        $errors += "VM '$Name' には最低 $MemGuestMinGB GB 必要です (指定: $GuestGB GB)"
+    }
+    if ($TotalGB -gt 0 -and $hostGB -lt $MemHostReserveGB) {
+        $errors += ("Windows 側に最低 $MemHostReserveGB GB 残す必要があります " +
+                    "(この PC は $TotalGB GB のため、VM は最大 $([int][Math]::Floor($TotalGB - $MemHostReserveGB)) GB まで)")
+    }
+    if ($GuestGB -lt $MemGuestRecGB) { $warnings += "VM '$Name' の推奨は $MemGuestRecGB GB 以上です" }
+    if ($TotalGB -gt 0 -and $GuestGB -gt ($TotalGB / 2)) {
+        $warnings += "VM に PC の半分以上を割り当てています (Windows 側が窮屈になるかもしれません)"
+    }
+    return [pscustomobject]@{ Errors = $errors; Warnings = $warnings; HostGB = $hostGB }
 }
 
 # --- VM に対応する vmwp / vmmem プロセスを探す ---
@@ -481,6 +530,87 @@ function Register-PinTask {
 if (-not $PSBoundParameters.ContainsKey("VMName")) {
     $cfgVm = Get-SavedConfig
     if ($cfgVm -and $cfgVm.VMName) { $VMName = [string]$cfgVm.VMName }
+}
+
+# ============================================================ -MemoryGB (VM のメモリ)
+#
+# メモリは VM の停止中にしか変更できない (固定メモリ)。実行中に指定された場合は
+# -RestartVM があるときだけ 停止→設定→起動 を行う。停止は正常シャットダウンのみで、
+# 強制電源断は行わない (収集中のデータやファイルシステムを壊しうるため)。
+
+if ($MemoryGB -gt 0) {
+    if (-not (Test-Admin)) { Write-Error "管理者権限の PowerShell で実行してください。"; exit 1 }
+    if (-not (Get-Command Get-VM -ErrorAction SilentlyContinue)) { Write-Error "Hyper-V が有効になっていません。"; exit 1 }
+    $mi = Get-MemoryInfo $VMName
+    if (-not $mi.Vm) { Write-Error "VM '$VMName' がありません。-VMName で対象の VM 名を指定してください。"; exit 1 }
+
+    Write-Host ""
+    Write-Host "=== VM のメモリ割り当て ===" -ForegroundColor Cyan
+    Write-Host ("  この PC のメモリ : {0} GB" -f $mi.TotalGB)
+    Write-Host ("  現在の設定       : {0} GB{1}" -f $mi.VmGB, $(if ($mi.Dynamic) { " (動的)" } else { " (固定)" }))
+    $chk = Test-MemoryPlan $mi.TotalGB $MemoryGB $VMName
+    Write-Host ("  新しい設定       : {0} GB (固定) → Windows 側に {1} GB" -f $MemoryGB, $chk.HostGB)
+    foreach ($w in $chk.Warnings) { Write-Host "  注意: $w" -ForegroundColor Yellow }
+    if ($chk.Errors.Count -gt 0) {
+        foreach ($e in $chk.Errors) { Write-Host "  不可: $e" -ForegroundColor Red }
+        exit 2
+    }
+    if ($mi.VmGB -eq $MemoryGB -and -not $mi.Dynamic) {
+        Write-Host "  既に同じ設定です。変更はありません。" -ForegroundColor Green
+        exit 0
+    }
+
+    $state = [string]$mi.Vm.State
+    if ($state -ne "Off") {
+        if (-not $RestartVM) {
+            Write-Host ""
+            Write-Host "  VM '$VMName' は $state のため、メモリは停止中にしか変更できません。" -ForegroundColor Yellow
+            Write-Host "  今すぐ反映するには (収集が数分止まります): .\cpu-partition.ps1 -MemoryGB $MemoryGB -RestartVM" -ForegroundColor Cyan
+            exit 3
+        }
+        if (-not $NoConfirm) {
+            $ans = Read-Host "  VM を 停止 → 設定 → 起動 します (収集が数分止まります)。よろしいですか? (y/N)"
+            if ($ans -ne "y") { exit 0 }
+        }
+        Write-Host "  VM を停止しています (正常シャットダウン)..."
+        try { Stop-VM -Name $VMName -ErrorAction Stop } catch {
+            Write-PinLog "Memory: 停止失敗 $($_.Exception.Message)"
+            Write-Error ("VM を停止できませんでした: $($_.Exception.Message)`n" +
+                "VM の管理画面から先にシャットダウンし、停止後にもう一度 -MemoryGB $MemoryGB を実行してください。")
+            exit 1
+        }
+        $deadline = (Get-Date).AddSeconds(180)
+        while ((Get-VM -Name $VMName).State -ne "Off") {
+            if ((Get-Date) -gt $deadline) {
+                Write-Error "VM が 180 秒以内に停止しませんでした。メモリは変更していません。"
+                exit 1
+            }
+            Start-Sleep -Seconds 3
+        }
+        Write-Host "  停止しました。"
+    }
+
+    try {
+        Set-VMMemory -VMName $VMName -DynamicMemoryEnabled $false -StartupBytes ([int64]$MemoryGB * 1GB) -ErrorAction Stop
+        Write-PinLog "Memory: VM '$VMName' を $MemoryGB GB に変更"
+        Write-Host "  メモリを $MemoryGB GB に設定しました。" -ForegroundColor Green
+    } catch {
+        Write-PinLog "Memory: 設定失敗 $($_.Exception.Message)"
+        if ($state -ne "Off") { try { Start-VM -Name $VMName } catch { } }   # 止めた VM は必ず起動し直す
+        Write-Error "メモリを設定できませんでした: $($_.Exception.Message)"
+        exit 1
+    }
+    if ($state -ne "Off") {
+        Write-Host "  VM を起動しています..."
+        try {
+            Start-VM -Name $VMName -ErrorAction Stop
+            Write-Host "  起動しました。コア固定は自動タスクが数秒後に適用し直します。" -ForegroundColor Green
+        } catch {
+            Write-Error "VM を起動できませんでした: $($_.Exception.Message)"
+            exit 1
+        }
+    }
+    exit 0
 }
 
 # ============================================================ -ApplyRuntime (内部用)
@@ -975,6 +1105,11 @@ if (-not $Apply) {
     if ($vm) {
         Write-Host ("  VM '{0}'      : {1} / 仮想プロセッサ {2} / 予約 {3}%" -f $VMName, $vm.State,
             (Get-VMProcessor -VMName $VMName).Count, (Get-VMProcessor -VMName $VMName).Reserve)
+        try {
+            $mi0 = Get-MemoryInfo $VMName
+            Write-Host ("  メモリ            : VM {0} GB{1} / この PC {2} GB (Windows 側 {3} GB)" -f $mi0.VmGB,
+                $(if ($mi0.Dynamic) { " (動的)" } else { "" }), $mi0.TotalGB, [Math]::Round($mi0.TotalGB - $mi0.VmGB, 1))
+        } catch { }
         if ($vm.State -eq "Running") {
             try {
                 $procs = Get-VmProcesses $VMName
