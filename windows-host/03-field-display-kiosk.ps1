@@ -36,6 +36,20 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+
+# -VMName を明示していない場合、既定名の VM が無ければ、専用機のディスク
+# (物理ディスクのパススルー) を持つ VM を探して使う。00-field-launcher.ps1 と
+# 同じ考え方で、VM 名が「EdgeBox」でなくても (例: FIELDsystem) そのまま動くようにする
+if (-not $PSBoundParameters.ContainsKey("VMName") -and -not ($Splash -or $Backdrop -or $EscWatcher -or $ConsoleCloser) -and
+    -not (Get-VM -Name $VMName -ErrorAction SilentlyContinue)) {
+    $foundVms = @()
+    foreach ($v in @(Get-VM -ErrorAction SilentlyContinue)) {
+        $pt = @(Get-VMHardDiskDrive -VMName $v.Name -ErrorAction SilentlyContinue |
+            Where-Object { $null -ne $_.DiskNumber })
+        if ($pt.Count -gt 0) { $foundVms += $v }
+    }
+    if ($foundVms.Count -eq 1) { $VMName = $foundVms[0].Name }
+}
 $TaskName = "EdgeBox-Display-Kiosk"
 $ConfigFile = Join-Path $PSScriptRoot "display-config.json"
 $LogFile    = Join-Path $PSScriptRoot "display-log.txt"
@@ -303,7 +317,7 @@ function Stop-EscWatcher {
 # ============================================================
 $DefaultConfig = [ordered]@{
     "_説明"             = "EdgeBox 表示の設定。『EdgeBox表示設定』アイコンから編集できます。"
-    "RightUrl"          = "https://192.168.0.200/"
+    "RightUrl"          = "https://192.168.0.205/"
     "RightFullScreen"   = $false
     "LeftUrl"           = "console"
     "LeftFullScreen"    = $true
@@ -654,6 +668,24 @@ if ($Install) {
     try { $trigger.Delay = "PT15S" } catch { }
     Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger `
         -Settings $taskSettings -RunLevel Highest -Force | Out-Null
+    # 「電源 ON → VM が自動起動 → サインイン → 画面表示」を成立させるには
+    # VM 側の自動起動も必要。未設定なら、ここで一緒に入れておく (実行中の VM にも設定できる)
+    $vmAuto = Get-VM -Name $VMName -ErrorAction SilentlyContinue
+    if ($vmAuto) {
+        if ($vmAuto.AutomaticStartAction -ne "Start") {
+            try {
+                Set-VM -Name $VMName -AutomaticStartAction Start -AutomaticStartDelay 30
+                Write-Host "VM '$VMName' を PC 起動時に自動で起動するよう設定しました (30 秒後)。" -ForegroundColor Green
+            } catch {
+                Write-Host "VM の自動起動を設定できませんでした: $($_.Exception.Message)" -ForegroundColor Yellow
+                Write-Host "  手動で: Set-VM -Name $VMName -AutomaticStartAction Start -AutomaticStartDelay 30" -ForegroundColor Yellow
+            }
+        } else {
+            Write-Host "VM '$VMName' の自動起動は設定済みです。" -ForegroundColor Gray
+        }
+    } else {
+        Write-Host "VM '$VMName' が見つからないため、VM の自動起動は設定していません。" -ForegroundColor Yellow
+    }
     Write-Host "登録しました。次回ログオンから自動で表示されます (起動中は黒い画面で覆います)。" -ForegroundColor Green
     Write-Host "  表示内容の変更: 『EdgeBox表示設定』アイコン (再登録不要)"
     exit 0

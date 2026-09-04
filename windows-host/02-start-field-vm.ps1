@@ -24,6 +24,20 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+# -VMName を明示していない場合、既定名の VM が無ければ、専用機のディスク
+# (物理ディスクのパススルー) を持つ VM を探して使う。00-field-launcher.ps1 と
+# 同じ考え方で、VM 名が「EdgeBox」でなくても (例: FIELDsystem) そのまま動くようにする
+if (-not $PSBoundParameters.ContainsKey("VMName") -and
+    -not (Get-VM -Name $VMName -ErrorAction SilentlyContinue)) {
+    $foundVms = @()
+    foreach ($v in @(Get-VM -ErrorAction SilentlyContinue)) {
+        $pt = @(Get-VMHardDiskDrive -VMName $v.Name -ErrorAction SilentlyContinue |
+            Where-Object { $null -ne $_.DiskNumber })
+        if ($pt.Count -gt 0) { $foundVms += $v }
+    }
+    if ($foundVms.Count -eq 1) { $VMName = $foundVms[0].Name }
+}
+
 function Test-Admin {
     ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
         ).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)

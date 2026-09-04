@@ -13,7 +13,7 @@ LAN ポート5つ / 工作機械との接続は Ethernet。
 | ⑥ | 初回起動: `.\02-start-field-vm.ps1`。起動中 **Ctrl 長押し厳禁** (工場出荷リセット) | コンソールに EdgeBox の画面 |
 | ⑦ | IP 確認: `Get-VMNetworkAdapter -VMName EdgeBox`。ブラウザで管理画面を開く | 管理画面が開き収集再開 |
 | ⑧ | Windows 側 FsBP アプリの接続先に ⑦ の IP を設定 | アプリからデータが見える |
-| ⑨ | モニター2 にブラウザ全画面 + 自動起動: `Set-VM -Name EdgeBox -AutomaticStartAction Start -AutomaticStartDelay 30` | 電源ONだけで収集開始 |
+| ⑨ | 起動時の自動表示 + VM 自動起動: `.\03-field-display-kiosk.ps1 -Install` (VM の自動起動も一緒に設定される。VM 名が EdgeBox でなくても自動で見つける) | 電源ONだけで収集開始・左に FsBP・右に管理画面 |
 | ⑩ | 予行: F8 からネイティブ起動できることを確認。撤退手順 (`Remove-VM` + `Set-Disk -IsOffline $false`) を把握 | ネイティブ起動を1回確認 |
 
 ## いちばん簡単な導入・起動 (①〜⑥をまとめて行う)
@@ -78,8 +78,12 @@ cd ..\windows-cpu-partition
 
 ```powershell
 .\03-field-display-kiosk.ps1            # 動作確認 (今すぐ表示)
-.\03-field-display-kiosk.ps1 -Install   # ログオン時の自動表示を登録
+.\03-field-display-kiosk.ps1 -Install   # ログオン時の自動表示を登録 (VM の自動起動も設定)
 ```
+
+既定は **左 = EdgeBox のコンソール (FsBP の起動画面) / 右 = 管理画面 `https://192.168.0.205/`**。
+右画面の URL は『EdgeBox設定』の[画面表示]タブで変更できる (再登録は不要)。
+VM 名が EdgeBox でなくても (例: FIELDsystem)、専用機のディスクを持つ VM を自動で見つける。
 
 VM の起動と Web 画面の応答を待ってから、サブモニターに Edge キオスクモード (枠なし全画面) で表示する。
 これと `Set-VM -AutomaticStartAction Start` の組み合わせで、電源 ON → ログオンだけで
