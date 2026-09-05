@@ -67,7 +67,7 @@ if (-not (Test-Path $EnginePath)) {
 #  デスクトップアイコンの作成 (-Setup)
 # ============================================================
 # 一般的なアプリらしく見せるためのアイコンを作る (失敗しても致命的ではない)
-function New-ConsoleIcon([string]$Path) {
+function New-ConsoleIcon([string]$Path, [string]$Style = "console") {
     Add-Type -AssemblyName System.Drawing -ErrorAction Stop
     $sz  = 256
     $bmp = New-Object System.Drawing.Bitmap $sz, $sz
@@ -87,8 +87,15 @@ function New-ConsoleIcon([string]$Path) {
         $g.FillRectangle($pins, 208, $o, 30, 18)
     }
     $g.FillRectangle($body, 46, 46, 164, 164)   # パッケージ
-    $g.FillRectangle($win, 76, 76, 46, 104)     # 内側を 2 色に分けて「分割」を表す
-    $g.FillRectangle($vm, 134, 76, 46, 104)
+    if ($Style -eq "monitor") {
+        # 監視: 高さの違う棒グラフ
+        $g.FillRectangle($win, 70, 124, 30, 56)
+        $g.FillRectangle($vm, 113, 80, 30, 100)
+        $g.FillRectangle($win, 156, 144, 30, 36)
+    } else {
+        $g.FillRectangle($win, 76, 76, 46, 104)     # 内側を 2 色に分けて「分割」を表す
+        $g.FillRectangle($vm, 134, 76, 46, 104)
+    }
     $g.Dispose()
 
     $ms = New-Object System.IO.MemoryStream
@@ -160,9 +167,44 @@ if ($Setup) {
         $lnk.Save()
     }
 
+    # --- リアルタイム監視『EdgeBox 監視』も同じ仕組みで登録する ---
+    $monPath = Join-Path $PSScriptRoot "cpu-monitor.ps1"
+    $monOk = $false
+    if (Test-Path $monPath) {
+        try {
+            $monTask = "CpuPartition-Monitor"
+            $mAction = New-ScheduledTaskAction -Execute "powershell.exe" `
+                -Argument "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$monPath`" -VMName `"$VMName`""
+            # 監視は開きっぱなしにするため、実行時間の上限は付けない (0 = 制限なし)
+            $mts = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -ExecutionTimeLimit (New-TimeSpan -Seconds 0)
+            Register-ScheduledTask -TaskName $monTask -Action $mAction -Settings $mts -RunLevel Highest -Force | Out-Null
+            $mvbs = Join-Path $PSScriptRoot "launch-monitor.vbs"
+            Set-Content -Path $mvbs -Encoding Default -Value @(
+                "' EdgeBox 監視 — 起動用ラッパー (黒い窓を出さない)",
+                "CreateObject(""WScript.Shell"").Run ""schtasks.exe /run /tn """"$monTask"""""", 0, False")
+            $micoPath = Join-Path $PSScriptRoot "cpu-monitor.ico"
+            $miconRef = "shell32.dll,22"
+            try { New-ConsoleIcon $micoPath "monitor"; if (Test-Path $micoPath) { $miconRef = "$micoPath,0" } } catch { }
+            foreach ($lnkPath in @((Join-Path ([Environment]::GetFolderPath("Desktop"))  "EdgeBox 監視.lnk"),
+                                   (Join-Path ([Environment]::GetFolderPath("Programs")) "EdgeBox 監視.lnk"))) {
+                $lnk = $shell.CreateShortcut($lnkPath)
+                $lnk.TargetPath       = Join-Path $env:SystemRoot "System32\wscript.exe"
+                $lnk.Arguments        = "`"$mvbs`""
+                $lnk.WorkingDirectory = $PSScriptRoot
+                $lnk.IconLocation     = $miconRef
+                $lnk.Description      = "各コアの負荷とメモリの使用量をリアルタイムで表示"
+                $lnk.Save()
+            }
+            $monOk = $true
+        } catch {
+            Write-Host "  (『EdgeBox 監視』の登録に失敗しました: $($_.Exception.Message))" -ForegroundColor Yellow
+        }
+    }
+
     Write-Host "『CPU割り当て』を登録しました。" -ForegroundColor Green
     Write-Host "  - デスクトップのアイコン" -ForegroundColor Green
     Write-Host "  - スタートメニュー (「CPU」で検索しても出ます)" -ForegroundColor Green
+    if ($monOk) { Write-Host "『EdgeBox 監視』(各コアの負荷とメモリのリアルタイム表示) も同じ場所に登録しました。" -ForegroundColor Green }
     Write-Host "  PowerShell を開く必要はありません。黒い窓も出ません。" -ForegroundColor Green
     Write-Host "  タスクバーに置くには、スタートメニューで右クリック →『タスクバーにピン留めする』" -ForegroundColor Cyan
     exit 0
@@ -456,9 +498,13 @@ $grpPc = New-Object System.Windows.Forms.GroupBox
 $grpPc.Text = "この PC の CPU"
 $grpPc.Location = New-Object System.Drawing.Point(12, 8)
 $grpPc.Size = New-Object System.Drawing.Size(940, 76)
-$script:lblCpu1 = New-Lbl "" 14 22 910
-$script:lblCpu2 = New-Lbl "" 14 44 910
-$grpPc.Controls.AddRange(@($script:lblCpu1, $script:lblCpu2))
+$script:lblCpu1 = New-Lbl "" 14 22 770
+$script:lblCpu2 = New-Lbl "" 14 44 770
+$script:btnMon = New-Object System.Windows.Forms.Button
+$script:btnMon.Text = "リアルタイム監視"
+$script:btnMon.Location = New-Object System.Drawing.Point(792, 24)
+$script:btnMon.Size = New-Object System.Drawing.Size(134, 28)
+$grpPc.Controls.AddRange(@($script:lblCpu1, $script:lblCpu2, $script:btnMon))
 $form.Controls.Add($grpPc)
 
 # --- 対象と方式 ---
@@ -989,6 +1035,16 @@ function Refresh-All {
 }
 
 $script:btnApps.Add_Click({ Show-AppsDialog })
+
+# 各コアの負荷とメモリをリアルタイム表示する別ウィンドウ (cpu-monitor.ps1)
+$script:btnMon.Add_Click({
+    $mon = Join-Path $PSScriptRoot "cpu-monitor.ps1"
+    if (-not (Test-Path $mon)) { Show-Info "cpu-monitor.ps1 が見つかりません。update.cmd で更新してください。" "Warning"; return }
+    try {
+        Start-Process powershell.exe -ArgumentList (
+            "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$mon`" -VMName `"$($script:VmNameSel)`"")
+    } catch { Show-Info "監視ウィンドウを開けませんでした: $($_.Exception.Message)" "Warning" }
+})
 
 $script:cmbVm.Add_SelectedIndexChanged({
     if ($script:cmbVm.SelectedItem) { $script:VmNameSel = [string]$script:cmbVm.SelectedItem }
