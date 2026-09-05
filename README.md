@@ -303,6 +303,7 @@ docs/DUAL-BOOT-SETUP.md              ネイティブ・デュアルブートの�
 docs/ARCHITECTURE.md                 技術解説 (なぜこの設計か・何がどこまで可能か)
 docs/TROUBLESHOOTING.md              トラブルシューティング
 docs/VERIFICATION.md                 検証手順書 (未検証部分の確かめ方・合格基準・戻し方)
+docs/FRESH-INSTALL.md                新規 PC への導入手順 (何も入っていない PC から、①から順に)
 alternatives/hyperv/                 (参考) Hyper-V による簡易構成。GPU 専有なし・要件が緩い
 ```
 

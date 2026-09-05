@@ -66,7 +66,20 @@ function Get-Cores {
     $raw = @()
     if (Test-Path $SnapshotFile) {
         try {
-            foreach ($r in @(Get-Content $SnapshotFile -Raw -Encoding UTF8 | ConvertFrom-Json)) {
+            $json = Get-Content $SnapshotFile -Raw -Encoding UTF8 | ConvertFrom-Json
+            $items = @()
+            if ($json.PSObject.Properties["Cores"]) {
+                # 新形式: この PC の CPU 名と一致するときだけ使う (別 PC の構成を持ち込んだ場合の誤表示を防ぐ)
+                $cpuName = ""
+                try { $cpuName = ((Get-CimInstance Win32_Processor | Select-Object -First 1).Name.Trim()) } catch { }
+                if ([string]$json.Cpu -eq $cpuName) { $items = @($json.Cores) }
+            } else {
+                # 旧形式: 論理 CPU 数が一致するときだけ使う
+                $items = @($json)
+                $n = 0; foreach ($r in $items) { $n += @([int[]]$r.Lps).Count }
+                if ($n -ne [Environment]::ProcessorCount) { $items = @() }
+            }
+            foreach ($r in $items) {
                 $lps = @([int[]]$r.Lps)
                 if ($lps.Count -gt 0) { $raw += [pscustomobject]@{ Eff = [int]$r.Eff; Lps = $lps; Kind = "C"; Label = "" } }
             }
