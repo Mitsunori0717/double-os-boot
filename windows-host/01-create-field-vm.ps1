@@ -231,38 +231,66 @@ if (-not $NoConfirm) {
 # --- WSL にアタッチされたままだと衝突するため注意喚起 ---
 Write-Host "注意: このディスクを wsl --mount している場合は、先に wsl --unmount してください。" -ForegroundColor Yellow
 
-# --- ディスクをオフライン化 (Windows 側から見えなくし、VM 専有にする) ---
-if (-not $disk.IsOffline) {
-    Write-Host "ディスクをオフライン化しています (Windows からの誤アクセス防止)..." -ForegroundColor Cyan
-    Set-Disk -Number $DiskNumber -IsOffline $true
+# 以降は「作った順に戻せる」ように段階を記録し、途中で失敗したら逆順で元に戻す。
+# ディスクのオフライン化は最後 (ディスク接続の直前) に行い、失敗時の影響を最小にする。
+$createdSwitch = $false
+$createdVm     = $false
+$offlinedDisk  = $false
+try {
+    # --- ネットワークスイッチ (必要な場合のみ新規作成) ---
+    if ($createFrom) {
+        Write-Host "外部スイッチ '$useSwitch' を作成しています (NIC: $createFrom)..." -ForegroundColor Cyan
+        Write-Host "  ※ 作成の瞬間、ネットワークが数秒切断されます。"
+        New-VMSwitch -Name $useSwitch -NetAdapterName $createFrom -AllowManagementOS $true | Out-Null
+        $createdSwitch = $true
+    }
+
+    Write-Host "VM '$VMName' を作成しています..." -ForegroundColor Cyan
+    New-VM -Name $VMName `
+        -Generation 2 `
+        -MemoryStartupBytes ($MemoryGB * 1GB) `
+        -NoVHD `
+        -SwitchName $useSwitch | Out-Null
+    $createdVm = $true
+
+    # EdgeBox は独自の署名済みブートチェーンを持つため、MS のセキュアブートは無効化
+    Set-VMFirmware -VMName $VMName -EnableSecureBoot Off
+
+    Set-VMProcessor -VMName $VMName -Count $CpuCount
+
+    # 物理ディスクのためチェックポイントは使用不可。自動停止はシャットダウン要求に
+    Set-VM -Name $VMName -CheckpointType Disabled -AutomaticStopAction ShutDown
+
+    # --- ディスクをオフライン化 (Windows 側から見えなくし、VM 専有にする) ---
+    if (-not $disk.IsOffline) {
+        Write-Host "ディスクをオフライン化しています (Windows からの誤アクセス防止)..." -ForegroundColor Cyan
+        Set-Disk -Number $DiskNumber -IsOffline $true
+        $offlinedDisk = $true
+    }
+
+    # 物理ディスクを無改造のまま接続し、起動デバイスに設定
+    Add-VMHardDiskDrive -VMName $VMName -DiskNumber $DiskNumber
+    $bootDisk = Get-VMHardDiskDrive -VMName $VMName
+    Set-VMFirmware -VMName $VMName -FirstBootDevice $bootDisk
+} catch {
+    Write-Host ""
+    Write-Host "VM の作成に失敗しました: $($_.Exception.Message)" -ForegroundColor Red
+    Write-Host "ここまでの変更を元に戻しています..." -ForegroundColor Yellow
+    if ($createdVm) {
+        Remove-VM -Name $VMName -Force -ErrorAction SilentlyContinue
+        Write-Host "  - 作成途中の VM '$VMName' を削除しました"
+    }
+    if ($offlinedDisk) {
+        Set-Disk -Number $DiskNumber -IsOffline $false -ErrorAction SilentlyContinue
+        Write-Host "  - ディスク $DiskNumber をオンラインに戻しました"
+    }
+    if ($createdSwitch) {
+        Remove-VMSwitch -Name $useSwitch -Force -ErrorAction SilentlyContinue
+        Write-Host "  - 作成した外部スイッチ '$useSwitch' を削除しました (ネットワークが数秒切断されます)"
+    }
+    Write-Host "ディスクの中身には何も変更していません。原因を直してから再実行してください。" -ForegroundColor Green
+    exit 1
 }
-
-# --- ネットワークスイッチ (必要な場合のみ新規作成) ---
-if ($createFrom) {
-    Write-Host "外部スイッチ '$useSwitch' を作成しています (NIC: $createFrom)..." -ForegroundColor Cyan
-    Write-Host "  ※ 作成の瞬間、ネットワークが数秒切断されます。"
-    New-VMSwitch -Name $useSwitch -NetAdapterName $createFrom -AllowManagementOS $true | Out-Null
-}
-
-Write-Host "VM '$VMName' を作成しています..." -ForegroundColor Cyan
-New-VM -Name $VMName `
-    -Generation 2 `
-    -MemoryStartupBytes ($MemoryGB * 1GB) `
-    -NoVHD `
-    -SwitchName $useSwitch | Out-Null
-
-# EdgeBox は独自の署名済みブートチェーンを持つため、MS のセキュアブートは無効化
-Set-VMFirmware -VMName $VMName -EnableSecureBoot Off
-
-Set-VMProcessor -VMName $VMName -Count $CpuCount
-
-# 物理ディスクを無改造のまま接続し、起動デバイスに設定
-Add-VMHardDiskDrive -VMName $VMName -DiskNumber $DiskNumber
-$bootDisk = Get-VMHardDiskDrive -VMName $VMName
-Set-VMFirmware -VMName $VMName -FirstBootDevice $bootDisk
-
-# 物理ディスクのためチェックポイントは使用不可。自動停止はシャットダウン要求に
-Set-VM -Name $VMName -CheckpointType Disabled -AutomaticStopAction ShutDown
 
 Write-Host ""
 Write-Host "作成しました。" -ForegroundColor Green

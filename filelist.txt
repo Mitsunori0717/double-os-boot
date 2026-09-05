@@ -19,6 +19,7 @@ baremetal/07-connect-app-network.sh
 docs/ARCHITECTURE.md
 docs/DUAL-BOOT-SETUP.md
 docs/EXPLANATION.md
+docs/FRESH-INSTALL.md
 docs/TROUBLESHOOTING.md
 docs/VERIFICATION.md
 filelist.txt
