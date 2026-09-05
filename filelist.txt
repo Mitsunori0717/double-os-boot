@@ -28,6 +28,7 @@ windows-cpu-partition/README.md
 windows-cpu-partition/console.cmd
 windows-cpu-partition/cpu-apps.ps1
 windows-cpu-partition/cpu-console.ps1
+windows-cpu-partition/cpu-monitor.ps1
 windows-cpu-partition/cpu-partition.ps1
 windows-cpu-partition/setup.cmd
 windows-host/00-field-launcher.ps1
