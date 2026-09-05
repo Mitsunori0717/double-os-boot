@@ -327,9 +327,16 @@ function Set-CoreLabels($Cores) {
     return ,$sorted
 }
 
+function Get-CpuName {
+    try { return ((Get-CimInstance Win32_Processor | Select-Object -First 1).Name.Trim()) } catch { return "" }
+}
 function Save-Snapshot($Cores) {
+    # CPU 名を一緒に保存する。別 PC からコピーされたファイルを使わないための照合用
     try {
-        $obj = @($Cores | ForEach-Object { [pscustomobject]@{ Eff = $_.Eff; Lps = @($_.Lps) } })
+        $obj = [pscustomobject]@{
+            Cpu   = (Get-CpuName)
+            Cores = @($Cores | ForEach-Object { [pscustomobject]@{ Eff = $_.Eff; Lps = @($_.Lps) } })
+        }
         $obj | ConvertTo-Json -Depth 4 | Set-Content -Path $SnapshotFile -Encoding UTF8
     } catch { }
 }
@@ -337,7 +344,18 @@ function Save-Snapshot($Cores) {
 function Read-Snapshot {
     if (-not (Test-Path $SnapshotFile)) { return $null }
     try {
-        $raw = @(Get-Content $SnapshotFile -Raw -Encoding UTF8 | ConvertFrom-Json)
+        $json = Get-Content $SnapshotFile -Raw -Encoding UTF8 | ConvertFrom-Json
+        $raw = @()
+        if ($json.PSObject.Properties["Cores"]) {
+            # 新形式: CPU 名が一致するものだけ信用する (別 PC の構成を持ち込んだ場合の誤表示を防ぐ)
+            if ([string]$json.Cpu -ne (Get-CpuName)) { return $null }
+            $raw = @($json.Cores)
+        } else {
+            # 旧形式 (配列のみ): 論理 CPU 数がこの PC と一致するときだけ信用する
+            $raw = @($json)
+            $n = 0; foreach ($r in $raw) { $n += @([int[]]$r.Lps).Count }
+            if ($n -ne [Environment]::ProcessorCount) { return $null }
+        }
         $cores = @()
         foreach ($r in $raw) {
             $lps = @([int[]]$r.Lps)

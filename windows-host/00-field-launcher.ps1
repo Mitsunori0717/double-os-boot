@@ -26,7 +26,8 @@
     .\00-field-launcher.ps1              # おまかせ起動
     .\00-field-launcher.ps1 -Status      # 何が使われるかだけ確認 (変更しない)
     .\00-field-launcher.ps1 -Setup       # デスクトップに『EdgeBox 起動』アイコンを作成
-    .\00-field-launcher.ps1 -DiskNumber 0 -SwitchName "FIELD-External"
+    .\00-field-launcher.ps1 -DiskNumber 0 -SwitchName "EdgeBox-External"
+    .\00-field-launcher.ps1 -NetAdapterName "イーサネット 2"   # 新規 PC (外部スイッチがまだ無い) の初回
 
 .NOTES
     管理者権限が必要です (アイコンから起動すれば UAC 確認なしで管理者になります)。
@@ -36,6 +37,7 @@ param(
     [string]$VMName    = "EdgeBox",
     [int]$DiskNumber   = -1,      # 省略時: 既存 VM / 記録 / 自動検出 から決める
     [string]$SwitchName = "",     # 省略時: 既存の外部スイッチを自動選択
+    [string]$NetAdapterName = "", # 外部スイッチがまだ無い PC で、ライン側 LAN ポートの Name (Get-NetAdapter)。IP でも可
     [int]$MemoryGB     = 8,
     [int]$CpuCount     = 6,
     [switch]$Status,              # 判定結果だけ表示 (何も変更しない)
@@ -284,9 +286,22 @@ function New-FieldVmHere {
         elseif ($ext.Count -gt 1) {
             Fail ("外部スイッチが複数あります。-SwitchName で指定してください:`n" +
                 (($ext | ForEach-Object { "  " + $_.Name }) -join "`n"))
+        } elseif ($NetAdapterName) {
+            # 新規 PC: 指定された LAN ポートで外部スイッチを作る (01 と同じ名前)
+            $nic = Get-NetAdapter -Name $NetAdapterName -ErrorAction SilentlyContinue
+            if (-not $nic) {
+                $ip = Get-NetIPAddress -AddressFamily IPv4 -IPAddress $NetAdapterName -ErrorAction SilentlyContinue | Select-Object -First 1
+                if ($ip) { $nic = Get-NetAdapter -InterfaceIndex $ip.InterfaceIndex -ErrorAction SilentlyContinue }
+            }
+            if (-not $nic) { Fail "LAN ポート『$NetAdapterName』が見つかりません。Get-NetAdapter の Name を指定してください。" }
+            New-VMSwitch -Name "EdgeBox-External" -NetAdapterName $nic.Name -AllowManagementOS $true | Out-Null
+            $sw = "EdgeBox-External"
+            Ok "外部スイッチ『$sw』を LAN ポート『$($nic.Name)』に作成しました"
         } else {
-            $sw = "Default Switch"
-            Warn "外部スイッチが無いため Default Switch (NAT) を使います (工作機械からは到達できません)"
+            # NAT (Default Switch) で作ると工作機械から到達できない VM ができてしまうため、黙って作らない
+            Fail ("外部スイッチがありません。ライン側 LAN ポートを指定して実行してください:`n" +
+                  "  .\00-field-launcher.ps1 -NetAdapterName `"<Get-NetAdapter の Name>`"`n" +
+                  "(工作機械と通信するには、LAN ポートに直結した外部スイッチが必要です)")
         }
     }
     New-VM -Name $VMName -Generation 2 -MemoryStartupBytes ($MemoryGB * 1GB) -NoVHD -SwitchName $sw | Out-Null
@@ -306,6 +321,7 @@ if (-not $targetVm) {
                         "-DiskNumber", "$diskNo", "-VMName", "`"$VMName`"",
                         "-MemoryGB", "$MemoryGB", "-CpuCount", "$CpuCount", "-NoConfirm")
         if ($SwitchName) { $createArgs += @("-SwitchName", "`"$SwitchName`"") }
+        if ($NetAdapterName) { $createArgs += @("-NetAdapterName", "`"$NetAdapterName`"") }
         $p = Start-Process powershell.exe -ArgumentList ($createArgs -join " ") -NoNewWindow -Wait -PassThru
         $made = ($p.ExitCode -eq 0) -and [bool](Get-VM -Name $VMName -ErrorAction SilentlyContinue)
         if (-not $made) { Warn "01-create-field-vm.ps1 では作成できませんでした。この画面の中で作成します。" }

@@ -18,10 +18,11 @@ LAN ポート5つ / 工作機械との接続は Ethernet。
 
 ## いちばん簡単な導入・起動 (①〜⑥をまとめて行う)
 
-`field-start.cmd` をダブルクリックするだけで、既存 VM の検出 → 競合の片付け →
+`field-start.cmd` をダブルクリックするだけで (外部スイッチがまだ無い新規 PC の初回だけは上の `-NetAdapterName` 付きで)、既存 VM の検出 → 競合の片付け →
 (必要なら) VM 作成 → 起動 まで自動で進む。日常の起動もこれ 1 つで済む。
 
 ```powershell
+.\00-field-launcher.ps1 -NetAdapterName "<Get-NetAdapter の Name>"   # 新規 PC の初回 (外部スイッチがまだ無い)
 .\00-field-launcher.ps1 -Status   # 何が使われるかだけ確認 (変更しない)
 .\00-field-launcher.ps1 -Setup    # デスクトップに『EdgeBox 起動』アイコンを作成
 ```
