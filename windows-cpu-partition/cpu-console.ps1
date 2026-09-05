@@ -1330,6 +1330,142 @@ function Show-ProcessPicker {
 }
 
 # ============================================================
+#  インストール済みアプリの一覧 (スタートメニュー・デスクトップのショートカット +
+#  レジストリの「プログラムのアンインストール」情報から実行ファイルを集める)
+# ============================================================
+function Get-InstalledApps {
+    $shell = New-Object -ComObject WScript.Shell
+    $found = @{}   # 実行ファイルのパス (小文字) → エントリ
+
+    function Add-Found([string]$Name, [string]$Exe, [string]$Source) {
+        if (-not $Exe) { return }
+        $Exe = $Exe.Trim('"')
+        if ($Exe -notmatch '\.exe$') { return }
+        if (-not (Test-Path -LiteralPath $Exe)) { return }
+        $key = $Exe.ToLowerInvariant()
+        # アンインストーラーや自分自身の起動用ラッパーは除外
+        if ($Name -match '(?i)uninstall|アンインストール|削除') { return }
+        if ($key -match '\\(wscript|cscript|schtasks|powershell|cmd|msiexec|rundll32|explorer)\.exe$') { return }
+        if ($found.ContainsKey($key)) {
+            if ($Name.Length -lt $found[$key].Name.Length) { $found[$key].Name = $Name }   # 短い名前を採用
+            return
+        }
+        $found[$key] = [pscustomobject]@{ Name = $Name; Exe = $Exe; Source = $Source }
+    }
+
+    # a) ショートカット (.lnk)
+    $dirs = @(
+        [Environment]::GetFolderPath("CommonPrograms"),
+        [Environment]::GetFolderPath("Programs"),
+        [Environment]::GetFolderPath("CommonDesktopDirectory"),
+        [Environment]::GetFolderPath("Desktop")
+    )
+    foreach ($dir in $dirs) {
+        if (-not $dir -or -not (Test-Path $dir)) { continue }
+        foreach ($f in @(Get-ChildItem -Path $dir -Filter *.lnk -Recurse -File -ErrorAction SilentlyContinue)) {
+            try {
+                $lnk = $shell.CreateShortcut($f.FullName)
+                $target = [string]$lnk.TargetPath
+                if ($target) {
+                    $name = [System.IO.Path]::GetFileNameWithoutExtension($f.Name)
+                    Add-Found $name $target "ショートカット"
+                }
+            } catch { }
+        }
+    }
+
+    # b) レジストリ (DisplayIcon が実行ファイルを指しているもの)
+    $regPaths = @(
+        "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*",
+        "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*",
+        "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*"
+    )
+    foreach ($rp in $regPaths) {
+        foreach ($k in @(Get-ItemProperty -Path $rp -ErrorAction SilentlyContinue)) {
+            try {
+                $dn = [string]$k.DisplayName
+                $ic = [string]$k.DisplayIcon
+                if (-not $dn -or -not $ic) { continue }
+                $ic = ($ic -split ',')[0].Trim().Trim('"')
+                Add-Found $dn $ic "インストール情報"
+            } catch { }
+        }
+    }
+    return @($found.Values | Sort-Object Name)
+}
+
+function Show-InstalledAppPicker {
+    $d = New-Object System.Windows.Forms.Form
+    $d.Text = "インストール済みのアプリから選ぶ"
+    $d.ClientSize = New-Object System.Drawing.Size(760, 520)
+    $d.StartPosition = "CenterParent"
+    $d.FormBorderStyle = "Sizable"
+    $d.MinimumSize = New-Object System.Drawing.Size(520, 360)
+    $d.Font = New-Object System.Drawing.Font("Meiryo UI", 9)
+
+    $d.Controls.Add((New-Lbl "登録したいアプリを選んでください。名前の一部を入力すると絞り込めます。" 12 10 700))
+    $d.Controls.Add((New-Lbl "絞り込み:" 12 38))
+    $tb = New-Object System.Windows.Forms.TextBox
+    $tb.Location = New-Object System.Drawing.Point(80, 35)
+    $tb.Size = New-Object System.Drawing.Size(400, 24)
+    $tb.Anchor = "Top,Left,Right"
+    $d.Controls.Add($tb)
+    $lblCount = New-Lbl "" 490 38 250
+    $lblCount.Anchor = "Top,Right"
+    $d.Controls.Add($lblCount)
+
+    $lv = New-Object System.Windows.Forms.ListView
+    $lv.Location = New-Object System.Drawing.Point(12, 64)
+    $lv.Size = New-Object System.Drawing.Size(736, 400)
+    $lv.Anchor = "Top,Bottom,Left,Right"
+    $lv.View = "Details"; $lv.FullRowSelect = $true; $lv.MultiSelect = $false; $lv.GridLines = $true
+    [void]$lv.Columns.Add("アプリ名", 260)
+    [void]$lv.Columns.Add("実行ファイル", 400)
+    [void]$lv.Columns.Add("情報源", 70)
+    $d.Controls.Add($lv)
+
+    $ok = New-Object System.Windows.Forms.Button
+    $ok.Text = "追加"; $ok.DialogResult = "OK"
+    $ok.Location = New-Object System.Drawing.Point(524, 476)
+    $ok.Size = New-Object System.Drawing.Size(110, 30)
+    $ok.Anchor = "Bottom,Right"
+    $ng = New-Object System.Windows.Forms.Button
+    $ng.Text = "キャンセル"; $ng.DialogResult = "Cancel"
+    $ng.Location = New-Object System.Drawing.Point(640, 476)
+    $ng.Size = New-Object System.Drawing.Size(108, 30)
+    $ng.Anchor = "Bottom,Right"
+    $d.Controls.AddRange(@($ok, $ng))
+    $d.AcceptButton = $ok; $d.CancelButton = $ng
+
+    $d.Cursor = [System.Windows.Forms.Cursors]::WaitCursor
+    $all = @(Get-InstalledApps)
+    $d.Cursor = [System.Windows.Forms.Cursors]::Default
+
+    $script:InstShown = @()
+    function Fill-List([string]$Filter) {
+        $lv.BeginUpdate()
+        $lv.Items.Clear()
+        $script:InstShown = @()
+        foreach ($e in $all) {
+            if ($Filter -and ($e.Name -notlike "*$Filter*") -and ($e.Exe -notlike "*$Filter*")) { continue }
+            $it = New-Object System.Windows.Forms.ListViewItem($e.Name)
+            [void]$it.SubItems.Add($e.Exe)
+            [void]$it.SubItems.Add($e.Source)
+            [void]$lv.Items.Add($it)
+            $script:InstShown += $e
+        }
+        $lv.EndUpdate()
+        $lblCount.Text = "{0} 件 / 全 {1} 件" -f $script:InstShown.Count, $all.Count
+    }
+    Fill-List ""
+    $tb.Add_TextChanged({ Fill-List $tb.Text.Trim() })
+    $lv.Add_DoubleClick({ if ($lv.SelectedIndices.Count -gt 0) { $d.DialogResult = "OK"; $d.Close() } })
+
+    if ($d.ShowDialog() -ne "OK" -or $lv.SelectedIndices.Count -eq 0) { return $null }
+    return $script:InstShown[$lv.SelectedIndices[0]]
+}
+
+# ============================================================
 #  アプリの割り当てダイアログ
 # ============================================================
 function Show-AppsDialog {
@@ -1394,10 +1530,23 @@ function Show-AppsDialog {
     }
 
     $bx = 12
+    $btnInst = New-Object System.Windows.Forms.Button
+    $btnInst.Text = "インストール済みから追加..."
+    $btnInst.Location = New-Object System.Drawing.Point($bx, 374)
+    $btnInst.Size = New-Object System.Drawing.Size(210, 30)
+    $btnInst.Add_Click({
+        $e = Show-InstalledAppPicker
+        if ($e) {
+            $base = [System.IO.Path]::GetFileNameWithoutExtension($e.Exe)
+            Add-App $e.Name $e.Exe $base
+        }
+    })
+    $bx += 218
+
     $btnFile = New-Object System.Windows.Forms.Button
     $btnFile.Text = "ファイルから追加..."
     $btnFile.Location = New-Object System.Drawing.Point($bx, 374)
-    $btnFile.Size = New-Object System.Drawing.Size(160, 30)
+    $btnFile.Size = New-Object System.Drawing.Size(150, 30)
     $btnFile.Add_Click({
         $ofd = New-Object System.Windows.Forms.OpenFileDialog
         $ofd.Filter = "実行ファイル (*.exe)|*.exe|すべてのファイル (*.*)|*.*"
@@ -1407,40 +1556,40 @@ function Show-AppsDialog {
             Add-App $base $ofd.FileName $base
         }
     })
-    $bx += 168
+    $bx += 158
 
     $btnRun = New-Object System.Windows.Forms.Button
-    $btnRun.Text = "実行中のアプリから追加..."
+    $btnRun.Text = "実行中から追加..."
     $btnRun.Location = New-Object System.Drawing.Point($bx, 374)
-    $btnRun.Size = New-Object System.Drawing.Size(200, 30)
+    $btnRun.Size = New-Object System.Drawing.Size(150, 30)
     $btnRun.Add_Click({
         $e = Show-ProcessPicker
         if ($e) { Add-App $e.Name $(if ($e.Exe) { $e.Exe } else { "" }) $e.Name }
     })
-    $bx += 208
+    $bx += 158
 
     $btnCores = New-Object System.Windows.Forms.Button
     $btnCores.Text = "コアを編集..."
     $btnCores.Location = New-Object System.Drawing.Point($bx, 374)
-    $btnCores.Size = New-Object System.Drawing.Size(140, 30)
+    $btnCores.Size = New-Object System.Drawing.Size(130, 30)
     $btnCores.Add_Click({
         $a = Get-SelectedApp
         if (-not $a) { Show-Info "一覧からアプリを選んでください。" "Warning"; return }
         $lps = Show-CoreChooser @([int[]]$a.Lps) ("コアの選択 - " + $a.Name) @($sel.GuestLps)
         if ($lps) { $a.Lps = @($lps); Sync-AppList }
     })
-    $bx += 148
+    $bx += 138
 
     $btnDel = New-Object System.Windows.Forms.Button
     $btnDel.Text = "削除"
     $btnDel.Location = New-Object System.Drawing.Point($bx, 374)
-    $btnDel.Size = New-Object System.Drawing.Size(100, 30)
+    $btnDel.Size = New-Object System.Drawing.Size(90, 30)
     $btnDel.Add_Click({
         if ($lv.SelectedIndices.Count -eq 0) { Show-Info "一覧からアプリを選んでください。" "Warning"; return }
         $work.RemoveAt($lv.SelectedIndices[0])
         Sync-AppList
     })
-    $d.Controls.AddRange(@($btnFile, $btnRun, $btnCores, $btnDel))
+    $d.Controls.AddRange(@($btnInst, $btnFile, $btnRun, $btnCores, $btnDel))
 
     $d.Controls.Add((New-Lbl "選んだアプリの優先度:" 12 418))
     $cmbPri = New-Object System.Windows.Forms.ComboBox
