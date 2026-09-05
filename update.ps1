@@ -46,8 +46,15 @@ $UA = @{ "User-Agent" = "double-os-boot-updater" }   # GitHub API は User-Agent
 
 if (-not $Ref) { $Ref = $Branch }
 $BranchEnc = [uri]::EscapeDataString($Ref)
-$ZipUrl    = "https://github.com/$Repo/archive/refs/heads/$Branch.zip"
+# ZIP も -Ref に従う。コミット ID (40 桁の 16 進) は archive/<sha>.zip、
+# ブランチ名 (/ を含むことがある) は archive/refs/heads/<branch>.zip で取得する
+if ($Ref -match '^[0-9a-fA-F]{40}$') {
+    $ZipUrl = "https://github.com/$Repo/archive/$Ref.zip"
+} else {
+    $ZipUrl = "https://github.com/$Repo/archive/refs/heads/$Ref.zip"
+}
 $tmpRoot   = Join-Path $env:TEMP ("dob-update-" + [Guid]::NewGuid().ToString("N").Substring(0, 8))
+$script:skippedDocs = @()   # 個別取得で取れなかった説明書 (.md) の一覧
 
 # ============================================================
 #  到達性の確認
@@ -164,8 +171,18 @@ function Get-SourceViaFiles {
     }
     if ($n -eq 0) { throw "1 件もダウンロードできませんでした。" }
     if ($failed.Count -gt 0) {
-        Write-Host "  取得できなかったファイル ($($failed.Count) 件・そのまま残します):" -ForegroundColor Yellow
+        # スクリプト類は互いに呼び合うため、一部だけ新しくなると動かなくなる。
+        # 1 件でも取れなければ更新を中止する (既存環境には何も書き込まない)。
+        # 説明書 (.md) だけが取れなかった場合は、スクリプトの更新を優先して続行する。
+        $failedScripts = @($failed | Where-Object { $_ -notmatch '\.md$' })
+        if ($failedScripts.Count -gt 0) {
+            Write-Host "  取得できなかったファイル ($($failed.Count) 件):" -ForegroundColor Red
+            foreach ($f in $failed) { Write-Host "    - $f" -ForegroundColor Red }
+            throw "スクリプトの一部が取得できなかったため、更新を中止しました (一部だけ新しくなると動かなくなるため)。時間をおいて再実行してください。"
+        }
+        Write-Host "  取得できなかった説明書 ($($failed.Count) 件・そのまま残します):" -ForegroundColor Yellow
         foreach ($f in $failed) { Write-Host "    - $f" -ForegroundColor Yellow }
+        $script:skippedDocs = $failed
     }
     return $root
 }
@@ -253,7 +270,12 @@ try {
         Unblock-File -ErrorAction SilentlyContinue
 
     Write-Host ""
-    Write-Host "更新しました ($($added.Count + $changed.Count) 件)。" -ForegroundColor Green
+    if ($script:skippedDocs -and $script:skippedDocs.Count -gt 0) {
+        Write-Host "更新しました ($($added.Count + $changed.Count) 件)。ただし説明書 $($script:skippedDocs.Count) 件は取得できず、古いままです。" -ForegroundColor Yellow
+        Write-Host "  時間をおいて再実行すると、残りも更新されます。"
+    } else {
+        Write-Host "更新しました ($($added.Count + $changed.Count) 件)。" -ForegroundColor Green
+    }
     Write-Host "  端末ごとの設定ファイルはそのまま残しています。"
 } finally {
     Remove-Item -Path $tmpRoot -Recurse -Force -ErrorAction SilentlyContinue

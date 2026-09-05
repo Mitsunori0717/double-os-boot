@@ -93,8 +93,17 @@ if ($Setup) {
         Write-Host ""
         Write-Host "ヒント: EdgeBox は 'UEFI OS' や 'ubuntu'、KIOXIA のディスク名などの表記です。"
         Write-Host "        どれか不明な場合は、この一覧を貼り付けて相談してください。"
-        $sel = Read-Host "EdgeBox の番号"
-        $entry = $entries[[int]$sel]
+        # 一覧にある番号だけ受け付ける (空・文字・負数・範囲外は聞き直す。
+        # PowerShell では -1 が末尾の要素を指すため、負数も必ず弾く)
+        $entry = $null
+        while (-not $entry) {
+            $sel = (Read-Host "EdgeBox の番号 (0-$($entries.Count - 1))").Trim()
+            if ($sel -match '^\d+$' -and [int]$sel -lt $entries.Count) {
+                $entry = $entries[[int]$sel]
+            } else {
+                Write-Host "  0 から $($entries.Count - 1) の番号を入力してください。" -ForegroundColor Yellow
+            }
+        }
         $entry.Guid | Set-Content -Path $ConfFile -Encoding ASCII
         Write-Host "保存しました: $($entry.Description) $($entry.Guid)" -ForegroundColor Green
     }
