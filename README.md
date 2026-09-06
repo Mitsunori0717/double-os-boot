@@ -201,22 +201,22 @@ sudo bash baremetal/05-share-keyboard-mouse.sh
 1 組のキーボード・マウスを **左右 Ctrl 同時押し** で Windows ⇔ Linux 切り替えできるようにします
 (evdev パススルー)。物理的に 2 組つなぐ、または USB 切替器を使う場合は不要です。
 
-### STEP 6: Windows アプリ ⇔ Linux Fsbp の接続
+### STEP 6: Windows アプリ ⇔ Linux FsBP の接続
 
 同時起動モードでは、両 OS の間に **物理 LAN を経由しない常設の内部ネットワーク** が
-張られています (遅延 1ms 未満の仮想イーサネット直結)。Windows 側の Fsbp クライアント
-アプリから Linux 上の Fsbp 本体へは、この内部ネットワーク経由で TCP/UDP 接続できます。
+張られています (遅延 1ms 未満の仮想イーサネット直結)。Windows 側の FsBP クライアント
+アプリから Linux 上の FsBP 本体へは、この内部ネットワーク経由で TCP/UDP 接続できます。
 
 ```
-Windows の Fsbp アプリ ──(内部ネットワーク)──► 192.168.122.1:<Fsbpのポート> = Linux の Fsbp 本体
+Windows の FsBP アプリ ──(内部ネットワーク)──► 192.168.122.1:<FsBPのポート> = Linux の FsBP 本体
 ```
 
 1. **Windows アプリ側の接続先設定**: サーバーアドレスに `192.168.122.1` を指定
-   (この値は固定で、再起動しても変わりません)。ポートは Fsbp のマニュアル記載の値
+   (この値は固定で、再起動しても変わりません)。ポートは FsBP のマニュアル記載の値
 2. **Linux 側でポートを開放** (ufw 有効時のみ必要):
 
 ```bash
-sudo bash baremetal/07-connect-app-network.sh --allow-ports "502/tcp"   # ポートは Fsbp に合わせる
+sudo bash baremetal/07-connect-app-network.sh --allow-ports "502/tcp"   # ポートは FsBP に合わせる
 ```
 
 3. **接続情報・疎通の確認**:
@@ -241,7 +241,7 @@ bash baremetal/07-connect-app-network.sh --show
 | 同時起動中の Windows を終了 | Windows 内で通常通りシャットダウン |
 | ファイルを渡す | Windows: `Z:\` ⇔ Linux: `/srv/shared` |
 | キーボード/マウスの切替 | 左右 Ctrl 同時押し (STEP 5 設定時) |
-| Windows アプリ → Linux の Fsbp へ接続 | 接続先 `192.168.122.1:<Fsbpのポート>` (固定) |
+| Windows アプリ → Linux の FsBP へ接続 | 接続先 `192.168.122.1:<FsBPのポート>` (固定) |
 | 現在の割り当てと負荷の確認 | `bash baremetal/06-tune-resources.sh --show` |
 | CPU/メモリ配分の調整 | Windows を終了 → `sudo bash baremetal/06-tune-resources.sh --cpuset 2-27` 等 → Windows 再起動で反映 |
 
@@ -296,7 +296,7 @@ baremetal/03-start-windows.sh        同時起動モードで Windows を起動/
 baremetal/04-setup-file-sharing.sh   Samba によるデータ共有
 baremetal/05-share-keyboard-mouse.sh 1組のキーボード/マウスを両OSで共有
 baremetal/06-tune-resources.sh       CPU/メモリ配分の確認と調整 (運用しながら変更可)
-baremetal/07-connect-app-network.sh  Windows アプリ ⇔ Linux Fsbp のネットワーク接続設定
+baremetal/07-connect-app-network.sh  Windows アプリ ⇔ Linux FsBP のネットワーク接続設定
 windows-host/                        構成B: Linux 側が EdgeBox (メーカー製の専用機) の場合 (Windows をホストに反転)
 windows-cpu-partition/               (別口) Windows ホスト用 CPU コア分割ツール — Hyper-V VM にコアを固定割り当て (構成Bと独立・干渉なし)
 docs/DUAL-BOOT-SETUP.md              ネイティブ・デュアルブートの構築手順

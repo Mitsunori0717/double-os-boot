@@ -33,9 +33,9 @@ Windows 11(ホスト・ネイティブ動作 = メイン業務はフルスピー
   ハードウェアに紐付いている場合、起動しても機能しない可能性があります。
   ディスクは無改造なので、その場合はネイティブ起動運用に戻してください(下記)
 
-## いちばん簡単な使い方: おまかせ起動 (00-field-launcher.ps1)
+## いちばん簡単な使い方: おまかせ起動 (00-fsbp-launcher.ps1)
 
-**`field-start.cmd` をダブルクリック**するだけで、次を全部自動でやります。
+**`fsbp-start.cmd` をダブルクリック**するだけで、次を全部自動でやります。
 
 1. **既存 VM を探す** — 名前が違っても、EdgeBox のディスクを起動する VM があればそれを使う
    (旧構成の VM がそのまま活きるので作り直し不要)
@@ -46,9 +46,9 @@ Windows 11(ホスト・ネイティブ動作 = メイン業務はフルスピー
 5. **起動してコンソールを表示する**
 
 ```powershell
-.\00-field-launcher.ps1              # おまかせ起動 (field-start.cmd と同じ)
-.\00-field-launcher.ps1 -Status      # 何が使われるかだけ確認 (変更しない)
-.\00-field-launcher.ps1 -Setup       # デスクトップに『EdgeBox 起動』アイコンを作成
+.\00-fsbp-launcher.ps1              # おまかせ起動 (fsbp-start.cmd と同じ)
+.\00-fsbp-launcher.ps1 -Status      # 何が使われるかだけ確認 (変更しない)
+.\00-fsbp-launcher.ps1 -Setup       # デスクトップに『EdgeBox 起動』アイコンを作成
 ```
 
 ディスクの中身には一切触れません。VM の作成は「VM がまったく無い場合」だけです。
@@ -66,13 +66,13 @@ Get-NetAdapter
 Get-VMSwitch
 
 # 3-a. VM 作成 (既に外部スイッチがある場合はそれを指定するのが確実)
-.\01-create-field-vm.ps1 -DiskNumber 0 -SwitchName "EdgeBox-External"
+.\01-create-fsbp-vm.ps1 -DiskNumber 0 -SwitchName "EdgeBox-External"
 
 # 3-b. スイッチをこれから作る場合 (-NetAdapterName は Get-NetAdapter の「Name」。IP でも可)
-.\01-create-field-vm.ps1 -DiskNumber 0 -NetAdapterName "イーサネット"
+.\01-create-fsbp-vm.ps1 -DiskNumber 0 -NetAdapterName "イーサネット"
 
 # 4. 起動
-.\02-start-field-vm.ps1
+.\02-start-fsbp-vm.ps1
 ```
 
 > 1 枚の LAN ポートを 2 つの外部スイッチに割り当てることはできません。
@@ -87,7 +87,7 @@ Windows 側の EdgeBox 専用アプリの接続先にも、この IP を設定�
 ## 自動起動 (PC 起動時に EdgeBox も自動で立ち上げる)
 
 ```powershell
-.\03-field-display-kiosk.ps1 -Install   # ログオン時の自動表示 + VM の自動起動 (30 秒後) を設定
+.\03-fsbp-display-kiosk.ps1 -Install   # ログオン時の自動表示 + VM の自動起動 (30 秒後) を設定
 powercfg /h off                  # 高速スタートアップ無効 (自動起動を確実にする)
 .\06-auto-logon.ps1 -Setup       # サインイン画面を省略し、電源 ON で直接デスクトップへ
 ```
@@ -95,7 +95,7 @@ powercfg /h off                  # 高速スタートアップ無効 (自動起�
 VM の自動起動だけを手で入れる場合: `Set-VM -Name <VM名> -AutomaticStartAction Start -AutomaticStartDelay 30`
 
 `06-auto-logon.ps1` でロック画面とパスワード入力を省略すると、電源 ON だけで
-VM 起動 → サインイン → 左右モニターへの自動表示 (`03-field-display-kiosk.ps1`) まで
+VM 起動 → サインイン → 左右モニターへの自動表示 (`03-fsbp-display-kiosk.ps1`) まで
 人の操作なしにそろいます。アカウント名とパスワードはデスクトップの
 『自動サインイン設定』アイコンからいつでも変更できます (`-Disable` で元に戻せます)。
 
@@ -135,7 +135,7 @@ P コア / E コアをタイルで選んで割り当てられ、動かない設�
 
 ## ネイティブ起動に戻す(切り分け・撤退手順)
 
-1. VM を停止: `.\02-start-field-vm.ps1 -Stop`
+1. VM を停止: `.\02-start-fsbp-vm.ps1 -Stop`
 2. 一時的にネイティブ起動したいだけの場合: PC を再起動し **F8** で EdgeBox のディスクを選択
    (VM 定義は残したままで共存できます。**同時に両方から起動しないこと**)
 3. 完全に元へ戻す場合:

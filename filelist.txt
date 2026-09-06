@@ -32,11 +32,11 @@ windows-cpu-partition/cpu-console.ps1
 windows-cpu-partition/cpu-monitor.ps1
 windows-cpu-partition/cpu-partition.ps1
 windows-cpu-partition/setup.cmd
-windows-host/00-field-launcher.ps1
-windows-host/01-create-field-vm.ps1
-windows-host/02-start-field-vm.ps1
-windows-host/03-field-display-kiosk.ps1
-windows-host/04-reboot-to-field-native.ps1
+windows-host/00-fsbp-launcher.ps1
+windows-host/01-create-fsbp-vm.ps1
+windows-host/02-start-fsbp-vm.ps1
+windows-host/03-fsbp-display-kiosk.ps1
+windows-host/04-reboot-to-fsbp-native.ps1
 windows-host/05-shutdown-all.ps1
 windows-host/06-auto-logon.ps1
 windows-host/07-boot-appearance.ps1
@@ -45,5 +45,5 @@ windows-host/09-rename-to-edgebox.ps1
 windows-host/99-fix-black-screen.ps1
 windows-host/README.md
 windows-host/SETUP-STEPS.md
-windows-host/field-start.cmd
+windows-host/fsbp-start.cmd
 windows-host/fix-black-screen.cmd

@@ -101,7 +101,7 @@ if ($vc.Count -gt 0) {
     } else {
         Write-Host "  EdgeBox のコンソール窓が開いています (画面が真っ黒に見える原因になります)。"
         Write-Host "    閉じる場合: .\99-fix-black-screen.ps1 -CloseConsole" -ForegroundColor Cyan
-        Write-Host "    (VM は動いたままです。再表示は .\02-start-field-vm.ps1)"
+        Write-Host "    (VM は動いたままです。再表示は .\02-start-fsbp-vm.ps1)"
     }
 } else {
     Write-Host "  EdgeBox のコンソール窓は開いていません。"

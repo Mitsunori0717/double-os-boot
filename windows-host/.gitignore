@@ -1,9 +1,9 @@
 # 端末固有の設定・暗号化ログイン情報はリポジトリに含めない
 display-config.json
 kiosk-login.xml
-field-boot-entry.conf
+fsbp-boot-entry.conf
 display-log.txt
 display-status.txt
 display-error.txt
 *.flag
-field-disk.conf
+fsbp-disk.conf

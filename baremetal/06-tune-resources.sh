@@ -4,7 +4,7 @@
 #
 #   - PC 全体の再起動は不要。Windows (同時起動側) を一度シャットダウンして
 #     本スクリプトを実行し、Windows を起動し直すだけで反映される
-#   - Linux 側・Fsbp 等の占有ソフトには一切影響しない
+#   - Linux 側・FsBP 等の占有ソフトには一切影響しない
 #
 # 使い方:
 #   bash 06-tune-resources.sh --show                 # 現在の割り当てと使用状況を表示
@@ -57,7 +57,7 @@ if [[ $SHOW -eq 1 ]]; then
     echo "  Linux 側の負荷   : htop (Windows 専用コアが遊んでいるか、Linux 側が詰まっていないか)"
     echo "  Windows 側の負荷 : Windows 内のタスクマネージャー → パフォーマンス"
     echo "  → Windows の CPU が常時高いなら --cpuset で渡すコアを増やす、"
-    echo "    Linux/Fsbp 側が詰まるなら Windows 側を減らす、が基本方針です。"
+    echo "    Linux/FsBP 側が詰まるなら Windows 側を減らす、が基本方針です。"
     exit 0
 fi
 

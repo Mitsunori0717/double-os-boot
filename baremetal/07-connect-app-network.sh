@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 #
-# Windows の Fsbp クライアントアプリ ⇔ Linux の Fsbp 本体 の接続設定
+# Windows の FsBP クライアントアプリ ⇔ Linux の FsBP 本体 の接続設定
 #
 # 仕組み:
 #   同時起動モードでは、Linux と Windows の間に常設の内部ネットワークがあります
 #   (libvirt default ネットワーク / virbr0)。物理 LAN やインターネットを経由しない
 #   OS 間直結の仮想イーサネットで、遅延は 1ms 未満です。
 #
-#     Windows 側から見た Linux (Fsbp 本体) のアドレス: 192.168.122.1 (固定・不変)
+#     Windows 側から見た Linux (FsBP 本体) のアドレス: 192.168.122.1 (固定・不変)
 #     Linux 側から見た Windows のアドレス            : --static-vm-ip で固定可能
 #
 # 使い方:
@@ -15,8 +15,8 @@
 #       現在の接続情報 (両側の IP・疎通) を表示
 #
 #   sudo bash 07-connect-app-network.sh --allow-ports "502/tcp,4840/tcp"
-#       Fsbp が待ち受けるポートを Windows からの接続向けに開放
-#       (ポート番号は Fsbp のマニュアル/設定画面で確認)
+#       FsBP が待ち受けるポートを Windows からの接続向けに開放
+#       (ポート番号は FsBP のマニュアル/設定画面で確認)
 #
 #   sudo bash 07-connect-app-network.sh --static-vm-ip 192.168.122.50
 #       Windows 側の IP を固定 (Linux → Windows 方向の接続や監視に必要な場合)
@@ -58,8 +58,8 @@ HOST_IP="${HOST_IP:-192.168.122.1}"
 if [[ $SHOW -eq 1 || ( -z "$ALLOW_PORTS" && -z "$STATIC_IP" && -z "$LAN_IFACE" ) ]]; then
     echo "=== OS 間ネットワークの接続情報 ==="
     echo
-    echo "Linux (Fsbp 本体) 側:"
-    echo "  Windows から接続するアドレス : $HOST_IP  ← Fsbp クライアントの接続先にこれを設定"
+    echo "Linux (FsBP 本体) 側:"
+    echo "  Windows から接続するアドレス : $HOST_IP  ← FsBP クライアントの接続先にこれを設定"
     echo
     echo "Windows 側:"
     vm_state=$($VIRSH domstate "$VM_NAME")
@@ -78,8 +78,8 @@ if [[ $SHOW -eq 1 || ( -z "$ALLOW_PORTS" && -z "$STATIC_IP" && -z "$LAN_IFACE" )
         echo "  (Windows は現在停止中です。起動すると IP が表示されます)"
     fi
     echo
-    echo "Fsbp の待ち受けポートの確認 (Linux 側で Fsbp 起動中に):"
-    echo "  ss -tlnp | grep -i fsbp    または    sudo ss -tlnp"
+    echo "FsBP の待ち受けポートの確認 (Linux 側で FsBP 起動中に):"
+    echo "  ss -tlnp | grep -i FsBP    または    sudo ss -tlnp"
     echo
     echo "接続できない場合:"
     echo "  1. sudo bash $0 --allow-ports \"<ポート>/tcp\"   でポート開放"
@@ -103,7 +103,7 @@ if [[ -n "$ALLOW_PORTS" ]]; then
         for p in "${ports[@]}"; do
             port="${p%/*}"; proto="${p#*/}"
             ufw allow from 192.168.122.0/24 to any port "$port" proto "$proto" \
-                comment "double-os-boot: Fsbp app" >/dev/null
+                comment "double-os-boot: FsBP app" >/dev/null
             echo "  開放: $port/$proto (内部ネットワーク 192.168.122.0/24 からのみ)"
         done
     else

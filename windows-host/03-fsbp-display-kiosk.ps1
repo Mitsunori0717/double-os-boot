@@ -4,12 +4,12 @@
     すべての設定は『EdgeBox表示設定』の設定コンソール (-Settings) で変更できます。
 
 .EXAMPLE
-    .\03-field-display-kiosk.ps1              # 設定内容で今すぐ表示
-    .\03-field-display-kiosk.ps1 -Settings    # 設定コンソールを開く
-    .\03-field-display-kiosk.ps1 -Setup       # デスクトップに『EdgeBox表示設定』アイコンを作成
-    .\03-field-display-kiosk.ps1 -Install     # ログオン時の自動表示を登録
-    .\03-field-display-kiosk.ps1 -Uninstall   # 自動表示を解除
-    .\03-field-display-kiosk.ps1 -ConsoleResolution auto   # コンソールの解像度をモニターに合わせる (VM 停止中)
+    .\03-fsbp-display-kiosk.ps1              # 設定内容で今すぐ表示
+    .\03-fsbp-display-kiosk.ps1 -Settings    # 設定コンソールを開く
+    .\03-fsbp-display-kiosk.ps1 -Setup       # デスクトップに『EdgeBox表示設定』アイコンを作成
+    .\03-fsbp-display-kiosk.ps1 -Install     # ログオン時の自動表示を登録
+    .\03-fsbp-display-kiosk.ps1 -Uninstall   # 自動表示を解除
+    .\03-fsbp-display-kiosk.ps1 -ConsoleResolution auto   # コンソールの解像度をモニターに合わせる (VM 停止中)
 
 .NOTES
     動作の記録は display-log.txt に残ります (うまく表示されないときはこれを確認)。
@@ -38,7 +38,7 @@ param(
 $ErrorActionPreference = "Stop"
 
 # -VMName を明示していない場合、既定名の VM が無ければ、EdgeBox のディスク
-# (物理ディスクのパススルー) を持つ VM を探して使う。00-field-launcher.ps1 と
+# (物理ディスクのパススルー) を持つ VM を探して使う。00-fsbp-launcher.ps1 と
 # 同じ考え方で、VM 名が「EdgeBox」でなくても (旧名称のままでも) そのまま動くようにする
 if (-not $PSBoundParameters.ContainsKey("VMName") -and -not ($Splash -or $Backdrop -or $EscWatcher -or $ConsoleCloser) -and
     -not (Get-VM -Name $VMName -ErrorAction SilentlyContinue)) {
@@ -228,7 +228,7 @@ public class EscApi {
     while ($true) {
         if (((Get-Date) - $lastScan).TotalSeconds -gt 10) {
             $edgePids = @(Get-CimInstance Win32_Process -Filter "Name='msedge.exe'" -ErrorAction SilentlyContinue |
-                Where-Object { $_.CommandLine -match 'FieldKiosk' } | Select-Object -ExpandProperty ProcessId)
+                Where-Object { $_.CommandLine -match 'FsBPKiosk' } | Select-Object -ExpandProperty ProcessId)
             $lastScan = Get-Date
         }
         if (([EscApi]::GetAsyncKeyState(0x1B) -band 0x8000) -ne 0) {
@@ -302,7 +302,7 @@ if ($ConsoleCloser) {
     Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" -ErrorAction SilentlyContinue |
         Where-Object { $_.CommandLine -match '-Backdrop' -and $_.ProcessId -ne $PID } |
         ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
-    Log "コンソール自動クローズ: EdgeBox は起動済みのため、コンソール画面を閉じました (見たいときは『EdgeBox 画面』= 02-start-field-vm.ps1)。"
+    Log "コンソール自動クローズ: EdgeBox は起動済みのため、コンソール画面を閉じました (見たいときは『EdgeBox 画面』= 02-start-fsbp-vm.ps1)。"
     exit 0
 }
 
@@ -643,7 +643,7 @@ if ($ConsoleResolution) {
     $cfg | Add-Member -NotePropertyName ConsoleResolution -NotePropertyValue $ConsoleResolution -Force
     $cfg | ConvertTo-Json | Set-Content -Path $ConfigFile -Encoding UTF8
     Write-Host "コンソールの解像度を $($res.W)x$($res.H) に設定しました。" -ForegroundColor Green
-    Write-Host "次に VM を起動すると、この解像度で表示されます (.\02-start-field-vm.ps1)。"
+    Write-Host "次に VM を起動すると、この解像度で表示されます (.\02-start-fsbp-vm.ps1)。"
     exit 0
 }
 
@@ -801,12 +801,12 @@ $edge = @(
 if (-not $edge) { Log "エラー: Microsoft Edge が見つかりません。"; exit 1 }
 
 # --- ウィンドウ操作用 API ---
-if (-not ([System.Management.Automation.PSTypeName]'FieldWin').Type) {
+if (-not ([System.Management.Automation.PSTypeName]'FsBPWin').Type) {
     Add-Type -TypeDefinition @"
 using System;
 using System.Text;
 using System.Runtime.InteropServices;
-public class FieldWin {
+public class FsBPWin {
     [DllImport("user32.dll")] public static extern IntPtr GetSubMenu(IntPtr hMenu, int nPos);
     [DllImport("user32.dll")] public static extern int GetMenuItemCount(IntPtr hMenu);
     [DllImport("user32.dll")] public static extern uint GetMenuItemID(IntPtr hMenu, int nPos);
@@ -837,25 +837,25 @@ public class FieldWin {
 # ALT キー疑似押下 → 駄目なら AttachThreadInput 方式。成功したかを返す
 function Force-Foreground([IntPtr]$hwnd) {
     for ($i = 0; $i -lt 3; $i++) {
-        [FieldWin]::keybd_event(0x12, 0, 0, 0)      # ALT down
-        [FieldWin]::SetForegroundWindow($hwnd) | Out-Null
-        [FieldWin]::keybd_event(0x12, 0, 2, 0)      # ALT up
+        [FsBPWin]::keybd_event(0x12, 0, 0, 0)      # ALT down
+        [FsBPWin]::SetForegroundWindow($hwnd) | Out-Null
+        [FsBPWin]::keybd_event(0x12, 0, 2, 0)      # ALT up
         Start-Sleep -Milliseconds 300
-        if ([FieldWin]::GetForegroundWindow() -eq $hwnd) { return $true }
+        if ([FsBPWin]::GetForegroundWindow() -eq $hwnd) { return $true }
 
         # 前面ウィンドウのスレッドに入力を相乗りさせてから前面化する (確実性の高い方式)
-        $fg = [FieldWin]::GetForegroundWindow()
+        $fg = [FsBPWin]::GetForegroundWindow()
         $procId = [uint32]0
-        $fgThread = [FieldWin]::GetWindowThreadProcessId($fg, [ref]$procId)
-        $myThread = [FieldWin]::GetCurrentThreadId()
-        [FieldWin]::AttachThreadInput($myThread, $fgThread, $true) | Out-Null
-        [FieldWin]::BringWindowToTop($hwnd) | Out-Null
-        [FieldWin]::SetForegroundWindow($hwnd) | Out-Null
-        [FieldWin]::AttachThreadInput($myThread, $fgThread, $false) | Out-Null
+        $fgThread = [FsBPWin]::GetWindowThreadProcessId($fg, [ref]$procId)
+        $myThread = [FsBPWin]::GetCurrentThreadId()
+        [FsBPWin]::AttachThreadInput($myThread, $fgThread, $true) | Out-Null
+        [FsBPWin]::BringWindowToTop($hwnd) | Out-Null
+        [FsBPWin]::SetForegroundWindow($hwnd) | Out-Null
+        [FsBPWin]::AttachThreadInput($myThread, $fgThread, $false) | Out-Null
         Start-Sleep -Milliseconds 300
-        if ([FieldWin]::GetForegroundWindow() -eq $hwnd) { return $true }
+        if ([FsBPWin]::GetForegroundWindow() -eq $hwnd) { return $true }
     }
-    return ([FieldWin]::GetForegroundWindow() -eq $hwnd)
+    return ([FsBPWin]::GetForegroundWindow() -eq $hwnd)
 }
 
 # 指定プロファイルの Edge ウィンドウを探す
@@ -878,6 +878,13 @@ function Open-Kiosk([string]$u, $screen, [string]$profile, [bool]$fullScreen) {
     if (-not $u) { return }
     Log ("ブラウザを開きます: {0}  (モニター {1},{2} / {3})" -f $u, $screen.Bounds.X, $screen.Bounds.Y,
          $(if ($fullScreen) { "全画面" } else { "最大化ウィンドウ" }))
+    # 旧名 (FieldKiosk*) のプロファイルが残っていれば新名に引き継ぐ (管理画面のログイン状態を失わないため)
+    $newProfDir = Join-Path $env:LOCALAPPDATA $profile
+    $oldProfDir = Join-Path $env:LOCALAPPDATA ($profile -replace '^FsBP', 'Field')
+    if (-not (Test-Path $newProfDir) -and (Test-Path $oldProfDir)) {
+        try { Move-Item $oldProfDir $newProfDir -Force }
+        catch { Log "旧プロファイル ($oldProfDir) を引き継げなかったため、新規プロファイルで開きます: $($_.Exception.Message)" }
+    }
     # --test-type: 「サポートされていないフラグ」警告バーを非表示にする
     # 全画面指定は --start-fullscreen で最初から全画面にする (F11 と同じ状態 = ESC 見張りで解除可)
     $eargs = @(
@@ -898,9 +905,9 @@ function Open-Kiosk([string]$u, $screen, [string]$profile, [bool]$fullScreen) {
     }
 
     # 対象モニターへ移動 + 最大化 (--start-maximized は app 窓では無視されるため直接操作する)
-    [FieldWin]::MoveWindow($h, $screen.Bounds.X, $screen.Bounds.Y, 1000, 700, $true) | Out-Null
+    [FsBPWin]::MoveWindow($h, $screen.Bounds.X, $screen.Bounds.Y, 1000, 700, $true) | Out-Null
     Start-Sleep -Milliseconds 300
-    [FieldWin]::ShowWindow($h, 3) | Out-Null   # 最大化
+    [FsBPWin]::ShowWindow($h, 3) | Out-Null   # 最大化
     Log "ブラウザのウィンドウを配置しました。"
 
     # 全画面指定なのに全画面になっていない場合 (別モニターで開いた等) は F11 で仕上げる
@@ -918,8 +925,8 @@ function Open-Kiosk([string]$u, $screen, [string]$profile, [bool]$fullScreen) {
 
 # ウィンドウがモニター全体を覆っているか
 function Test-CoversScreen([IntPtr]$hwnd, $screen) {
-    $r = New-Object 'FieldWin+RECT'
-    if (-not [FieldWin]::GetWindowRect($hwnd, [ref]$r)) { return $false }
+    $r = New-Object 'FsBPWin+RECT'
+    if (-not [FsBPWin]::GetWindowRect($hwnd, [ref]$r)) { return $false }
     return (($r.Right - $r.Left) -ge ($screen.Bounds.Width - 4) -and
             ($r.Bottom - $r.Top) -ge ($screen.Bounds.Height - 4))
 }
@@ -928,16 +935,16 @@ function Test-CoversScreen([IntPtr]$hwnd, $screen) {
 function Find-MenuCommand([IntPtr]$menu, [string]$pattern, [int]$depth) {
     if ($depth -gt 3 -or $menu -eq [IntPtr]::Zero) { return $null }
     $sb = New-Object System.Text.StringBuilder 256
-    for ($i = 0; $i -lt [FieldWin]::GetMenuItemCount($menu); $i++) {
+    for ($i = 0; $i -lt [FsBPWin]::GetMenuItemCount($menu); $i++) {
         [void]$sb.Clear()
-        [FieldWin]::GetMenuString($menu, [uint32]$i, $sb, 256, 0x400) | Out-Null   # 0x400 = MF_BYPOSITION
+        [FsBPWin]::GetMenuString($menu, [uint32]$i, $sb, 256, 0x400) | Out-Null   # 0x400 = MF_BYPOSITION
         $text = $sb.ToString()
-        $sub = [FieldWin]::GetSubMenu($menu, $i)
+        $sub = [FsBPWin]::GetSubMenu($menu, $i)
         if ($sub -ne [IntPtr]::Zero) {
             $r = Find-MenuCommand $sub $pattern ($depth + 1)
             if ($r) { return $r }
         } elseif ($text -match $pattern) {
-            $cmdId = [FieldWin]::GetMenuItemID($menu, $i)
+            $cmdId = [FsBPWin]::GetMenuItemID($menu, $i)
             if ($cmdId -ne [uint32]::MaxValue) {
                 return [pscustomobject]@{ Id = $cmdId; Text = $text }
             }
@@ -949,11 +956,11 @@ function Find-MenuCommand([IntPtr]$menu, [string]$pattern, [int]$depth) {
 # Win32 メニューから項目名が一致するコマンドを探し、WM_COMMAND を直接送って実行する。
 # 実行した項目の表示名を返す (見つからなければ $null)。フォーカス不要
 function Invoke-ConsoleMenuCommand([IntPtr]$hwnd, [string]$pattern) {
-    $menu = [FieldWin]::GetMenu($hwnd)
+    $menu = [FsBPWin]::GetMenu($hwnd)
     if ($menu -eq [IntPtr]::Zero) { return $null }
     $hit = Find-MenuCommand $menu $pattern 0
     if (-not $hit) { return $null }
-    [FieldWin]::PostMessage($hwnd, 0x0111, [IntPtr][int64]$hit.Id, [IntPtr]::Zero) | Out-Null   # WM_COMMAND
+    [FsBPWin]::PostMessage($hwnd, 0x0111, [IntPtr][int64]$hit.Id, [IntPtr]::Zero) | Out-Null   # WM_COMMAND
     return $hit.Text
 }
 
@@ -982,7 +989,7 @@ function Invoke-ConsoleFullScreenMenu([IntPtr]$hwnd) {
         }
         if (-not $full) {
             $procId = [uint32]0
-            [FieldWin]::GetWindowThreadProcessId($hwnd, [ref]$procId) | Out-Null
+            [FsBPWin]::GetWindowThreadProcessId($hwnd, [ref]$procId) | Out-Null
             $pidCond = New-Object System.Windows.Automation.PropertyCondition(
                 [System.Windows.Automation.AutomationElement]::ProcessIdProperty, [int]$procId)
             $rootEl = [System.Windows.Automation.AutomationElement]::RootElement
@@ -1011,8 +1018,8 @@ function Get-ConsoleChromeHeight([IntPtr]$hwnd) {
             [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
             [System.Windows.Automation.ControlType]::ToolBar)
         $tb = $ae.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $condTb)
-        $r = New-Object 'FieldWin+RECT'
-        [FieldWin]::GetWindowRect($hwnd, [ref]$r) | Out-Null
+        $r = New-Object 'FsBPWin+RECT'
+        [FsBPWin]::GetWindowRect($hwnd, [ref]$r) | Out-Null
         if ($tb) {
             $h = [int]([Math]::Ceiling($tb.Current.BoundingRectangle.Bottom) - $r.Top)
             if ($h -gt 0 -and $h -lt 200) { return $h }
@@ -1023,28 +1030,28 @@ function Get-ConsoleChromeHeight([IntPtr]$hwnd) {
 
 # Ctrl+Alt+Break (vmconnect の全画面モード切り替え)
 function Send-CtrlAltBreak {
-    [FieldWin]::keybd_event(0x11, 0, 0, 0)          # Ctrl down
-    [FieldWin]::keybd_event(0x12, 0, 0, 0)          # Alt down
-    [FieldWin]::keybd_event(0x03, 0x46, 1, 0)       # Break down (拡張キー)
+    [FsBPWin]::keybd_event(0x11, 0, 0, 0)          # Ctrl down
+    [FsBPWin]::keybd_event(0x12, 0, 0, 0)          # Alt down
+    [FsBPWin]::keybd_event(0x03, 0x46, 1, 0)       # Break down (拡張キー)
     Start-Sleep -Milliseconds 60
-    [FieldWin]::keybd_event(0x03, 0x46, 3, 0)       # Break up
-    [FieldWin]::keybd_event(0x12, 0, 2, 0)          # Alt up
-    [FieldWin]::keybd_event(0x11, 0, 2, 0)          # Ctrl up
+    [FsBPWin]::keybd_event(0x03, 0x46, 3, 0)       # Break up
+    [FsBPWin]::keybd_event(0x12, 0, 2, 0)          # Alt up
+    [FsBPWin]::keybd_event(0x11, 0, 2, 0)          # Ctrl up
 }
 
 # 枠を外して指定位置・サイズに固定する
 function Set-FramelessWindow([IntPtr]$hwnd, [int]$x, [int]$y, [int]$w, [int]$h) {
     $GWL_STYLE = -16
     $WS_CAPTION = 0x00C00000; $WS_THICKFRAME = 0x00040000; $WS_BORDER = 0x00800000
-    [FieldWin]::ShowWindow($hwnd, 1) | Out-Null       # 最大化を解除しないと大きさを変えられない
+    [FsBPWin]::ShowWindow($hwnd, 1) | Out-Null       # 最大化を解除しないと大きさを変えられない
     Start-Sleep -Milliseconds 300
-    $style = [FieldWin]::GetWindowLong($hwnd, $GWL_STYLE)
+    $style = [FsBPWin]::GetWindowLong($hwnd, $GWL_STYLE)
     $style = $style -band (-bnot ($WS_CAPTION -bor $WS_THICKFRAME -bor $WS_BORDER))
-    [FieldWin]::SetWindowLong($hwnd, $GWL_STYLE, $style) | Out-Null
-    if ([FieldWin]::GetMenu($hwnd) -ne [IntPtr]::Zero) { [FieldWin]::SetMenu($hwnd, [IntPtr]::Zero) | Out-Null }
+    [FsBPWin]::SetWindowLong($hwnd, $GWL_STYLE, $style) | Out-Null
+    if ([FsBPWin]::GetMenu($hwnd) -ne [IntPtr]::Zero) { [FsBPWin]::SetMenu($hwnd, [IntPtr]::Zero) | Out-Null }
     # 0x0020 = SWP_FRAMECHANGED, 0x0040 = SWP_SHOWWINDOW
-    [FieldWin]::SetWindowPos($hwnd, [IntPtr]::Zero, $x, $y, $w, $h, 0x0060) | Out-Null
-    [FieldWin]::BringWindowToTop($hwnd) | Out-Null
+    [FsBPWin]::SetWindowPos($hwnd, [IntPtr]::Zero, $x, $y, $w, $h, 0x0060) | Out-Null
+    [FsBPWin]::BringWindowToTop($hwnd) | Out-Null
 }
 
 # vmconnect を正しく閉じる (強制終了ではなく通常の閉じ方にして、全画面などの状態を保存させる)
@@ -1196,16 +1203,16 @@ function Open-Console($screen, [bool]$fullScreen) {
         }
     }
 
-    [FieldWin]::MoveWindow($hwnd, $screen.Bounds.X, $screen.Bounds.Y, 900, 700, $true) | Out-Null
+    [FsBPWin]::MoveWindow($hwnd, $screen.Bounds.X, $screen.Bounds.Y, 900, 700, $true) | Out-Null
     Start-Sleep -Milliseconds 400
-    [FieldWin]::ShowWindow($hwnd, 3) | Out-Null   # 最大化
+    [FsBPWin]::ShowWindow($hwnd, 3) | Out-Null   # 最大化
     Start-Sleep -Milliseconds 600
 
     if (-not $fullScreen) { Log "コンソール: 最大化ウィンドウで表示します (全画面の指定なし)。"; return }
 
     # 全画面モード (メニューバーなし・余白は黒)。解除/再開は Ctrl+Alt+Break
     $done = $false
-    $hadWin32Menu = ([FieldWin]::GetMenu($hwnd) -ne [IntPtr]::Zero)
+    $hadWin32Menu = ([FsBPWin]::GetMenu($hwnd) -ne [IntPtr]::Zero)
 
     # 方法1: メニューの「全画面」コマンドを WM_COMMAND で直接実行 (フォーカス不要で最も確実)
     for ($try = 1; $try -le 2 -and -not $done; $try++) {
@@ -1284,17 +1291,17 @@ function Open-Console($screen, [bool]$fullScreen) {
                 Set-FramelessWindow $hwnd $cx $cy $vw $vh
                 Start-Sleep -Milliseconds 500
                 $h2 = Get-ConsoleHwnd; if ($h2 -ne [IntPtr]::Zero) { $hwnd = $h2 }
-                $style = [FieldWin]::GetWindowLong($hwnd, -16)
+                $style = [FsBPWin]::GetWindowLong($hwnd, -16)
                 if (($style -band 0x00C00000) -eq 0) { $stripped = $true; break }   # WS_CAPTION が消えたか
                 Log "コンソール: 枠の除去が効かなかったため再試行します ($k/3)"
             }
             foreach ($cls in "msctls_statusbar32", "ToolbarWindow32", "msctls_toolbarwindow32", "ReBarWindow32") {
-                $child = [FieldWin]::FindWindowEx($hwnd, [IntPtr]::Zero, $cls, $null)
-                if ($child -ne [IntPtr]::Zero) { [FieldWin]::ShowWindow($child, 0) | Out-Null }
+                $child = [FsBPWin]::FindWindowEx($hwnd, [IntPtr]::Zero, $cls, $null)
+                if ($child -ne [IntPtr]::Zero) { [FsBPWin]::ShowWindow($child, 0) | Out-Null }
             }
-            if ([FieldWin]::GetMenu($hwnd) -ne [IntPtr]::Zero) { [FieldWin]::SetMenu($hwnd, [IntPtr]::Zero) | Out-Null }
-            [FieldWin]::SetWindowPos($hwnd, [IntPtr]::Zero, $cx, $cy, $vw, $vh, 0x0060) | Out-Null
-            [FieldWin]::BringWindowToTop($hwnd) | Out-Null
+            if ([FsBPWin]::GetMenu($hwnd) -ne [IntPtr]::Zero) { [FsBPWin]::SetMenu($hwnd, [IntPtr]::Zero) | Out-Null }
+            [FsBPWin]::SetWindowPos($hwnd, [IntPtr]::Zero, $cx, $cy, $vw, $vh, 0x0060) | Out-Null
+            [FsBPWin]::BringWindowToTop($hwnd) | Out-Null
             Log "コンソール: 黒背景の上に実映像サイズ ${vw}x${vh} で表示しました (枠除去=$stripped)。"
         }
     }
@@ -1306,8 +1313,8 @@ function Open-Display([string]$val, $screen, [string]$profile, [bool]$fullScreen
     else { Open-Kiosk $val $screen $profile $fullScreen }
 }
 
-Open-Display $RightUrl $rightScreen "FieldKioskR" $RightFull
-Open-Display $LeftUrl  $leftScreen  "FieldKioskL" $LeftFull
+Open-Display $RightUrl $rightScreen "FsBPKioskR" $RightFull
+Open-Display $LeftUrl  $leftScreen  "FsBPKioskL" $LeftFull
 
 # --- ESC 見張り役 (ブラウザ表示があれば起動。全画面→最大化→元のサイズ の順に ESC で戻せる) ---
 $hasBrowser = (($RightUrl -and $RightUrl -notmatch '^(console|コンソール)$') -or

@@ -11,8 +11,8 @@
       4. その利用を終えて次に電源を入れると、既定の Windows が起動 (戻し操作不要)
 
 .EXAMPLE
-    .\04-reboot-to-field-native.ps1 -Setup   # 初回のみ: 起動エントリの選択とショートカット作成
-    .\04-reboot-to-field-native.ps1          # 実行: EdgeBox 単独起動へ切り替え
+    .\04-reboot-to-fsbp-native.ps1 -Setup   # 初回のみ: 起動エントリの選択とショートカット作成
+    .\04-reboot-to-fsbp-native.ps1          # 実行: EdgeBox 単独起動へ切り替え
 
 .NOTES
     管理者権限が必要です (-Setup が作るショートカットは管理者実行フラグ付き)。
@@ -27,7 +27,7 @@ param(
 $ErrorActionPreference = "Stop"
 
 # -VMName を明示していない場合、既定名の VM が無ければ、EdgeBox のディスク
-# (物理ディスクのパススルー) を持つ VM を探して使う。00-field-launcher.ps1 と
+# (物理ディスクのパススルー) を持つ VM を探して使う。00-fsbp-launcher.ps1 と
 # 同じ考え方で、VM 名が「EdgeBox」でなくても (旧名称のままでも) そのまま動くようにする
 if (-not $PSBoundParameters.ContainsKey("VMName") -and
     -not (Get-VM -Name $VMName -ErrorAction SilentlyContinue)) {
@@ -39,7 +39,12 @@ if (-not $PSBoundParameters.ContainsKey("VMName") -and
     }
     if ($foundVms.Count -eq 1) { $VMName = $foundVms[0].Name }
 }
-$ConfFile = Join-Path $PSScriptRoot "field-boot-entry.conf"
+$ConfFile = Join-Path $PSScriptRoot "fsbp-boot-entry.conf"
+# 旧名 (field-boot-entry.conf) の設定が残っていれば新名に引き継ぐ (名称を FsBP に統一した際の移行)
+$oldConfFile = Join-Path $PSScriptRoot "field-boot-entry.conf"
+if (-not (Test-Path $ConfFile) -and (Test-Path $oldConfFile)) {
+    try { Move-Item $oldConfFile $ConfFile -Force } catch { }
+}
 
 $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
     ).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
@@ -68,7 +73,7 @@ function Get-FirmwareEntries {
 if (-not $Setup -and -not (Test-Path $ConfFile)) {
     Add-Type -AssemblyName System.Windows.Forms
     [System.Windows.Forms.MessageBox]::Show(
-        "初期設定がまだ済んでいません。`n管理者 PowerShell で次を実行してください:`n`n.\04-reboot-to-field-native.ps1 -Setup",
+        "初期設定がまだ済んでいません。`n管理者 PowerShell で次を実行してください:`n`n.\04-reboot-to-fsbp-native.ps1 -Setup",
         "EdgeBox 単独起動",
         [System.Windows.Forms.MessageBoxButtons]::OK,
         [System.Windows.Forms.MessageBoxIcon]::Warning) | Out-Null
@@ -79,7 +84,7 @@ if ($Setup) {
     if (Test-Path $ConfFile) {
         # すでに選択済みなら聞き直さない (アイコン・タスクの作り直しだけ行う)
         Write-Host "起動先は選択済みのため、そのまま使います: $((Get-Content $ConfFile -First 1).Trim())" -ForegroundColor Cyan
-        Write-Host "  (選び直したい場合は field-boot-entry.conf を削除してから -Setup を実行)"
+        Write-Host "  (選び直したい場合は fsbp-boot-entry.conf を削除してから -Setup を実行)"
     } else {
         Write-Host "UEFI の起動エントリから EdgeBox のものを選択します。" -ForegroundColor Cyan
         $entries = Get-FirmwareEntries

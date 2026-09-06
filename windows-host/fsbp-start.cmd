@@ -11,6 +11,6 @@ if errorlevel 1 (
     exit /b
 )
 
-powershell -NoProfile -ExecutionPolicy Bypass -File "00-field-launcher.ps1"
+powershell -NoProfile -ExecutionPolicy Bypass -File "00-fsbp-launcher.ps1"
 echo.
 pause

@@ -103,7 +103,7 @@ Get-NetAdapter | Format-Table Name, InterfaceDescription, Status, LinkSpeed
 
 ```powershell
 cd C:\double-os-boot\windows-host
-.\00-field-launcher.ps1 -NetAdapterName "<⑦で控えた Name>"
+.\00-fsbp-launcher.ps1 -NetAdapterName "<⑦で控えた Name>"
 ```
 
 自動で次が進みます。EdgeBox のディスクが 1 台だけなら候補として表示され、確認を求められます (`y`)。
@@ -134,8 +134,8 @@ Windows 側の EdgeBox 専用アプリをインストールし、接続先にこ
 
 ```powershell
 cd C:\double-os-boot\windows-host
-.\03-field-display-kiosk.ps1 -Install   # ログオン時に 左=EdgeBox コンソール / 右=管理画面 を自動表示 + VM の自動起動
-.\00-field-launcher.ps1 -Setup           # 『EdgeBox 起動』アイコン
+.\03-fsbp-display-kiosk.ps1 -Install   # ログオン時に 左=EdgeBox コンソール / 右=管理画面 を自動表示 + VM の自動起動
+.\00-fsbp-launcher.ps1 -Setup           # 『EdgeBox 起動』アイコン
 .\08-settings-console.ps1 -Setup         # 『EdgeBox設定』アイコン (表示 URL・自動サインイン等)
 .\05-shutdown-all.ps1 -Setup             # 『全部シャットダウン』アイコン
 powercfg /h off                          # 高速スタートアップ無効 (電源 ON での自動起動を確実にする)
@@ -147,11 +147,11 @@ powercfg /h off                          # 高速スタートアップ無効 (�
 
 ```powershell
 .\06-auto-logon.ps1 -Setup               # サインイン画面を省略 (電源 ON で直接デスクトップへ)
-.\04-reboot-to-field-native.ps1 -Setup   # 『EdgeBox 単独起動』アイコン (切り分け用。UEFI の起動項目を選ぶ)
+.\04-reboot-to-fsbp-native.ps1 -Setup   # 『EdgeBox 単独起動』アイコン (切り分け用。UEFI の起動項目を選ぶ)
 .\07-boot-appearance.ps1                 # 起動時の見た目を黒でそろえる
 ```
 
-**確認**: `.\03-field-display-kiosk.ps1` を引数なしで実行すると、今すぐ左右の画面に表示される。
+**確認**: `.\03-fsbp-display-kiosk.ps1` を引数なしで実行すると、今すぐ左右の画面に表示される。
 
 ### ⑪ CPU コア分割を入れる
 
@@ -198,7 +198,7 @@ PC を再起動し、サインイン後 5 分待ってから確認します。
 | 状況 | 操作 |
 |---|---|
 | CPU 分割を全部やめる | `.\cpu-partition.ps1 -Undo` (即時・再起動不要) |
-| VM が「別のプロセスが使用中」(0x80070020) で起動しない | `.\02-start-field-vm.ps1 -Repair` |
+| VM が「別のプロセスが使用中」(0x80070020) で起動しない | `.\02-start-fsbp-vm.ps1 -Repair` |
 | 画面が黒いまま操作できない | `fix-black-screen.cmd` をダブルクリック (管理者にしない) |
 | EdgeBox を素の装置として起動して切り分けたい | 再起動 → F8 → EdgeBox のディスクを選択 (VM は残したままで可。**両方から同時に起動しない**) |
 | 完全に導入前へ戻す | `Remove-VM EdgeBox -Force` → `Set-Disk -Number <番号> -IsOffline $false`。ディスクは無改造なので、これだけで元に戻る |

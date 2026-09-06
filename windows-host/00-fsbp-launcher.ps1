@@ -16,18 +16,18 @@
          - 同じディスクの二重接続を外す
          - 他の VM が同じディスクを掴んでいれば、その接続だけ外す (停止中のみ)
          - ディスクが Windows でオンラインならオフラインにする
-      4. VM が無ければ作成する (01-create-field-vm.ps1 を呼ぶ)
-      5. 起動してコンソールを表示する (02-start-field-vm.ps1 を呼ぶ)
+      4. VM が無ければ作成する (01-create-fsbp-vm.ps1 を呼ぶ)
+      5. 起動してコンソールを表示する (02-start-fsbp-vm.ps1 を呼ぶ)
 
     ディスクの中身には一切触れません。VM を消したり作り直したりもしません
     (作成は「VM がまったく無い場合」だけです)。
 
 .EXAMPLE
-    .\00-field-launcher.ps1              # おまかせ起動
-    .\00-field-launcher.ps1 -Status      # 何が使われるかだけ確認 (変更しない)
-    .\00-field-launcher.ps1 -Setup       # デスクトップに『EdgeBox 起動』アイコンを作成
-    .\00-field-launcher.ps1 -DiskNumber 0 -SwitchName "EdgeBox-External"
-    .\00-field-launcher.ps1 -NetAdapterName "イーサネット 2"   # 新規 PC (外部スイッチがまだ無い) の初回
+    .\00-fsbp-launcher.ps1              # おまかせ起動
+    .\00-fsbp-launcher.ps1 -Status      # 何が使われるかだけ確認 (変更しない)
+    .\00-fsbp-launcher.ps1 -Setup       # デスクトップに『EdgeBox 起動』アイコンを作成
+    .\00-fsbp-launcher.ps1 -DiskNumber 0 -SwitchName "EdgeBox-External"
+    .\00-fsbp-launcher.ps1 -NetAdapterName "イーサネット 2"   # 新規 PC (外部スイッチがまだ無い) の初回
 
 .NOTES
     管理者権限が必要です (アイコンから起動すれば UAC 確認なしで管理者になります)。
@@ -47,9 +47,14 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-$DiskConf  = Join-Path $PSScriptRoot "field-disk.conf"
-$Script01  = Join-Path $PSScriptRoot "01-create-field-vm.ps1"
-$Script02  = Join-Path $PSScriptRoot "02-start-field-vm.ps1"
+$DiskConf  = Join-Path $PSScriptRoot "fsbp-disk.conf"
+# 旧名 (field-disk.conf) の設定が残っていれば新名に引き継ぐ (名称を FsBP に統一した際の移行)
+$oldDiskConf = Join-Path $PSScriptRoot "field-disk.conf"
+if (-not (Test-Path $DiskConf) -and (Test-Path $oldDiskConf)) {
+    try { Move-Item $oldDiskConf $DiskConf -Force } catch { }
+}
+$Script01  = Join-Path $PSScriptRoot "01-create-fsbp-vm.ps1"
+$Script02  = Join-Path $PSScriptRoot "02-start-fsbp-vm.ps1"
 $TaskName  = "EdgeBox-Launcher"
 
 function Test-Admin {
@@ -226,7 +231,7 @@ foreach ($other in @(Get-VM | Where-Object { -not $targetVm -or $_.Name -ne $tar
         if ($other.State -ne "Off") {
             # 起動中ということは、EdgeBox が既にその VM で動いている可能性が高い
             Warn "  『$($other.Name)』は【起動中】です。EdgeBox は既にそちらで動いている可能性があります。"
-            Info "    そのまま使う場合   : .\00-field-launcher.ps1 -VMName `"$($other.Name)`""
+            Info "    そのまま使う場合   : .\00-fsbp-launcher.ps1 -VMName `"$($other.Name)`""
             Info "    こちらに切り替える : Stop-VM '$($other.Name)' で停止してから、もう一度実行"
             $blocked = $true
             continue
@@ -278,7 +283,7 @@ if ($Status) {
 }
 
 # 01 のスクリプトが使えない場合でも作成できるよう、同じ設定をここにも持つ
-function New-FieldVmHere {
+function New-FsBPVmHere {
     $sw = $SwitchName
     if (-not $sw) {
         $ext = @(Get-VMSwitch -SwitchType External -ErrorAction SilentlyContinue)
@@ -300,7 +305,7 @@ function New-FieldVmHere {
         } else {
             # NAT (Default Switch) で作ると工作機械から到達できない VM ができてしまうため、黙って作らない
             Fail ("外部スイッチがありません。ライン側 LAN ポートを指定して実行してください:`n" +
-                  "  .\00-field-launcher.ps1 -NetAdapterName `"<Get-NetAdapter の Name>`"`n" +
+                  "  .\00-fsbp-launcher.ps1 -NetAdapterName `"<Get-NetAdapter の Name>`"`n" +
                   "(工作機械と通信するには、LAN ポートに直結した外部スイッチが必要です)")
         }
     }
@@ -324,12 +329,12 @@ if (-not $targetVm) {
         if ($NetAdapterName) { $createArgs += @("-NetAdapterName", "`"$NetAdapterName`"") }
         $p = Start-Process powershell.exe -ArgumentList ($createArgs -join " ") -NoNewWindow -Wait -PassThru
         $made = ($p.ExitCode -eq 0) -and [bool](Get-VM -Name $VMName -ErrorAction SilentlyContinue)
-        if (-not $made) { Warn "01-create-field-vm.ps1 では作成できませんでした。この画面の中で作成します。" }
+        if (-not $made) { Warn "01-create-fsbp-vm.ps1 では作成できませんでした。この画面の中で作成します。" }
     } else {
-        Warn "01-create-field-vm.ps1 が見つからないため、この画面の中で作成します。"
+        Warn "01-create-fsbp-vm.ps1 が見つからないため、この画面の中で作成します。"
     }
     if (-not $made) {
-        try { New-FieldVmHere } catch { Fail "VM を作成できませんでした: $($_.Exception.Message)" }
+        try { New-FsBPVmHere } catch { Fail "VM を作成できませんでした: $($_.Exception.Message)" }
     }
     $targetVm = Get-VM -Name $VMName -ErrorAction SilentlyContinue
     if (-not $targetVm) { Fail "VM の作成に失敗しました。" }

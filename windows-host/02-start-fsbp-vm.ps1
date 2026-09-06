@@ -3,10 +3,10 @@
     EdgeBox VM を起動し、コンソール画面を開きます。
 
 .EXAMPLE
-    .\02-start-field-vm.ps1              # 起動 + コンソール表示
-    .\02-start-field-vm.ps1 -Stop       # 通常シャットダウン要求
-    .\02-start-field-vm.ps1 -Status     # 状態表示
-    .\02-start-field-vm.ps1 -Repair     # ディスクの取り合いを診断して直せる範囲を直す
+    .\02-start-fsbp-vm.ps1              # 起動 + コンソール表示
+    .\02-start-fsbp-vm.ps1 -Stop       # 通常シャットダウン要求
+    .\02-start-fsbp-vm.ps1 -Status     # 状態表示
+    .\02-start-fsbp-vm.ps1 -Repair     # ディスクの取り合いを診断して直せる範囲を直す
 #>
 [CmdletBinding()]
 param(
@@ -25,7 +25,7 @@ param(
 $ErrorActionPreference = "Stop"
 
 # -VMName を明示していない場合、既定名の VM が無ければ、EdgeBox のディスク
-# (物理ディスクのパススルー) を持つ VM を探して使う。00-field-launcher.ps1 と
+# (物理ディスクのパススルー) を持つ VM を探して使う。00-fsbp-launcher.ps1 と
 # 同じ考え方で、VM 名が「EdgeBox」でなくても (旧名称のままでも) そのまま動くようにする
 if (-not $PSBoundParameters.ContainsKey("VMName") -and
     -not (Get-VM -Name $VMName -ErrorAction SilentlyContinue)) {
@@ -47,7 +47,7 @@ function Test-Admin {
 # 無いまま進むと途中で分かりにくいエラーになるため先に止める
 if (-not (Test-Admin)) {
     Write-Error ("管理者権限の PowerShell で実行してください。`n" +
-        "field-start.cmd をダブルクリックすれば自動で昇格します。")
+        "fsbp-start.cmd をダブルクリックすれば自動で昇格します。")
     exit 1
 }
 
@@ -57,7 +57,7 @@ try { $SysDisk = [int](Get-Partition -DriveLetter C -ErrorAction Stop).DiskNumbe
 
 $vm = Get-VM -Name $VMName -ErrorAction SilentlyContinue
 if (-not $vm) {
-    Write-Error "VM '$VMName' がありません。01-create-field-vm.ps1 で作成してください。"
+    Write-Error "VM '$VMName' がありません。01-create-fsbp-vm.ps1 で作成してください。"
     exit 1
 }
 
@@ -158,8 +158,8 @@ function Show-DiskHelp($Problems) {
     }
     Write-Host ""
     Write-Host "対処:" -ForegroundColor Cyan
-    Write-Host "  1. 自動で直せる分を直す : .\02-start-field-vm.ps1 -Repair"
-    Write-Host "     他 VM の接続も外す   : .\02-start-field-vm.ps1 -Repair -DetachOthers"
+    Write-Host "  1. 自動で直せる分を直す : .\02-start-fsbp-vm.ps1 -Repair"
+    Write-Host "     他 VM の接続も外す   : .\02-start-fsbp-vm.ps1 -Repair -DetachOthers"
     Write-Host "                            (その VM とディスクの中身は消えません)"
     Write-Host "  2. WSL を切り離す       : wsl --unmount \\.\PHYSICALDRIVE0   (その後 wsl --shutdown)"
     Write-Host "  3. 他 VM が使っている場合: その VM を停止し、Hyper-V マネージャーでディスク接続を外す"
@@ -177,7 +177,7 @@ if ($Repair) {
         foreach ($p in $before) { Write-Host "  - $p" }
         $after = Test-DiskReady
         if ($after.Count -eq 0) {
-            Write-Host "直しました。起動してみてください: .\02-start-field-vm.ps1" -ForegroundColor Green
+            Write-Host "直しました。起動してみてください: .\02-start-fsbp-vm.ps1" -ForegroundColor Green
         } else {
             Show-DiskHelp $after
         }
@@ -237,7 +237,7 @@ if ($wasOff) {
             }
             # 管理画面 URL があれば応答確認後 30 秒で、無ければ起動が確実に終わる 5 分後に閉じる
             $closeDelay = if ($waitUrl) { 30 } else { 300 }
-            $closerArgs = "-NoProfile -ExecutionPolicy Bypass -File `"$PSScriptRoot\03-field-display-kiosk.ps1`" " +
+            $closerArgs = "-NoProfile -ExecutionPolicy Bypass -File `"$PSScriptRoot\03-fsbp-display-kiosk.ps1`" " +
                 "-ConsoleCloser -CloserDelaySec $closeDelay -VMName `"$VMName`""
             if ($waitUrl) { $closerArgs += " -CloserWaitUrl `"$waitUrl`"" }
             Start-Process powershell.exe -WindowStyle Hidden -ArgumentList $closerArgs

@@ -64,12 +64,12 @@ if (-not $isAdmin) {
 # ============================================================
 #  Windows API (LSA 秘密領域への保存 / パスワード照合)
 # ============================================================
-if (-not ("FieldLsa" -as [type])) {
+if (-not ("FsBPLsa" -as [type])) {
     Add-Type -TypeDefinition @'
 using System;
 using System.Runtime.InteropServices;
 
-public class FieldLsa
+public class FsBPLsa
 {
     [StructLayout(LayoutKind.Sequential)]
     public struct LSA_UNICODE_STRING
@@ -119,7 +119,7 @@ public class FieldLsa
 }
 
 function New-LsaString([string]$s) {
-    $u = New-Object 'FieldLsa+LSA_UNICODE_STRING'
+    $u = New-Object 'FsBPLsa+LSA_UNICODE_STRING'
     $u.Buffer        = [Runtime.InteropServices.Marshal]::StringToHGlobalUni($s)
     $u.Length        = [uint16](2 * $s.Length)
     $u.MaximumLength = [uint16](2 * $s.Length + 2)
@@ -127,12 +127,12 @@ function New-LsaString([string]$s) {
 }
 
 function Open-LsaPolicy {
-    $oa = New-Object 'FieldLsa+LSA_OBJECT_ATTRIBUTES'
+    $oa = New-Object 'FsBPLsa+LSA_OBJECT_ATTRIBUTES'
     $oa.Length = [Runtime.InteropServices.Marshal]::SizeOf($oa)
     $h = [IntPtr]::Zero
-    $st = [FieldLsa]::LsaOpenPolicy([IntPtr]::Zero, [ref]$oa, 0x000F0FFF, [ref]$h)
+    $st = [FsBPLsa]::LsaOpenPolicy([IntPtr]::Zero, [ref]$oa, 0x000F0FFF, [ref]$h)
     if ($st -ne 0) {
-        throw "Windows の資格情報保存領域を開けませんでした (エラー $([FieldLsa]::LsaNtStatusToWinError($st)))。"
+        throw "Windows の資格情報保存領域を開けませんでした (エラー $([FsBPLsa]::LsaNtStatusToWinError($st)))。"
     }
     return $h
 }
@@ -142,28 +142,28 @@ function Set-AutoLogonSecret([string]$password) {
     try {
         $k = New-LsaString "DefaultPassword"
         $v = New-LsaString $password
-        $st = [FieldLsa]::LsaStorePrivateData($h, [ref]$k, [ref]$v)
+        $st = [FsBPLsa]::LsaStorePrivateData($h, [ref]$k, [ref]$v)
         [Runtime.InteropServices.Marshal]::ZeroFreeGlobalAllocUnicode($v.Buffer)
         [Runtime.InteropServices.Marshal]::FreeHGlobal($k.Buffer)
         if ($st -ne 0) {
-            throw "パスワードの保存に失敗しました (エラー $([FieldLsa]::LsaNtStatusToWinError($st)))。"
+            throw "パスワードの保存に失敗しました (エラー $([FsBPLsa]::LsaNtStatusToWinError($st)))。"
         }
-    } finally { [FieldLsa]::LsaClose($h) | Out-Null }
+    } finally { [FsBPLsa]::LsaClose($h) | Out-Null }
 }
 
 function Remove-AutoLogonSecret {
     $h = Open-LsaPolicy
     try {
         $k = New-LsaString "DefaultPassword"
-        $st = [FieldLsa]::LsaDeletePrivateData($h, [ref]$k, [IntPtr]::Zero)
+        $st = [FsBPLsa]::LsaDeletePrivateData($h, [ref]$k, [IntPtr]::Zero)
         [Runtime.InteropServices.Marshal]::FreeHGlobal($k.Buffer)
         # Win32 エラー 2 (見つかりません) = 元から保存されていない。解除としては成功扱い
         # ※ 0xC0000034 との直接比較は、PowerShell が 16 進数を符号付きで解釈するため使わない
-        $win32 = [FieldLsa]::LsaNtStatusToWinError($st)
+        $win32 = [FsBPLsa]::LsaNtStatusToWinError($st)
         if ($st -ne 0 -and $win32 -ne 2) {
             Write-Warning "保存済みパスワードの削除に失敗しました (エラー $win32)。"
         }
-    } finally { [FieldLsa]::LsaClose($h) | Out-Null }
+    } finally { [FsBPLsa]::LsaClose($h) | Out-Null }
 }
 
 # パスワードを照合する。ログオン種別やドメイン表記の違いで弾かれることがあるので、
@@ -174,8 +174,8 @@ function Test-Password([string]$user, [string]$domain, [string]$password) {
     $domains = @($domain, ".", $env:COMPUTERNAME) | Where-Object { $_ } | Select-Object -Unique
     foreach ($d in $domains) {
         foreach ($t in 2, 3, 8) {   # 2=対話 3=ネットワーク 8=ネットワーク(平文)
-            if ([FieldLsa]::LogonUser($user, $d, $password, $t, 0, [ref]$tok)) {
-                [FieldLsa]::CloseHandle($tok) | Out-Null
+            if ([FsBPLsa]::LogonUser($user, $d, $password, $t, 0, [ref]$tok)) {
+                [FsBPLsa]::CloseHandle($tok) | Out-Null
                 return [pscustomobject]@{ Ok = $true; Error = 0 }
             }
             $e = [Runtime.InteropServices.Marshal]::GetLastWin32Error()

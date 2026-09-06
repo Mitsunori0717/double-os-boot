@@ -102,12 +102,12 @@ sudo smbstatus
 Windows 側からは `ping <LinuxのIP>` → `\\<LinuxのIP>\shared`。
 資格情報は 04 で `smbpasswd` に設定したもの (Linux ユーザー名 + Samba パスワード)。
 
-### Windows のアプリから Linux の Fsbp に接続できない
+### Windows のアプリから Linux の FsBP に接続できない
 切り分けの順番:
-1. **Fsbp が待ち受けているか** (Linux 側): `sudo ss -tlnp | grep <ポート>`
-   → 出なければ Fsbp 側の問題 (起動していない / ポート設定が違う)
-2. **Fsbp が全アドレスで待ち受けているか**: 上記の出力が `127.0.0.1:<ポート>` のみの場合、
-   Fsbp の設定でバインドアドレスを `0.0.0.0` (または 192.168.122.1) に変更する
+1. **FsBP が待ち受けているか** (Linux 側): `sudo ss -tlnp | grep <ポート>`
+   → 出なければ FsBP 側の問題 (起動していない / ポート設定が違う)
+2. **FsBP が全アドレスで待ち受けているか**: 上記の出力が `127.0.0.1:<ポート>` のみの場合、
+   FsBP の設定でバインドアドレスを `0.0.0.0` (または 192.168.122.1) に変更する
    → localhost 専用待ち受けだと Windows からは届きません
 3. **ファイアウォール**: `sudo ufw status` が active なら
    `sudo bash baremetal/07-connect-app-network.sh --allow-ports "<ポート>/tcp"`

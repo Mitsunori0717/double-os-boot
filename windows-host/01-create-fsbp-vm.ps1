@@ -16,7 +16,7 @@
     Get-NetAdapter
 
     # EdgeBox のディスクが 0、有線LAN が "イーサネット" の場合
-    .\01-create-field-vm.ps1 -DiskNumber 0 -NetAdapterName "イーサネット"
+    .\01-create-fsbp-vm.ps1 -DiskNumber 0 -NetAdapterName "イーサネット"
 
 .NOTES
     管理者権限の PowerShell で実行してください。
@@ -40,7 +40,7 @@ param(
     # 既にある Hyper-V 仮想スイッチをそのまま使う場合はこちら (Get-VMSwitch で確認)
     [string]$SwitchName = "",
 
-    # 確認プロンプトを出さずに実行する (00-field-launcher.ps1 から呼ぶとき用)
+    # 確認プロンプトを出さずに実行する (00-fsbp-launcher.ps1 から呼ぶとき用)
     [switch]$NoConfirm
 )
 
@@ -299,7 +299,7 @@ Write-Host "  ディスク   : 物理ディスク $DiskNumber (無改造・専�
 Write-Host "  CPU        : ${CpuCount} 仮想プロセッサ / メモリ: ${MemoryGB}GB (固定)"
 Write-Host "  スイッチ   : $useSwitch"
 Write-Host ""
-Write-Host "起動するには: .\02-start-field-vm.ps1" -ForegroundColor Cyan
+Write-Host "起動するには: .\02-start-fsbp-vm.ps1" -ForegroundColor Cyan
 Write-Host ""
 Write-Host "重要:" -ForegroundColor Yellow
 Write-Host "  - 初回起動でメーカーシステムが正常に立ち上がるか、ライセンス・機器認識に"

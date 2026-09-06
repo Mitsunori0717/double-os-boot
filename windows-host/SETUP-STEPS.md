@@ -7,24 +7,24 @@ LAN ポート5つ / 工作機械との接続は Ethernet。
 |---|---|---|
 | ① | 後片付け: `wsl --unmount \\.\PHYSICALDRIVE0` | `Get-Disk` で両ディスクが見える |
 | ② | Hyper-V 有効化: `Enable-WindowsOptionalFeature -Online -FeatureName Microsoft-Hyper-V-All` → 再起動 | Hyper-V マネージャーが存在 |
-| ③ | リポジトリ ZIP を `C:\double-os-boot` に配置 | `windows-host\01-create-field-vm.ps1` がある |
+| ③ | リポジトリ ZIP を `C:\double-os-boot` に配置 | `windows-host\01-create-fsbp-vm.ps1` がある |
 | ④ | ライン側 LAN ポートを決めてケーブル接続、`Get-NetAdapter` で **Name** をメモ (IP からも逆引き可: `Get-NetIPAddress -AddressFamily IPv4 \| Select IPAddress,InterfaceAlias`) | Status: Up の Name を控えた |
-| ⑤ | VM 作成: `.\01-create-field-vm.ps1 -DiskNumber 0 -NetAdapterName "<Name>"` (確認プロンプトで KIOXIA を確認して y)。**既に外部スイッチがある環境では `-SwitchName "<Get-VMSwitch の名前>"` を使う** | Hyper-V マネージャーに EdgeBox |
-| ⑥ | 初回起動: `.\02-start-field-vm.ps1`。起動中 **Ctrl 長押し厳禁** (工場出荷リセット) | コンソールに EdgeBox の画面 |
+| ⑤ | VM 作成: `.\01-create-fsbp-vm.ps1 -DiskNumber 0 -NetAdapterName "<Name>"` (確認プロンプトで KIOXIA を確認して y)。**既に外部スイッチがある環境では `-SwitchName "<Get-VMSwitch の名前>"` を使う** | Hyper-V マネージャーに EdgeBox |
+| ⑥ | 初回起動: `.\02-start-fsbp-vm.ps1`。起動中 **Ctrl 長押し厳禁** (工場出荷リセット) | コンソールに EdgeBox の画面 |
 | ⑦ | IP 確認: `Get-VMNetworkAdapter -VMName EdgeBox`。ブラウザで管理画面を開く | 管理画面が開き収集再開 |
 | ⑧ | Windows 側 EdgeBox アプリの接続先に ⑦ の IP を設定 | アプリからデータが見える |
-| ⑨ | 起動時の自動表示 + VM 自動起動: `.\03-field-display-kiosk.ps1 -Install` (VM の自動起動も一緒に設定される。VM 名が EdgeBox でなくても自動で見つける) | 電源ONだけで収集開始・左に EdgeBox・右に管理画面 |
+| ⑨ | 起動時の自動表示 + VM 自動起動: `.\03-fsbp-display-kiosk.ps1 -Install` (VM の自動起動も一緒に設定される。VM 名が EdgeBox でなくても自動で見つける) | 電源ONだけで収集開始・左に EdgeBox・右に管理画面 |
 | ⑩ | 予行: F8 からネイティブ起動できることを確認。撤退手順 (`Remove-VM` + `Set-Disk -IsOffline $false`) を把握 | ネイティブ起動を1回確認 |
 
 ## いちばん簡単な導入・起動 (①〜⑥をまとめて行う)
 
-`field-start.cmd` をダブルクリックするだけで (外部スイッチがまだ無い新規 PC の初回だけは上の `-NetAdapterName` 付きで)、既存 VM の検出 → 競合の片付け →
+`fsbp-start.cmd` をダブルクリックするだけで (外部スイッチがまだ無い新規 PC の初回だけは上の `-NetAdapterName` 付きで)、既存 VM の検出 → 競合の片付け →
 (必要なら) VM 作成 → 起動 まで自動で進む。日常の起動もこれ 1 つで済む。
 
 ```powershell
-.\00-field-launcher.ps1 -NetAdapterName "<Get-NetAdapter の Name>"   # 新規 PC の初回 (外部スイッチがまだ無い)
-.\00-field-launcher.ps1 -Status   # 何が使われるかだけ確認 (変更しない)
-.\00-field-launcher.ps1 -Setup    # デスクトップに『EdgeBox 起動』アイコンを作成
+.\00-fsbp-launcher.ps1 -NetAdapterName "<Get-NetAdapter の Name>"   # 新規 PC の初回 (外部スイッチがまだ無い)
+.\00-fsbp-launcher.ps1 -Status   # 何が使われるかだけ確認 (変更しない)
+.\00-fsbp-launcher.ps1 -Setup    # デスクトップに『EdgeBox 起動』アイコンを作成
 ```
 
 ## 運用ルール
@@ -35,7 +35,7 @@ LAN ポート5つ / 工作機械との接続は Ethernet。
 ## 日常運用
 
 - 朝: PC 電源 ON → 30秒後に EdgeBox 自動起動 → 収集開始
-- 夕: `.\02-start-field-vm.ps1 -Stop` → Windows をシャットダウン
+- 夕: `.\02-start-fsbp-vm.ps1 -Stop` → Windows をシャットダウン
 - 切り分け: 問題発生時は F8 → KIOXIA を選択して EdgeBox をネイティブ起動し、再現比較
 
 ## 不具合時の切り分けフロー (Windows か / EdgeBox か / VM か)
@@ -75,11 +75,11 @@ cd ..\windows-cpu-partition
 
 ## 便利機能 (手順⑨の代わり/追加)
 
-### サブモニターへの EdgeBox 全画面自動表示 (03-field-display-kiosk.ps1)
+### サブモニターへの EdgeBox 全画面自動表示 (03-fsbp-display-kiosk.ps1)
 
 ```powershell
-.\03-field-display-kiosk.ps1            # 動作確認 (今すぐ表示)
-.\03-field-display-kiosk.ps1 -Install   # ログオン時の自動表示を登録 (VM の自動起動も設定)
+.\03-fsbp-display-kiosk.ps1            # 動作確認 (今すぐ表示)
+.\03-fsbp-display-kiosk.ps1 -Install   # ログオン時の自動表示を登録 (VM の自動起動も設定)
 ```
 
 既定は **左 = EdgeBox のコンソール (EdgeBox の起動画面) / 右 = 管理画面 `https://192.168.0.205/`**。
@@ -94,10 +94,10 @@ VM の起動と Web 画面の応答を待ってから、サブモニターに Ed
 (起動後のコンソールは黒い画面が残るだけのため。土台の黒背景も一緒に消える)。
 残しておきたい場合は『設定』の[画面表示]でオフにできる。02 スクリプトの手動起動時も同様。
 
-### ワンクリックで EdgeBox 単独起動 (04-reboot-to-field-native.ps1)
+### ワンクリックで EdgeBox 単独起動 (04-reboot-to-fsbp-native.ps1)
 
 ```powershell
-.\04-reboot-to-field-native.ps1 -Setup   # 初回のみ: UEFI 起動エントリを選択・デスクトップにショートカット作成
+.\04-reboot-to-fsbp-native.ps1 -Setup   # 初回のみ: UEFI 起動エントリを選択・デスクトップにショートカット作成
 ```
 
 以後はデスクトップの『EdgeBox 単独起動』をダブルクリック → VM を安全停止 →
@@ -154,7 +154,7 @@ UEFI の「次回のみ起動先指定 (bootsequence)」を使うため 1 回で
 パススルー ディスクは「Windows からオフライン」かつ「1 つの VM だけが接続」でないと開けない。
 
 ```powershell
-.\02-start-field-vm.ps1 -Repair     # 二重接続の削除・オフライン化を自動で行い、原因を表示
+.\02-start-fsbp-vm.ps1 -Repair     # 二重接続の削除・オフライン化を自動で行い、原因を表示
 wsl --unmount \\.\PHYSICALDRIVE0    # WSL が掴んでいる場合 (その後 wsl --shutdown)
 ```
 

@@ -27,7 +27,7 @@ param(
 $ErrorActionPreference = "Stop"
 
 # -VMName を明示していない場合、既定名の VM が無ければ、EdgeBox のディスク
-# (物理ディスクのパススルー) を持つ VM を探して使う。00-field-launcher.ps1 と
+# (物理ディスクのパススルー) を持つ VM を探して使う。00-fsbp-launcher.ps1 と
 # 同じ考え方で、VM 名が「EdgeBox」でなくても (旧名称のままでも) そのまま動くようにする
 if (-not $PSBoundParameters.ContainsKey("VMName") -and
     -not (Get-VM -Name $VMName -ErrorAction SilentlyContinue)) {
@@ -91,12 +91,12 @@ if ($Setup) {
 # ============================================================
 #  Windows API (LSA 秘密領域 / パスワード照合) ※ 06 と同じ方式
 # ============================================================
-if (-not ("FieldLsa" -as [type])) {
+if (-not ("FsBPLsa" -as [type])) {
     Add-Type -TypeDefinition @'
 using System;
 using System.Runtime.InteropServices;
 
-public class FieldLsa
+public class FsBPLsa
 {
     [StructLayout(LayoutKind.Sequential)]
     public struct LSA_UNICODE_STRING
@@ -146,7 +146,7 @@ public class FieldLsa
 }
 
 function New-LsaString([string]$s) {
-    $u = New-Object 'FieldLsa+LSA_UNICODE_STRING'
+    $u = New-Object 'FsBPLsa+LSA_UNICODE_STRING'
     $u.Buffer        = [Runtime.InteropServices.Marshal]::StringToHGlobalUni($s)
     $u.Length        = [uint16](2 * $s.Length)
     $u.MaximumLength = [uint16](2 * $s.Length + 2)
@@ -154,10 +154,10 @@ function New-LsaString([string]$s) {
 }
 
 function Open-LsaPolicy {
-    $oa = New-Object 'FieldLsa+LSA_OBJECT_ATTRIBUTES'
+    $oa = New-Object 'FsBPLsa+LSA_OBJECT_ATTRIBUTES'
     $oa.Length = [Runtime.InteropServices.Marshal]::SizeOf($oa)
     $h = [IntPtr]::Zero
-    $st = [FieldLsa]::LsaOpenPolicy([IntPtr]::Zero, [ref]$oa, 0x000F0FFF, [ref]$h)
+    $st = [FsBPLsa]::LsaOpenPolicy([IntPtr]::Zero, [ref]$oa, 0x000F0FFF, [ref]$h)
     if ($st -ne 0) { throw "Windows の資格情報保存領域を開けませんでした。" }
     return $h
 }
@@ -167,20 +167,20 @@ function Set-AutoLogonSecret([string]$password) {
     try {
         $k = New-LsaString "DefaultPassword"
         $v = New-LsaString $password
-        $st = [FieldLsa]::LsaStorePrivateData($h, [ref]$k, [ref]$v)
+        $st = [FsBPLsa]::LsaStorePrivateData($h, [ref]$k, [ref]$v)
         [Runtime.InteropServices.Marshal]::ZeroFreeGlobalAllocUnicode($v.Buffer)
         [Runtime.InteropServices.Marshal]::FreeHGlobal($k.Buffer)
         if ($st -ne 0) { throw "パスワードの保存に失敗しました。" }
-    } finally { [FieldLsa]::LsaClose($h) | Out-Null }
+    } finally { [FsBPLsa]::LsaClose($h) | Out-Null }
 }
 
 function Remove-AutoLogonSecret {
     $h = Open-LsaPolicy
     try {
         $k = New-LsaString "DefaultPassword"
-        [FieldLsa]::LsaDeletePrivateData($h, [ref]$k, [IntPtr]::Zero) | Out-Null
+        [FsBPLsa]::LsaDeletePrivateData($h, [ref]$k, [IntPtr]::Zero) | Out-Null
         [Runtime.InteropServices.Marshal]::FreeHGlobal($k.Buffer)
-    } finally { [FieldLsa]::LsaClose($h) | Out-Null }
+    } finally { [FsBPLsa]::LsaClose($h) | Out-Null }
 }
 
 function Test-Password([string]$user, [string]$domain, [string]$password) {
@@ -188,8 +188,8 @@ function Test-Password([string]$user, [string]$domain, [string]$password) {
     $domains = @($domain, ".", $env:COMPUTERNAME) | Where-Object { $_ } | Select-Object -Unique
     foreach ($d in $domains) {
         foreach ($t in 2, 3, 8) {
-            if ([FieldLsa]::LogonUser($user, $d, $password, $t, 0, [ref]$tok)) {
-                [FieldLsa]::CloseHandle($tok) | Out-Null
+            if ([FsBPLsa]::LogonUser($user, $d, $password, $t, 0, [ref]$tok)) {
+                [FsBPLsa]::CloseHandle($tok) | Out-Null
                 return $true
             }
             if ([Runtime.InteropServices.Marshal]::GetLastWin32Error() -eq 1326) { break }
