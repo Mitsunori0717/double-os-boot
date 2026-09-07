@@ -35,7 +35,9 @@ param(
     [ValidateSet("auto", "zip", "files")]
     [string]$Method = "auto",
     [switch]$Check,      # 変更せず、更新される内容だけ表示
-    [switch]$Diagnose    # 到達性の確認のみ
+    [switch]$Diagnose,   # 到達性の確認のみ
+    # 非公開リポジトリ用の GitHub トークン (省略時: 同じフォルダーの update-token.txt を使う)
+    [string]$Token = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -43,6 +45,16 @@ $ErrorActionPreference = "Stop"
 # 古い既定のままだと GitHub に接続できない環境があるため明示する
 try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch { }
 $UA = @{ "User-Agent" = "double-os-boot-updater" }   # GitHub API は User-Agent 必須
+
+# リポジトリが非公開だと、認証なしの取得はすべて 404 になる (raw / ZIP / API とも)。
+# -Token か、同じフォルダーの update-token.txt (1 行) にトークンがあれば付けて取得する。
+# トークンは GitHub の Fine-grained personal access token で、このリポジトリの
+# Contents: Read-only だけを許可したものでよい。
+$TokenFile = Join-Path $PSScriptRoot "update-token.txt"
+if (-not $Token -and (Test-Path $TokenFile)) {
+    try { $Token = ((Get-Content $TokenFile -Raw -ErrorAction Stop) -replace '\s', '') } catch { $Token = "" }
+}
+if ($Token) { $UA["Authorization"] = "token $Token" }
 
 if (-not $Ref) { $Ref = $Branch }
 $BranchEnc = [uri]::EscapeDataString($Ref)
@@ -75,6 +87,13 @@ if ($Diagnose) {
         } catch {
             Write-Host ("  NG  {0} : {1}" -f $k, $_.Exception.Message) -ForegroundColor Yellow
         }
+    }
+    Write-Host ("  認証: " + $(if ($Token) { "トークンあり ($TokenFile または -Token)" } else { "なし" }))
+    if (-not $Token) {
+        Write-Host ""
+        Write-Host "  すべて 404 の場合はリポジトリが非公開になっている可能性があります。" -ForegroundColor Yellow
+        Write-Host "  その場合は GitHub でトークン (Fine-grained, Contents: Read-only) を作り、" -ForegroundColor Yellow
+        Write-Host "  1 行だけ書いたファイル $TokenFile を置いてから再実行してください。" -ForegroundColor Yellow
     }
     Write-Host ""
     Write-Host "『ZIP 配信』だけ NG の場合は -Method files で更新できます。" -ForegroundColor Cyan

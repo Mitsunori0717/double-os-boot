@@ -117,6 +117,13 @@ Invoke-WebRequest "https://raw.githubusercontent.com/Mitsunori0717/double-os-boo
 powershell -NoProfile -ExecutionPolicy Bypass -File .\update.ps1 -Method files
 ```
 
+> **リポジトリが非公開 (Private) の場合の更新**
+> 認証なしの取得はすべて 404 になるため、`update.cmd` が失敗します。
+> GitHub で Fine-grained personal access token (対象: このリポジトリ / 権限: Contents Read-only) を作り、
+> その文字列だけを 1 行書いたファイル `C:\double-os-boot\update-token.txt` を置いてください。
+> 以後 `update.cmd` はそのトークンを自動で使います (ファイルはコミット対象外)。
+> 到達性は `powershell -NoProfile -ExecutionPolicy Bypass -File .\update.ps1 -Diagnose` で確認できます。
+
 ## セットアップ手順
 
 ### STEP 0: デュアルブートの構築 (未構築の場合)
