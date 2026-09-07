@@ -234,7 +234,9 @@ $DefaultConfig = [ordered]@{
     "LeftFullScreen"    = $true
     "EscEnabled"        = $true
     "ConsoleStripFrame" = $true
-    "ConsoleAutoClose"  = $true
+    "ConsoleAutoClose"  = $false
+    "ConsoleAutoCloseV2" = $true
+    "ConsoleHideBar"    = $true
     "ConsoleResolution" = "自動 (モニターに合わせる)"
 }
 if (-not (Test-Path $ConfigFile)) {
@@ -356,12 +358,14 @@ $cbEsc = New-Check "ESC キーでブラウザの全画面/最大化を解除す�
 $tp1.Controls.Add($cbEsc)
 $cbSF = New-Check "コンソールの全画面が効かないときは、黒背景の上に中央表示する (代替の全画面)" 15 170 580 ($cfg.ConsoleStripFrame -ne $false)
 $tp1.Controls.Add($cbSF)
-$cbAC = New-Check "EdgeBox の起動を確認したら、コンソール画面を自動で閉じる (黒い画面を残さない)" 15 200 580 ($cfg.ConsoleAutoClose -ne $false)
+$cbAC = New-Check "EdgeBox の起動を確認したら、コンソール画面を自動で閉じる (通常はオフ。閉じても VM は動き続ける)" 15 200 580 ($cfg.ConsoleAutoClose -eq $true)
 $tp1.Controls.Add($cbAC)
+$cbBar = New-Check "コンソールが全画面のとき、上の接続バー (「localhost 上の EdgeBox」の帯) を表示しない" 15 230 580 ($cfg.ConsoleHideBar -ne $false)
+$tp1.Controls.Add($cbBar)
 
 $grpRes = New-Object System.Windows.Forms.GroupBox
 $grpRes.Text = "コンソールの表示サイズ (EdgeBox 側の画面解像度)"
-$grpRes.Location = New-Object System.Drawing.Point(15, 240)
+$grpRes.Location = New-Object System.Drawing.Point(15, 270)
 $grpRes.Size = New-Object System.Drawing.Size(580, 120)
 
 $cbFit = New-Check "モニターいっぱいに全画面表示する (解像度をモニターに合わせ、全画面にする)" 15 25 550 $false
@@ -500,6 +504,8 @@ $out = [ordered]@{
     "EscEnabled"        = $cbEsc.Checked
     "ConsoleStripFrame" = $cbSF.Checked
     "ConsoleAutoClose"  = $cbAC.Checked
+    "ConsoleAutoCloseV2" = $true
+    "ConsoleHideBar"    = $cbBar.Checked
     "ConsoleResolution" = $resText
 }
 # 手動で追加できる詳細設定 (自動クローズまでの秒数) は保存で消さない
