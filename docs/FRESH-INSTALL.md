@@ -78,6 +78,16 @@ New-Item -ItemType Directory -Path C:\double-os-boot -Force | Out-Null
 Invoke-WebRequest -Uri "https://raw.githubusercontent.com/Mitsunori0717/double-os-boot/claude/windows-linux-dual-boot-lwgj28/update.ps1" -OutFile C:\double-os-boot\update.ps1
 ```
 
+> **リポジトリが非公開 (Private) の場合**: 上の raw の URL は 404 になります。
+> 先に GitHub でトークン (Fine-grained, このリポジトリの Contents: Read-only) を作り、
+> `C:\double-os-boot\update-token.txt` に 1 行で保存してから、次で取得します:
+>
+> ```powershell
+> $t = (Get-Content C:\double-os-boot\update-token.txt -Raw).Trim()
+> Invoke-WebRequest -Uri "https://raw.githubusercontent.com/Mitsunori0717/double-os-boot/claude/windows-linux-dual-boot-lwgj28/update.ps1" `
+>   -OutFile C:\double-os-boot\update.ps1 -Headers @{ Authorization = "token $t"; "User-Agent" = "setup" }
+> ```
+
 ### ⑥ 最新化とブロック解除
 
 ```powershell
