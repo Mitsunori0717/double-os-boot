@@ -161,6 +161,16 @@ wsl --unmount \\.\PHYSICALDRIVE0    # WSL が掴んでいる場合 (その後 ws
 他 VM が同じディスクを使っている場合は、その VM を停止・削除してから再実行する
 (旧構成の VM が残っていることが多い)。
 
+### ワンクリックで再起動 / 左画面に表示 (10-restart-edgebox.ps1)
+
+```powershell
+.\10-restart-edgebox.ps1 -Setup   # 『EdgeBox 再起動』『EdgeBox 画面』のアイコンを作成
+```
+
+『EdgeBox 再起動』は正常シャットダウン → 起動 → 画面表示 (強制電源断はしない)。
+『EdgeBox 画面』は左画面にコンソールを最大化で出し、自動では閉じない。
+起動後にコンソール窓が消えるのは自動クローズ (既定 30 秒) で、VM は動いている。
+
 ### 画面が黒いまま操作できないとき (99-fix-black-screen.ps1)
 
 ```

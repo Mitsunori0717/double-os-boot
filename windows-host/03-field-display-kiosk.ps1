@@ -29,6 +29,7 @@ param(
     [switch]$Backdrop,
     [string]$BackdropBounds,
     [switch]$ConsoleCloser,
+    [switch]$KeepConsole,     # コンソールを自動で閉じない (『EdgeBox 画面』アイコン用)
     [int]$CloserDelaySec = 30,
     [string]$CloserWaitUrl = "",
     [string]$ConsoleResolution,
@@ -302,7 +303,7 @@ if ($ConsoleCloser) {
     Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" -ErrorAction SilentlyContinue |
         Where-Object { $_.CommandLine -match '-Backdrop' -and $_.ProcessId -ne $PID } |
         ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
-    Log "コンソール自動クローズ: EdgeBox は起動済みのため、コンソール画面を閉じました (見たいときは『EdgeBox 画面』= 02-start-field-vm.ps1)。"
+    Log "コンソール自動クローズ: EdgeBox は起動済みのため、コンソール画面を閉じました (VM は動いています。見たいときはデスクトップの『EdgeBox 画面』)。"
     exit 0
 }
 
@@ -1321,7 +1322,7 @@ if ($hasBrowser -and ($cfg.EscEnabled -ne $false)) {
 
 # --- EdgeBox 起動後のコンソール自動クローズ (起動確認だけ済ませて黒い画面を残さない) ---
 $hasConsole = (($LeftUrl -match '^(console|コンソール)$') -or ($RightUrl -match '^(console|コンソール)$'))
-if ($hasConsole -and ($cfg.ConsoleAutoClose -ne $false)) {
+if ($hasConsole -and ($cfg.ConsoleAutoClose -ne $false) -and -not $KeepConsole) {
     $closeDelay = 30
     if ([int]$cfg.ConsoleAutoCloseDelaySec -gt 0) { $closeDelay = [int]$cfg.ConsoleAutoCloseDelaySec }
     Start-Process powershell.exe -WindowStyle Hidden -ArgumentList (

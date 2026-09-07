@@ -7,3 +7,5 @@ display-status.txt
 display-error.txt
 *.flag
 field-disk.conf
+launch-restart.vbs
+launch-console-view.vbs

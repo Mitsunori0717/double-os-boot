@@ -42,6 +42,7 @@ windows-host/06-auto-logon.ps1
 windows-host/07-boot-appearance.ps1
 windows-host/08-settings-console.ps1
 windows-host/09-rename-to-edgebox.ps1
+windows-host/10-restart-edgebox.ps1
 windows-host/99-fix-black-screen.ps1
 windows-host/README.md
 windows-host/SETUP-STEPS.md
