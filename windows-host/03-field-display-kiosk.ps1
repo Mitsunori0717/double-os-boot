@@ -30,6 +30,7 @@ param(
     [string]$BackdropBounds,
     [switch]$ConsoleCloser,
     [switch]$KeepConsole,     # コンソールを自動で閉じない (『EdgeBox 画面』アイコン用)
+    [switch]$LeftGuard,       # 内部用: 左画面の見張り役 (コンソールの全画面を固定し、他の窓を右へ)
     [int]$CloserDelaySec = 30,
     [string]$CloserWaitUrl = "",
     [string]$ConsoleResolution,
@@ -41,7 +42,7 @@ $ErrorActionPreference = "Stop"
 # -VMName を明示していない場合、既定名の VM が無ければ、EdgeBox のディスク
 # (物理ディスクのパススルー) を持つ VM を探して使う。00-field-launcher.ps1 と
 # 同じ考え方で、VM 名が「EdgeBox」でなくても (旧名称のままでも) そのまま動くようにする
-if (-not $PSBoundParameters.ContainsKey("VMName") -and -not ($Splash -or $Backdrop -or $EscWatcher -or $ConsoleCloser) -and
+if (-not $PSBoundParameters.ContainsKey("VMName") -and -not ($Splash -or $Backdrop -or $EscWatcher -or $ConsoleCloser -or $LeftGuard) -and
     -not (Get-VM -Name $VMName -ErrorAction SilentlyContinue)) {
     $foundVms = @()
     foreach ($v in @(Get-VM -ErrorAction SilentlyContinue)) {
@@ -312,6 +313,11 @@ function Stop-EscWatcher {
         Where-Object { $_.CommandLine -match '-EscWatcher' -and $_.ProcessId -ne $PID } |
         ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
 }
+function Stop-LeftGuard {
+    Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" -ErrorAction SilentlyContinue |
+        Where-Object { $_.CommandLine -match '-LeftGuard' -and $_.ProcessId -ne $PID } |
+        ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+}
 
 # ============================================================
 #  設定ファイル
@@ -327,6 +333,8 @@ $DefaultConfig = [ordered]@{
     "ConsoleAutoClose"  = $false   # コンソール窓は閉じない (閉じてほしい場合だけオン)
     "ConsoleAutoCloseV2" = $true   # 「閉じない」既定に切り替え済みの印 (旧設定ファイルの移行用)
     "ConsoleHideBar"    = $true    # 全画面時に上部の接続バー (「localhost 上の EdgeBox」の帯) を出さない
+    "LeftGuard"         = $true    # 左画面をコンソールの全画面で固定 (他の窓は右へ移し、全画面が外れたら戻す)
+    "LeftGuardHotkey"   = "Alt+F11" # 固定の解除/再固定に使うキー
     "ConsoleResolution" = "自動 (モニターに合わせる)"
 }
 if (-not (Test-Path $ConfigFile)) {
@@ -361,6 +369,200 @@ function Get-SideFullScreen([string]$side, [string]$url) {
 }
 $LeftFull  = Get-SideFullScreen "Left"  $LeftUrl
 $RightFull = Get-SideFullScreen "Right" $RightUrl
+
+# ============================================================
+#  左画面の見張り役 (内部用): EdgeBox のコンソール全画面を左画面に固定し、
+#  左画面に出てきた他の窓は右画面へ移す。解除/再固定はホットキーだけ
+# ============================================================
+if ($LeftGuard) {
+    Add-Type -AssemblyName System.Windows.Forms
+    Add-Type -AssemblyName System.Drawing
+    Add-Type -TypeDefinition @"
+using System;
+using System.Text;
+using System.Runtime.InteropServices;
+public class GuardApi {
+    [StructLayout(LayoutKind.Sequential)] public struct RECT { public int Left, Top, Right, Bottom; }
+    [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hWnd, out RECT r);
+    [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hWnd);
+    [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr hWnd);
+    [DllImport("user32.dll")] public static extern bool IsZoomed(IntPtr hWnd);
+    [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+    [DllImport("user32.dll")] public static extern bool MoveWindow(IntPtr hWnd, int X, int Y, int W, int H, bool repaint);
+    [DllImport("user32.dll")] public static extern short GetAsyncKeyState(int vKey);
+    [DllImport("user32.dll")] public static extern IntPtr GetMenu(IntPtr hWnd);
+    [DllImport("user32.dll")] public static extern IntPtr GetSubMenu(IntPtr hMenu, int nPos);
+    [DllImport("user32.dll")] public static extern int GetMenuItemCount(IntPtr hMenu);
+    [DllImport("user32.dll")] public static extern uint GetMenuItemID(IntPtr hMenu, int nPos);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetMenuString(IntPtr hMenu, uint uIDItem, StringBuilder s, int cch, uint flags);
+    [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam);
+    [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
+    [DllImport("user32.dll")] public static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, uint dwExtraInfo);
+}
+"@
+    # "Alt+F11" のような指定を仮想キーの一覧にする
+    function ConvertTo-VKeys([string]$spec) {
+        $keys = @()
+        foreach ($part in ($spec -split '\+')) {
+            $k = $part.Trim().ToUpperInvariant()
+            if ($k -match '^(CTRL|CONTROL)$') { $keys += 0x11 }
+            elseif ($k -eq 'ALT')             { $keys += 0x12 }
+            elseif ($k -eq 'SHIFT')           { $keys += 0x10 }
+            elseif ($k -eq 'WIN')             { $keys += 0x5B }
+            elseif ($k -match '^F(\d{1,2})$') { $keys += (0x6F + [int]$Matches[1]) }
+            elseif ($k -match '^[A-Z0-9]$')   { $keys += [int][char]$k }
+        }
+        return ,$keys
+    }
+    $hotkey = if ($cfg.LeftGuardHotkey) { [string]$cfg.LeftGuardHotkey } else { "Alt+F11" }
+    $vkeys = @(ConvertTo-VKeys $hotkey)
+    if ($vkeys.Count -eq 0) { $vkeys = @(0x12, 0x7A); $hotkey = "Alt+F11" }
+
+    $screens = @([System.Windows.Forms.Screen]::AllScreens | Sort-Object { $_.Bounds.X })
+    if ($screens.Count -lt 2) { Log "左画面の見張り役: モニターが 1 枚のため何もしません。"; exit 0 }
+    $left = $screens[0].Bounds; $right = $screens[-1].Bounds
+    Log "左画面の見張り役を開始しました (解除/再固定: $hotkey)。"
+
+    function Get-ConsoleMain {
+        $p = Get-Process vmconnect -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object -First 1
+        if ($p) { return [IntPtr]$p.MainWindowHandle } else { return [IntPtr]::Zero }
+    }
+    function Test-Covers([IntPtr]$h, $b) {
+        $r = New-Object 'GuardApi+RECT'
+        if (-not [GuardApi]::GetWindowRect($h, [ref]$r)) { return $false }
+        return ($r.Left -le $b.X -and $r.Top -le $b.Y -and $r.Right -ge ($b.X + $b.Width) -and $r.Bottom -ge ($b.Y + $b.Height))
+    }
+    function Find-MenuId([IntPtr]$menu, [string]$pattern, [int]$depth) {
+        if ($depth -gt 3) { return -1 }
+        $n = [GuardApi]::GetMenuItemCount($menu)
+        for ($i = 0; $i -lt $n; $i++) {
+            $sb = New-Object System.Text.StringBuilder 256
+            $id = [GuardApi]::GetMenuItemID($menu, $i)
+            [GuardApi]::GetMenuString($menu, [uint32]$i, $sb, 256, 0x400) | Out-Null    # 0x400 = MF_BYPOSITION
+            if ($id -ne [uint32]::MaxValue -and $sb.ToString() -match $pattern) { return [int]$id }
+            $sub = [GuardApi]::GetSubMenu($menu, $i)
+            if ($sub -ne [IntPtr]::Zero) { $r = Find-MenuId $sub $pattern ($depth + 1); if ($r -ge 0) { return $r } }
+        }
+        return -1
+    }
+    function Invoke-FullScreenToggle([IntPtr]$h) {
+        # メニュー『全画面』を WM_COMMAND で直接実行 (フォーカス不要)。無ければ Ctrl+Alt+Break を送る
+        $menu = [GuardApi]::GetMenu($h)
+        if ($menu -ne [IntPtr]::Zero) {
+            $id = Find-MenuId $menu '全画面|Full' 0
+            if ($id -ge 0) { [GuardApi]::PostMessage($h, 0x0111, [IntPtr]$id, [IntPtr]::Zero) | Out-Null; return }
+        }
+        [GuardApi]::SetForegroundWindow($h) | Out-Null
+        Start-Sleep -Milliseconds 200
+        [GuardApi]::keybd_event(0x11, 0, 0, 0); [GuardApi]::keybd_event(0x12, 0, 0, 0); [GuardApi]::keybd_event(0x13, 0, 0, 0)
+        [GuardApi]::keybd_event(0x13, 0, 2, 0); [GuardApi]::keybd_event(0x12, 0, 2, 0); [GuardApi]::keybd_event(0x11, 0, 2, 0)
+    }
+    $script:notice = $null; $script:noticeUntil = [datetime]::MinValue
+    function Show-Notice([string]$text) {
+        # 右画面の右上に 3 秒だけ出す小さな案内
+        try {
+            if ($script:notice) { $script:notice.Close(); $script:notice.Dispose(); $script:notice = $null }
+            $f = New-Object System.Windows.Forms.Form
+            $f.FormBorderStyle = "None"; $f.StartPosition = "Manual"; $f.TopMost = $true; $f.ShowInTaskbar = $false
+            $f.BackColor = [System.Drawing.Color]::FromArgb(40, 40, 40)
+            $l = New-Object System.Windows.Forms.Label
+            $l.Text = $text; $l.AutoSize = $true
+            $l.ForeColor = [System.Drawing.Color]::White
+            $l.Font = New-Object System.Drawing.Font("Meiryo UI", 11)
+            $l.Location = New-Object System.Drawing.Point(16, 12)
+            $f.Controls.Add($l)
+            $f.ClientSize = New-Object System.Drawing.Size(($l.PreferredWidth + 32), ($l.PreferredHeight + 24))
+            $f.Location = New-Object System.Drawing.Point(($right.X + $right.Width - $f.Width - 20), ($right.Y + 20))
+            $f.Show()
+            $script:notice = $f; $script:noticeUntil = (Get-Date).AddSeconds(3)
+        } catch { }
+    }
+
+    $released = $false
+    $helperPids = @(); $lastScan = [datetime]::MinValue
+    $lastFs = [datetime]::MinValue; $notCover = 0
+    while ($true) {
+        try {
+            # --- ホットキー: 固定の解除 ⇔ 再固定 ---
+            $allDown = $true
+            foreach ($vk in $vkeys) { if (([GuardApi]::GetAsyncKeyState($vk) -band 0x8000) -eq 0) { $allDown = $false; break } }
+            if ($allDown) {
+                $released = -not $released
+                $h = Get-ConsoleMain
+                if ($released) {
+                    if ($h -ne [IntPtr]::Zero -and (Test-Covers $h $left)) { Invoke-FullScreenToggle $h }
+                    Show-Notice "左画面の固定を解除しました ($hotkey でもう一度固定)"
+                    Log "左画面の見張り役: $hotkey により固定を解除しました。"
+                } else {
+                    Show-Notice "左画面を EdgeBox の全画面で固定しました ($hotkey で解除)"
+                    Log "左画面の見張り役: $hotkey により固定に戻しました。"
+                    $notCover = 3; $lastFs = [datetime]::MinValue
+                }
+                # キーが離されるまで待つ (押しっぱなしで何度も切り替わらないように)
+                while ($true) {
+                    $any = $false
+                    foreach ($vk in $vkeys) { if (([GuardApi]::GetAsyncKeyState($vk) -band 0x8000) -ne 0) { $any = $true } }
+                    if (-not $any) { break }
+                    Start-Sleep -Milliseconds 50
+                }
+            }
+            if (-not $released) {
+                # 自分たちの補助ウィンドウ (起動中画面・黒背景) は動かさない。PID を 10 秒ごとに更新
+                if (((Get-Date) - $lastScan).TotalSeconds -gt 10) {
+                    $helperPids = @(Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" -ErrorAction SilentlyContinue |
+                        Where-Object { $_.CommandLine -match '03-field-display-kiosk' } | Select-Object -ExpandProperty ProcessId)
+                    $lastScan = Get-Date
+                }
+                # 1) コンソールの全画面が外れていたら左画面の全画面に戻す (連続 3 回確認・10 秒に 1 回まで)
+                $h = Get-ConsoleMain
+                if ($h -ne [IntPtr]::Zero -and -not [GuardApi]::IsIconic($h)) {
+                    if (Test-Covers $h $left) { $notCover = 0 }
+                    else {
+                        $notCover++
+                        if ($notCover -ge 3 -and ((Get-Date) - $lastFs).TotalSeconds -gt 10) {
+                            if (Test-Covers $h $right) { Invoke-FullScreenToggle $h; Start-Sleep -Milliseconds 800 }   # 右で全画面 → いったん解除
+                            [GuardApi]::ShowWindow($h, 9) | Out-Null
+                            [GuardApi]::MoveWindow($h, $left.X, $left.Y, 900, 700, $true) | Out-Null
+                            Start-Sleep -Milliseconds 300
+                            Invoke-FullScreenToggle $h
+                            $lastFs = Get-Date; $notCover = 0
+                            Log "左画面の見張り役: コンソールを左画面の全画面に戻しました。"
+                        }
+                    }
+                }
+                # 2) 左画面に出てきた他の窓を右画面へ (大きさは保ち、最大化は右画面で最大化し直す)
+                foreach ($p in @(Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 })) {
+                    $hw = [IntPtr]$p.MainWindowHandle
+                    if ($hw -eq $h -or $p.ProcessName -eq 'vmconnect' -or ($helperPids -contains $p.Id)) { continue }
+                    if (-not [GuardApi]::IsWindowVisible($hw) -or [GuardApi]::IsIconic($hw)) { continue }
+                    $r = New-Object 'GuardApi+RECT'
+                    if (-not [GuardApi]::GetWindowRect($hw, [ref]$r)) { continue }
+                    $cx = [int](($r.Left + $r.Right) / 2); $cy = [int](($r.Top + $r.Bottom) / 2)
+                    if ($cx -lt $left.X -or $cx -ge ($left.X + $left.Width) -or $cy -lt $left.Y -or $cy -ge ($left.Y + $left.Height)) { continue }
+                    $zoomed = [GuardApi]::IsZoomed($hw)
+                    if ($zoomed) {
+                        [GuardApi]::ShowWindow($hw, 9) | Out-Null
+                        Start-Sleep -Milliseconds 150
+                        [GuardApi]::GetWindowRect($hw, [ref]$r) | Out-Null
+                    }
+                    $w = $r.Right - $r.Left; $hgt = $r.Bottom - $r.Top
+                    if ($w -gt $right.Width) { $w = $right.Width }
+                    if ($hgt -gt $right.Height) { $hgt = $right.Height }
+                    $nx = $right.X + [Math]::Max(0, [Math]::Min($r.Left - $left.X, $right.Width - $w))
+                    $ny = $right.Y + [Math]::Max(0, [Math]::Min($r.Top - $left.Y, $right.Height - $hgt))
+                    [GuardApi]::MoveWindow($hw, $nx, $ny, $w, $hgt, $true) | Out-Null
+                    if ($zoomed) { Start-Sleep -Milliseconds 150; [GuardApi]::ShowWindow($hw, 3) | Out-Null }
+                    Log ("左画面の見張り役: 『{0}』({1}) を右画面へ移しました。" -f $p.MainWindowTitle, $p.ProcessName)
+                }
+            }
+            if ($script:notice) {
+                if ((Get-Date) -gt $script:noticeUntil) { $script:notice.Close(); $script:notice.Dispose(); $script:notice = $null }
+                else { [System.Windows.Forms.Application]::DoEvents() }
+            }
+        } catch { }
+        Start-Sleep -Milliseconds 500
+    }
+}
 
 # ============================================================
 #  コンソール (仮想マシン) の画面解像度
@@ -606,6 +808,8 @@ if ($Settings) {
             $out["ConsoleAutoCloseDelaySec"] = [int]$cfg.ConsoleAutoCloseDelaySec
         }
         if ($cfg.PSObject.Properties["ConsoleHideBar"]) { $out["ConsoleHideBar"] = ($cfg.ConsoleHideBar -ne $false) }
+        if ($cfg.PSObject.Properties["LeftGuard"]) { $out["LeftGuard"] = ($cfg.LeftGuard -ne $false) }
+        if ($cfg.PSObject.Properties["LeftGuardHotkey"]) { $out["LeftGuardHotkey"] = [string]$cfg.LeftGuardHotkey }
         $out["ConsoleAutoCloseV2"] = $true
         $out | ConvertTo-Json | Set-Content -Path $ConfigFile -Encoding UTF8
 
@@ -714,6 +918,7 @@ if ($Uninstall) {
     Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue
     Unregister-ScheduledTask -TaskName "$TaskName-Splash" -Confirm:$false -ErrorAction SilentlyContinue
     Stop-EscWatcher
+    Stop-LeftGuard
     Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" -ErrorAction SilentlyContinue |
         Where-Object { $_.CommandLine -match '-(Splash|Backdrop)' -and $_.ProcessId -ne $PID } |
         ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
@@ -751,6 +956,8 @@ if (-not $NoSplash) {
 Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" -ErrorAction SilentlyContinue |
     Where-Object { $_.CommandLine -match '-Backdrop' -and $_.ProcessId -ne $PID } |
     ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+# 見張り役は表示の組み立て中に窓を動かしてしまうため、いったん止めて最後に起動し直す
+Stop-LeftGuard
 try {
 
 # --- VM の起動を待つ ---
@@ -1368,6 +1575,15 @@ if ($hasConsole -and ($cfg.ConsoleAutoClose -ne $false) -and -not $KeepConsole) 
         "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" -ConsoleCloser " +
         "-CloserDelaySec $closeDelay -VMName `"$VMName`"")
     Log "コンソール: 起動確認のため約 $closeDelay 秒表示したあと、自動で閉じます (『設定』の[画面表示]で変更可)。"
+}
+
+# --- 左画面の見張り役 (左 = コンソールのとき) ---
+if (($LeftUrl -match '^(console|コンソール)$') -and ($cfg.LeftGuard -ne $false)) {
+    Stop-LeftGuard
+    Start-Process powershell.exe -WindowStyle Hidden -ArgumentList (
+        "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" -LeftGuard -VMName `"$VMName`"")
+    $hk = if ($cfg.LeftGuardHotkey) { [string]$cfg.LeftGuardHotkey } else { "Alt+F11" }
+    Log "左画面を EdgeBox の全画面で固定します (他の窓は右画面へ。解除/再固定: $hk。『設定』の[画面表示]で変更可)。"
 }
 
 Log "===== 表示処理を完了 ====="

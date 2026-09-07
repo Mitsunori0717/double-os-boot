@@ -237,6 +237,8 @@ $DefaultConfig = [ordered]@{
     "ConsoleAutoClose"  = $false
     "ConsoleAutoCloseV2" = $true
     "ConsoleHideBar"    = $true
+    "LeftGuard"         = $true
+    "LeftGuardHotkey"   = "Alt+F11"
     "ConsoleResolution" = "自動 (モニターに合わせる)"
 }
 if (-not (Test-Path $ConfigFile)) {
@@ -362,10 +364,13 @@ $cbAC = New-Check "EdgeBox の起動を確認したら、コンソール画面�
 $tp1.Controls.Add($cbAC)
 $cbBar = New-Check "コンソールが全画面のとき、上の接続バー (「localhost 上の EdgeBox」の帯) を表示しない" 15 230 580 ($cfg.ConsoleHideBar -ne $false)
 $tp1.Controls.Add($cbBar)
+$lgHot = if ($cfg.LeftGuardHotkey) { [string]$cfg.LeftGuardHotkey } else { "Alt+F11" }
+$cbLG = New-Check "左画面を EdgeBox の全画面で固定する (他の窓は右画面へ移し、全画面が外れたら戻す。解除/再固定: $lgHot)" 15 260 580 ($cfg.LeftGuard -ne $false)
+$tp1.Controls.Add($cbLG)
 
 $grpRes = New-Object System.Windows.Forms.GroupBox
 $grpRes.Text = "コンソールの表示サイズ (EdgeBox 側の画面解像度)"
-$grpRes.Location = New-Object System.Drawing.Point(15, 270)
+$grpRes.Location = New-Object System.Drawing.Point(15, 300)
 $grpRes.Size = New-Object System.Drawing.Size(580, 120)
 
 $cbFit = New-Check "モニターいっぱいに全画面表示する (解像度をモニターに合わせ、全画面にする)" 15 25 550 $false
@@ -506,6 +511,8 @@ $out = [ordered]@{
     "ConsoleAutoClose"  = $cbAC.Checked
     "ConsoleAutoCloseV2" = $true
     "ConsoleHideBar"    = $cbBar.Checked
+    "LeftGuard"         = $cbLG.Checked
+    "LeftGuardHotkey"   = $lgHot
     "ConsoleResolution" = $resText
 }
 # 手動で追加できる詳細設定 (自動クローズまでの秒数) は保存で消さない
