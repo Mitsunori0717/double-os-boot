@@ -29,6 +29,7 @@ param(
     [switch]$Backdrop,
     [string]$BackdropBounds,
     [switch]$ConsoleCloser,
+    [switch]$KeepConsole,     # コンソールを自動で閉じない (『EdgeBox 画面』アイコン用)
     [int]$CloserDelaySec = 30,
     [string]$CloserWaitUrl = "",
     [string]$ConsoleResolution,
@@ -302,7 +303,7 @@ if ($ConsoleCloser) {
     Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" -ErrorAction SilentlyContinue |
         Where-Object { $_.CommandLine -match '-Backdrop' -and $_.ProcessId -ne $PID } |
         ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
-    Log "コンソール自動クローズ: EdgeBox は起動済みのため、コンソール画面を閉じました (見たいときは『EdgeBox 画面』= 02-start-field-vm.ps1)。"
+    Log "コンソール自動クローズ: EdgeBox は起動済みのため、コンソール画面を閉じました (VM は動いています。見たいときはデスクトップの『EdgeBox 画面』)。"
     exit 0
 }
 
@@ -323,7 +324,9 @@ $DefaultConfig = [ordered]@{
     "LeftFullScreen"    = $true
     "EscEnabled"        = $true
     "ConsoleStripFrame" = $true
-    "ConsoleAutoClose"  = $true
+    "ConsoleAutoClose"  = $false   # コンソール窓は閉じない (閉じてほしい場合だけオン)
+    "ConsoleAutoCloseV2" = $true   # 「閉じない」既定に切り替え済みの印 (旧設定ファイルの移行用)
+    "ConsoleHideBar"    = $true    # 全画面時に上部の接続バー (「localhost 上の EdgeBox」の帯) を出さない
     "ConsoleResolution" = "自動 (モニターに合わせる)"
 }
 if (-not (Test-Path $ConfigFile)) {
@@ -335,6 +338,15 @@ $cfg = Get-Content $ConfigFile -Raw -Encoding UTF8 | ConvertFrom-Json
 # .200 はどの環境にも合っていない初期値だったため、残しておく理由がない
 if ([string]$cfg.RightUrl -eq "https://192.168.0.200/") {
     $cfg.RightUrl = [string]$DefaultConfig["RightUrl"]
+    try { $cfg | ConvertTo-Json | Set-Content -Path $ConfigFile -Encoding UTF8 } catch { }
+}
+# 旧版は「起動後にコンソールを自動で閉じる」が既定だった。閉じないでほしいという要望により
+# 既定を「閉じない」に変更。旧既定のまま残っている設定ファイルは一度だけ切り替える
+if (-not $cfg.PSObject.Properties["ConsoleAutoCloseV2"]) {
+    if ($cfg.PSObject.Properties["ConsoleAutoClose"]) { $cfg.ConsoleAutoClose = $false }
+    else { $cfg | Add-Member -NotePropertyName ConsoleAutoClose -NotePropertyValue $false -Force }
+    $cfg | Add-Member -NotePropertyName ConsoleAutoCloseV2 -NotePropertyValue $true -Force
+    if (-not $cfg.PSObject.Properties["ConsoleHideBar"]) { $cfg | Add-Member -NotePropertyName ConsoleHideBar -NotePropertyValue $true -Force }
     try { $cfg | ConvertTo-Json | Set-Content -Path $ConfigFile -Encoding UTF8 } catch { }
 }
 if (-not $PSBoundParameters.ContainsKey("RightUrl")) { $RightUrl = [string]$cfg.RightUrl }
@@ -489,10 +501,10 @@ if ($Settings) {
     $grpOp.Controls.Add($cbSF)
 
     $cbAC = New-Object System.Windows.Forms.CheckBox
-    $cbAC.Text = "EdgeBox の起動を確認したら、コンソール画面を自動で閉じる (黒い画面を残さない)"
+    $cbAC.Text = "EdgeBox の起動を確認したら、コンソール画面を自動で閉じる (通常はオフ。閉じても VM は動き続ける)"
     $cbAC.Location = New-Object System.Drawing.Point(15, 85)
     $cbAC.Size = New-Object System.Drawing.Size(530, 24)
-    $cbAC.Checked = ($cfg.ConsoleAutoClose -ne $false)
+    $cbAC.Checked = ($cfg.ConsoleAutoClose -eq $true)
     $grpOp.Controls.Add($cbAC)
     $form.Controls.Add($grpOp)
 
@@ -593,6 +605,8 @@ if ($Settings) {
         if ($cfg.PSObject.Properties["ConsoleAutoCloseDelaySec"]) {
             $out["ConsoleAutoCloseDelaySec"] = [int]$cfg.ConsoleAutoCloseDelaySec
         }
+        if ($cfg.PSObject.Properties["ConsoleHideBar"]) { $out["ConsoleHideBar"] = ($cfg.ConsoleHideBar -ne $false) }
+        $out["ConsoleAutoCloseV2"] = $true
         $out | ConvertTo-Json | Set-Content -Path $ConfigFile -Encoding UTF8
 
         $msg = "保存しました。次回の表示から反映されます。"
@@ -1105,6 +1119,31 @@ function Set-ConsoleSavedFullScreen([bool]$on) {
     } catch { return $false }
 }
 
+# 全画面のときに上部へ出る接続バー (「localhost 上の EdgeBox」の帯) の表示/非表示を書き換える。
+# RDP クライアントの DisplayConnectionBar / PinConnectionBar に相当する設定名を探して書く
+function Set-ConsoleSavedBar([bool]$hide) {
+    try {
+        $file = Get-ConsoleConfigFile
+        if (-not $file) { return $false }
+        [xml]$x = Get-Content $file.FullName -Raw -Encoding UTF8
+        $nodes = @($x.SelectNodes("//setting") | Where-Object { $_.GetAttribute("name") -match 'ConnectionBar' })
+        if ($nodes.Count -eq 0) {
+            $names = @($x.SelectNodes("//setting") | ForEach-Object { $_.GetAttribute("name") } | Select-Object -First 40)
+            Log ("コンソール: [診断] 接続バーの設定が見つかりません。設定名一覧: " + ($names -join ", "))
+            return $false
+        }
+        $val = if ($hide) { "False" } else { "True" }
+        foreach ($n in $nodes) {
+            $valNode = $n.SelectSingleNode("value")
+            if ($valNode) { $valNode.InnerText = $val } else { $n.InnerText = $val }
+        }
+        $x.Save($file.FullName)
+        $mode = if ($hide) { "非表示" } else { "表示" }
+        Log ("コンソール: 接続バーの設定を " + $mode + " に書き換えました (" + (($nodes | ForEach-Object { $_.GetAttribute("name") }) -join ", ") + ")。")
+        return $true
+    } catch { return $false }
+}
+
 # vmconnect の「今の」メインウィンドウを取り直す
 # (接続の途中でウィンドウが作り直されることがあり、古いハンドルへの操作は空振りするため)
 function Get-ConsoleHwnd {
@@ -1164,6 +1203,7 @@ function Open-Console($screen, [bool]$fullScreen) {
             }
         }
         if (Set-ConsoleSavedFullScreen $true) { Log "コンソール: 保存設定を全画面に書き換えました。" }
+        Set-ConsoleSavedBar ($cfg.ConsoleHideBar -ne $false) | Out-Null
         elseif (-not (Test-Path $NoCfgFlag)) { Log "コンソール: 保存設定を書き換えられなかったため、起動後に切り替えます。" }
     } else {
         Set-ConsoleSavedFullScreen $false | Out-Null
@@ -1321,7 +1361,7 @@ if ($hasBrowser -and ($cfg.EscEnabled -ne $false)) {
 
 # --- EdgeBox 起動後のコンソール自動クローズ (起動確認だけ済ませて黒い画面を残さない) ---
 $hasConsole = (($LeftUrl -match '^(console|コンソール)$') -or ($RightUrl -match '^(console|コンソール)$'))
-if ($hasConsole -and ($cfg.ConsoleAutoClose -ne $false)) {
+if ($hasConsole -and ($cfg.ConsoleAutoClose -ne $false) -and -not $KeepConsole) {
     $closeDelay = 30
     if ([int]$cfg.ConsoleAutoCloseDelaySec -gt 0) { $closeDelay = [int]$cfg.ConsoleAutoCloseDelaySec }
     Start-Process powershell.exe -WindowStyle Hidden -ArgumentList (

@@ -148,6 +148,7 @@ cd C:\double-os-boot\windows-host
 .\00-field-launcher.ps1 -Setup           # 『EdgeBox 起動』アイコン
 .\08-settings-console.ps1 -Setup         # 『EdgeBox設定』アイコン (表示 URL・自動サインイン等)
 .\05-shutdown-all.ps1 -Setup             # 『全部シャットダウン』アイコン
+.\10-restart-edgebox.ps1 -Setup          # 『EdgeBox 再起動』『EdgeBox 画面』アイコン
 powercfg /h off                          # 高速スタートアップ無効 (電源 ON での自動起動を確実にする)
 ```
 

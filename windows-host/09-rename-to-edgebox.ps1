@@ -134,6 +134,7 @@ Write-Host "新しい名前でタスクとアイコンを登録し直します..
 & (Join-Path $PSScriptRoot "05-shutdown-all.ps1")            -Setup   -VMName $NewName
 & (Join-Path $PSScriptRoot "04-reboot-to-field-native.ps1")  -Setup   -VMName $NewName
 & (Join-Path $PSScriptRoot "00-field-launcher.ps1")          -Setup   -VMName $NewName
+& (Join-Path $PSScriptRoot "10-restart-edgebox.ps1")         -Setup   -VMName $NewName
 
 Write-Host ""
 Write-Host "移行が完了しました。以後はすべて '$NewName' の名前で動きます。" -ForegroundColor Green
