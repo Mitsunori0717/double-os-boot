@@ -159,7 +159,7 @@ function Get-ConsoleWindows {
 function Find-ConsoleBarWindows($b, [IntPtr]$main) {
     $found = @()
     foreach ($w in Get-ConsoleWindows) {
-        if (-not $w.Visible -or $w.Hwnd -eq $main) { continue }
+        if ($w.Hwnd -eq [IntPtr]::Zero -or $w.Hwnd -eq $main -or -not $w.Visible) { continue }
         if ($w.Parent -ne [IntPtr]::Zero -and $w.Class -like 'WindowsForms10*') { continue }   # vmconnect 自身の部品 (ツールバーなど) は対象外
         if ($w.Height -le 0 -or $w.Height -gt 160) { continue }
         if ($w.Width -lt 100 -or $w.Width -gt $b.Width) { continue }
@@ -167,7 +167,10 @@ function Find-ConsoleBarWindows($b, [IntPtr]$main) {
         if ($w.Left -lt ($b.X - 8) -or $w.Right -gt ($b.X + $b.Width + 8)) { continue }
         $found += $w
     }
-    return ,$found
+    # 注意: 見つからなかったときに ,$found (空配列を包む) を返すと、呼び出し側の foreach が
+    # 「空の要素 1 個」で 1 回まわり、$w.Hwnd が null になって ShowWindow が例外を出す。
+    # foreach で受けるので、包まずにそのまま返す (0 件 = 0 回、1 件 = 1 回)
+    return $found
 }
 function Format-ConsoleWindow($w) {
     $kind = if ($w.Parent -eq [IntPtr]::Zero) { "" } else { " 子" }
@@ -661,6 +664,7 @@ public class GuardApi {
             $main = Get-ConsoleMain
             if ($main -eq [IntPtr]::Zero) { return }
             foreach ($w in Find-ConsoleBarWindows $left $main) {
+                if ($w.Hwnd -eq [IntPtr]::Zero) { continue }
                 [BarFinder]::ShowWindow($w.Hwnd, 0) | Out-Null
                 $key = [string]$w.Hwnd
                 if (-not $script:HiddenBars.ContainsKey($key)) {
@@ -720,12 +724,15 @@ public class GuardApi {
                 if ($h -ne [IntPtr]::Zero -and -not [GuardApi]::IsIconic($h)) {
                     if (Test-Covers $h $left) { $notCover = 0 }
                     else {
+                        # ブラウザや他アプリがフォーカスを奪うと vmconnect の全画面が外れることがある。
+                        # 連続 2 回確認・6 秒に 1 回まで、素早く左画面の全画面に戻す
                         $notCover++
-                        if ($notCover -ge 3 -and ((Get-Date) - $lastFs).TotalSeconds -gt 10) {
+                        if ($notCover -ge 2 -and ((Get-Date) - $lastFs).TotalSeconds -gt 6) {
                             if (Test-Covers $h $right) { Invoke-FullScreenToggle $h; Start-Sleep -Milliseconds 800 }   # 右で全画面 → いったん解除
                             [GuardApi]::ShowWindow($h, 9) | Out-Null
                             [GuardApi]::MoveWindow($h, $left.X, $left.Y, 900, 700, $true) | Out-Null
                             Start-Sleep -Milliseconds 300
+                            [GuardApi]::SetForegroundWindow($h) | Out-Null
                             Invoke-FullScreenToggle $h
                             $lastFs = Get-Date; $notCover = 0
                             Log "左画面の見張り役: コンソールを左画面の全画面に戻しました。"
@@ -1614,6 +1621,7 @@ function Hide-ConsoleBar($screen) {
         $main = Get-ConsoleHwnd
         for ($try = 1; $try -le 8; $try++) {
             foreach ($w in Find-ConsoleBarWindows $b $main) {
+                if ($w.Hwnd -eq [IntPtr]::Zero) { continue }
                 [BarFinder]::ShowWindow($w.Hwnd, 0) | Out-Null
                 $key = [string]$w.Hwnd
                 if (-not $hidden.ContainsKey($key)) {
@@ -1831,6 +1839,37 @@ if ($script:RightUrlPending -and $RightUrl) {
     Start-Process powershell.exe -WindowStyle Hidden -ArgumentList (
         "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" -UrlRetry -RightUrl `"$RightUrl`" -VMName `"$VMName`"")
     Log "管理画面が応答したら右画面を開き直す後追いを起動しました。"
+}
+
+# --- 表示の仕上げ (左 = コンソール & 右 = ブラウザ のとき) ---
+# 起動時、右画面のブラウザを開くとフォーカスが右へ移り、左のコンソール (vmconnect) の全画面が
+# 外れることがある (vmconnect はフォーカスを失うと全画面を抜ける)。また、他のアプリが右画面に
+# 自動起動していると管理画面が隠れる。そこで最後に、
+#   1) 右のブラウザを最前面へ (自動起動した他アプリの上に出す。Chrome の全画面はフォーカスを失っても外れない)
+#   2) 左のコンソールを「最後に」前面化し、全画面が外れていれば戻す (最後に前面化するので全画面のまま残る)
+$rightIsBrowser = ($RightUrl -and $RightUrl -notmatch '^(console|コンソール)$')
+if ($leftIsConsole -and $rightIsBrowser) {
+    Start-Sleep -Seconds 2
+    $bh = Get-EdgeWindow "FieldKioskR"
+    if ($bh -ne [IntPtr]::Zero) {
+        Force-Foreground $bh | Out-Null
+        [FieldWin]::BringWindowToTop($bh) | Out-Null
+        Log "右画面のブラウザを最前面にしました (他アプリの上に管理画面を出します)。"
+    }
+    $ch = Get-ConsoleHwnd
+    if ($ch -ne [IntPtr]::Zero) {
+        if (-not (Test-CoversScreen $ch $leftScreen)) {
+            Log "コンソール: ブラウザ表示後に全画面が外れていたため、戻します。"
+            [FieldWin]::ShowWindow($ch, 9) | Out-Null
+            [FieldWin]::MoveWindow($ch, $leftScreen.Bounds.X, $leftScreen.Bounds.Y, 900, 700, $true) | Out-Null
+            Start-Sleep -Milliseconds 300
+            Invoke-ConsoleMenuCommand $ch '全画面|Full' | Out-Null
+            Start-Sleep -Milliseconds 900
+            $ch2 = Get-ConsoleHwnd; if ($ch2 -ne [IntPtr]::Zero) { $ch = $ch2 }
+        }
+        Force-Foreground $ch | Out-Null
+        Hide-ConsoleBar $leftScreen | Out-Null
+    }
 }
 
 # --- ESC 見張り役 (ブラウザ表示があれば起動。全画面→最大化→元のサイズ の順に ESC で戻せる) ---
