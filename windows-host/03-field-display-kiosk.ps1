@@ -34,7 +34,8 @@ param(
     [int]$CloserDelaySec = 30,
     [string]$CloserWaitUrl = "",
     [string]$ConsoleResolution,
-    [int]$TimeoutSec  = 420
+    [int]$TimeoutSec  = 420,
+    [int]$UrlTimeoutSec = 900   # 管理画面 (右画面の URL) の応答を待つ上限。左のコンソールは待たずに先に出す
 )
 
 $ErrorActionPreference = "Stop"
@@ -417,6 +418,8 @@ public class GuardApi {
     [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam);
     [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
     [DllImport("user32.dll")] public static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, uint dwExtraInfo);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern IntPtr FindWindowEx(IntPtr parent, IntPtr after, string className, string windowName);
+    [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint pid);
 }
 "@
     # "Alt+F11" のような指定をキーコードの一覧にする
@@ -497,6 +500,23 @@ public class GuardApi {
         } catch { }
     }
 
+    function Hide-GuardBar {
+        # 全画面のときに上部へ出る接続バー (BBarWindowClass) が見えていれば隠す
+        try {
+            $pids = @(Get-Process vmconnect -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Id)
+            if ($pids.Count -eq 0) { return }
+            $h = [IntPtr]::Zero
+            for ($i = 0; $i -lt 20; $i++) {
+                $h = [GuardApi]::FindWindowEx([IntPtr]::Zero, $h, "BBarWindowClass", $null)
+                if ($h -eq [IntPtr]::Zero) { break }
+                $ownerPid = [uint32]0
+                [GuardApi]::GetWindowThreadProcessId($h, [ref]$ownerPid) | Out-Null
+                if (($pids -contains [int]$ownerPid) -and [GuardApi]::IsWindowVisible($h)) { [GuardApi]::ShowWindow($h, 0) | Out-Null }
+            }
+        } catch { }
+    }
+    $hideBar = ($cfg.ConsoleHideBar -ne $false)
+
     $released = $false
     $helperPids = @(); $lastScan = [datetime]::MinValue
     $lastFs = [datetime]::MinValue; $notCover = 0
@@ -549,6 +569,7 @@ public class GuardApi {
                         }
                     }
                 }
+                if ($hideBar) { Hide-GuardBar }
                 # 2) 左画面に出てきた他の窓を右画面へ (大きさは保ち、最大化は右画面で最大化し直す)
                 foreach ($p in @(Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 })) {
                     $hw = [IntPtr]$p.MainWindowHandle
@@ -1019,7 +1040,8 @@ function Wait-Url([string]$u) {
     if (-not $u) { return $true }
     $uri = [Uri]$u
     $port = if ($uri.Port -gt 0) { $uri.Port } elseif ($uri.Scheme -eq "https") { 443 } else { 80 }
-    while ($script:sw.Elapsed.TotalSeconds -lt $TimeoutSec) {
+    $usw = [System.Diagnostics.Stopwatch]::StartNew()
+    while ($usw.Elapsed.TotalSeconds -lt $UrlTimeoutSec) {
         try {
             $tcp = New-Object Net.Sockets.TcpClient
             $ok = $tcp.ConnectAsync($uri.Host, $port).Wait(3000)
@@ -1030,13 +1052,21 @@ function Wait-Url([string]$u) {
     }
     return $false
 }
-if ($RightUrl -and $RightUrl -notmatch '^(console|コンソール)$') {
-    if (Wait-Url $RightUrl) { Log "右画面用 URL が応答しました: $RightUrl" }
-    else { Log "警告: 右画面用 URL が応答しません (それでも開きます): $RightUrl" }
+function Wait-OneUrl([string]$u, [string]$label) {
+    if (-not $u -or $u -match '^(console|コンソール)$') { return }
+    if (Wait-Url $u) { Log "$label URL が応答しました: $u"; return }
+    Log "警告: $label URL が応答しません (それでも開きます): $u"
+    # 次の切り分けのために、EdgeBox 側のネットワークの様子を残す
+    try {
+        $nics = @(Get-VMNetworkAdapter -VMName $VMName -ErrorAction SilentlyContinue)
+        $ips = @($nics | ForEach-Object { $_.IPAddresses }) -join ", "
+        $sws = @($nics | ForEach-Object { $_.SwitchName }) -join ", "
+        Log ("  [診断] EdgeBox のネットワーク: スイッチ=" + $sws + " / IP=" + $(if ($ips) { $ips } else { "(報告なし)" }))
+    } catch { }
 }
-if ($LeftUrl -and $LeftUrl -notmatch '^(console|コンソール)$') {
-    if (Wait-Url $LeftUrl) { Log "左画面用 URL が応答しました: $LeftUrl" }
-    else { Log "警告: 左画面用 URL が応答しません (それでも開きます): $LeftUrl" }
+function Wait-ForUrls {
+    Wait-OneUrl $RightUrl "右画面用"
+    Wait-OneUrl $LeftUrl  "左画面用"
 }
 
 $edge = @(
@@ -1396,6 +1426,28 @@ function Start-ConsoleWindow {
 }
 
 # --- EdgeBox のコンソール画面 (vmconnect) を指定モニターに表示 ---
+# 全画面のときに上部へ出る接続バーは、RDP クライアントの "BBarWindowClass" という別ウィンドウ。
+# vmconnect の設定ファイルにはこの項目が無い (実機の診断: ZoomLevel, ConnectionDialogServers,
+# StartingPosition, ShowToolbar のみ) ため、ウィンドウそのものを非表示にする
+function Hide-ConsoleBar {
+    if ($cfg.ConsoleHideBar -eq $false) { return $false }
+    $hid = $false
+    try {
+        $pids = @(Get-Process vmconnect -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Id)
+        if ($pids.Count -eq 0) { return $false }
+        $h = [IntPtr]::Zero
+        for ($i = 0; $i -lt 20; $i++) {
+            $h = [FieldWin]::FindWindowEx([IntPtr]::Zero, $h, "BBarWindowClass", $null)
+            if ($h -eq [IntPtr]::Zero) { break }
+            $ownerPid = [uint32]0
+            [FieldWin]::GetWindowThreadProcessId($h, [ref]$ownerPid) | Out-Null
+            if ($pids -contains [int]$ownerPid) { [FieldWin]::ShowWindow($h, 0) | Out-Null; $hid = $true }
+        }
+    } catch { }
+    if ($hid) { Log "コンソール: 上部の接続バーを隠しました。" }
+    return $hid
+}
+
 function Open-Console($screen, [bool]$fullScreen) {
     Log ("コンソールを開きます (モニター {0},{1} / {2})" -f $screen.Bounds.X, $screen.Bounds.Y,
          $(if ($fullScreen) { "全画面" } else { "最大化ウィンドウ" }))
@@ -1434,7 +1486,6 @@ function Open-Console($screen, [bool]$fullScreen) {
             }
         }
         if (Set-ConsoleSavedFullScreen $true) { Log "コンソール: 保存設定を全画面に書き換えました。" }
-        Set-ConsoleSavedBar ($cfg.ConsoleHideBar -ne $false) | Out-Null
         elseif (-not (Test-Path $NoCfgFlag)) { Log "コンソール: 保存設定を書き換えられなかったため、起動後に切り替えます。" }
     } else {
         Set-ConsoleSavedFullScreen $false | Out-Null
@@ -1457,6 +1508,8 @@ function Open-Console($screen, [bool]$fullScreen) {
         $h2 = Get-ConsoleHwnd; if ($h2 -ne [IntPtr]::Zero) { $hwnd = $h2 }
         if (Test-CoversScreen $hwnd $screen) {
             Log "コンソール: 保存設定により最初から全画面で起動しました。"
+            Start-Sleep -Milliseconds 800
+            Hide-ConsoleBar | Out-Null
             return
         }
         $own = [System.Windows.Forms.Screen]::FromHandle($hwnd)
@@ -1508,6 +1561,8 @@ function Open-Console($screen, [bool]$fullScreen) {
         Start-Sleep -Milliseconds 1500
         if (Test-CoversScreen $hwnd $screen) { $done = $true; Log "コンソール: 全画面モードになりました (キー送信 試行 $try)" }
     }
+
+    if ($done) { Start-Sleep -Milliseconds 800; Hide-ConsoleBar | Out-Null }
 
     # 方法4: 黒背景を敷き、枠を外したコンソールを「実際の映像サイズ」で中央に重ねる
     if (-not $done) {
@@ -1577,8 +1632,16 @@ function Open-Display([string]$val, $screen, [string]$profile, [bool]$fullScreen
     else { Open-Kiosk $val $screen $profile $fullScreen }
 }
 
+# 左 = コンソールなら先に出して起動中画面を閉じる (EdgeBox は起動済みなのですぐ出せる)。
+# 管理画面の応答待ちはそのあとに行う (長くかかっても左は見えている)
+$leftIsConsole = ($LeftUrl -match '^(console|コンソール)$')
+if ($leftIsConsole) {
+    Open-Display $LeftUrl $leftScreen "FieldKioskL" $LeftFull
+    Stop-Splash
+}
+Wait-ForUrls
 Open-Display $RightUrl $rightScreen "FieldKioskR" $RightFull
-Open-Display $LeftUrl  $leftScreen  "FieldKioskL" $LeftFull
+if (-not $leftIsConsole) { Open-Display $LeftUrl $leftScreen "FieldKioskL" $LeftFull }
 
 # --- ESC 見張り役 (ブラウザ表示があれば起動。全画面→最大化→元のサイズ の順に ESC で戻せる) ---
 $hasBrowser = (($RightUrl -and $RightUrl -notmatch '^(console|コンソール)$') -or
