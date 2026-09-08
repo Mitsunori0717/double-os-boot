@@ -98,6 +98,89 @@ function Test-UrlOnce([string]$u) {
 $SplashLeftOffFile = Join-Path $PSScriptRoot "display-splash-leftoff.flag"   # 起動中画面を右画面だけに縮める合図
 
 # ============================================================
+#  接続バー探し (共通): vmconnect の窓 (トップレベルと、その子孫) を列挙する
+#  全画面のときに上部へ出る接続バーは、名前 (クラス名) が環境で違うため、
+#  「vmconnect が持つ、左画面の上端に張り付いた横長で背の低い窓」という形で見つける
+# ============================================================
+$BarFinderSource = @'
+using System;
+using System.Text;
+using System.Collections.Generic;
+using System.Runtime.InteropServices;
+public class BarFinder {
+    public delegate bool EnumProc(IntPtr hWnd, IntPtr lParam);
+    [DllImport("user32.dll")] static extern bool EnumWindows(EnumProc cb, IntPtr lParam);
+    [DllImport("user32.dll")] static extern bool EnumChildWindows(IntPtr parent, EnumProc cb, IntPtr lParam);
+    [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint pid);
+    [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr hWnd);
+    [DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr hWnd, out RECT r);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetClassName(IntPtr hWnd, StringBuilder s, int n);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetWindowText(IntPtr hWnd, StringBuilder s, int n);
+    [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int cmd);
+    [StructLayout(LayoutKind.Sequential)] public struct RECT { public int Left, Top, Right, Bottom; }
+    public class Info {
+        public IntPtr Hwnd; public IntPtr Parent; public int Pid; public bool Visible;
+        public string Class; public string Title; public int Left, Top, Right, Bottom;
+        public int Width { get { return Right - Left; } }
+        public int Height { get { return Bottom - Top; } }
+    }
+    static Info Describe(IntPtr h, IntPtr parent) {
+        uint pid; GetWindowThreadProcessId(h, out pid);
+        Info i = new Info(); i.Hwnd = h; i.Parent = parent; i.Pid = (int)pid; i.Visible = IsWindowVisible(h);
+        RECT r; if (GetWindowRect(h, out r)) { i.Left = r.Left; i.Top = r.Top; i.Right = r.Right; i.Bottom = r.Bottom; }
+        StringBuilder sb = new StringBuilder(256); GetClassName(h, sb, 256); i.Class = sb.ToString();
+        StringBuilder st = new StringBuilder(256); GetWindowText(h, st, 256); i.Title = st.ToString();
+        return i;
+    }
+    // 指定プロセスの窓をすべて返す (トップレベルと、includeChildren ならその子孫も)
+    public static List<Info> Find(int[] pids, bool includeChildren) {
+        List<Info> list = new List<Info>();
+        List<IntPtr> tops = new List<IntPtr>();
+        EnumWindows(delegate(IntPtr h, IntPtr l) { tops.Add(h); return true; }, IntPtr.Zero);
+        foreach (IntPtr h in tops) {
+            uint pid; GetWindowThreadProcessId(h, out pid);
+            if (Array.IndexOf(pids, (int)pid) < 0) continue;
+            list.Add(Describe(h, IntPtr.Zero));
+            if (!includeChildren) continue;
+            IntPtr top = h;
+            EnumChildWindows(h, delegate(IntPtr c, IntPtr l) { list.Add(Describe(c, top)); return true; }, IntPtr.Zero);
+        }
+        return list;
+    }
+}
+'@
+function Get-ConsoleWindows {
+    if (-not ("BarFinder" -as [type])) { Add-Type -TypeDefinition $BarFinderSource -ErrorAction Stop }
+    $pids = @(Get-Process vmconnect -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Id)
+    if ($pids.Count -eq 0) { return @() }
+    return @([BarFinder]::Find([int[]]$pids, $true))
+}
+# 接続バーらしい窓を探す ($b = 左画面の範囲、$main = コンソール本体の窓)
+function Find-ConsoleBarWindows($b, [IntPtr]$main) {
+    $found = @()
+    foreach ($w in Get-ConsoleWindows) {
+        if (-not $w.Visible -or $w.Hwnd -eq $main) { continue }
+        if ($w.Parent -ne [IntPtr]::Zero -and $w.Class -like 'WindowsForms10*') { continue }   # vmconnect 自身の部品 (ツールバーなど) は対象外
+        if ($w.Height -le 0 -or $w.Height -gt 160) { continue }
+        if ($w.Width -lt 100 -or $w.Width -gt $b.Width) { continue }
+        if ($w.Top -lt ($b.Y - 200) -or $w.Top -gt ($b.Y + 24)) { continue }
+        if ($w.Left -lt ($b.X - 8) -or $w.Right -gt ($b.X + $b.Width + 8)) { continue }
+        $found += $w
+    }
+    return ,$found
+}
+function Format-ConsoleWindow($w) {
+    $kind = if ($w.Parent -eq [IntPtr]::Zero) { "" } else { " 子" }
+    return ("{0}[{1}] {2}x{3}@({4},{5}){6}" -f $w.Class, $w.Title, $w.Width, $w.Height, $w.Left, $w.Top, $kind)
+}
+# 見つからなかったときの手掛かり: 見えている窓を、画面上端に近い順に最大 12 個
+function Get-ConsoleWindowDiag($b) {
+    $list = @(Get-ConsoleWindows | Where-Object { $_.Visible } | Sort-Object { [Math]::Abs($_.Top - $b.Y) } | Select-Object -First 12)
+    if ($list.Count -eq 0) { return "(見えている窓なし)" }
+    return (($list | ForEach-Object { Format-ConsoleWindow $_ }) -join "; ")
+}
+
+# ============================================================
 #  起動中画面: 表示準備が終わるまで、全モニターを黒い画面で覆う
 # ============================================================
 if ($Splash) {
@@ -571,40 +654,31 @@ public class GuardApi {
     }
 
     $script:HiddenBars = @{}
+    $script:GuardStart = Get-Date; $script:BarDiagDone = $false
     function Hide-GuardBar {
-        # 全画面のときに上部へ出る接続バー = vmconnect が持つ、左画面の上端に張り付いた横長で背の低い窓。
-        # 見えていれば隠す (クラス名は環境で違うため形で判断)
+        # 全画面のときに上部へ出る接続バーが見えていれば隠す (形で判断: 共通の Find-ConsoleBarWindows)
         try {
-            $pids = @(Get-Process vmconnect -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Id)
-            if ($pids.Count -eq 0) { return }
             $main = Get-ConsoleMain
-            $h = [IntPtr]::Zero
-            for ($i = 0; $i -lt 600; $i++) {
-                $h = [GuardApi]::FindWindowEx([IntPtr]::Zero, $h, $null, $null)
-                if ($h -eq [IntPtr]::Zero) { break }
-                if ($h -eq $main) { continue }
-                $ownerPid = [uint32]0
-                [GuardApi]::GetWindowThreadProcessId($h, [ref]$ownerPid) | Out-Null
-                if (-not ($pids -contains [int]$ownerPid)) { continue }
-                if (-not [GuardApi]::IsWindowVisible($h)) { continue }
-                $r = New-Object 'GuardApi+RECT'
-                if (-not [GuardApi]::GetWindowRect($h, [ref]$r)) { continue }
-                $w = $r.Right - $r.Left; $hh = $r.Bottom - $r.Top
-                if ($hh -gt 0 -and $hh -le 80 -and $w -gt 100 -and $w -lt $left.Width -and
-                    [Math]::Abs($r.Top - $left.Y) -le 8 -and $r.Left -ge $left.X -and $r.Right -le ($left.X + $left.Width)) {
-                    [GuardApi]::ShowWindow($h, 0) | Out-Null
-                    $key = [string]$h
-                    if (-not $script:HiddenBars.ContainsKey($key)) {
-                        $script:HiddenBars[$key] = $true
-                        $sb = New-Object System.Text.StringBuilder 256
-                        [GuardApi]::GetClassName($h, $sb, 256) | Out-Null
-                        Log ("左画面の見張り役: 上部の接続バーを隠しました (クラス " + $sb.ToString() + ")。")
-                    }
+            if ($main -eq [IntPtr]::Zero) { return }
+            foreach ($w in Find-ConsoleBarWindows $left $main) {
+                [BarFinder]::ShowWindow($w.Hwnd, 0) | Out-Null
+                $key = [string]$w.Hwnd
+                if (-not $script:HiddenBars.ContainsKey($key)) {
+                    $script:HiddenBars[$key] = $true
+                    Log ("左画面の見張り役: 上部の接続バーを隠しました (" + (Format-ConsoleWindow $w) + ")。")
+                }
+            }
+            # 開始から 30 秒たっても一度も見つからなければ、手掛かりを 1 回だけ記録する
+            if ($script:HiddenBars.Count -eq 0 -and -not $script:BarDiagDone -and ((Get-Date) - $script:GuardStart).TotalSeconds -gt 30) {
+                $script:BarDiagDone = $true
+                if (Test-Covers $main $left) {
+                    Log ("左画面の見張り役: [診断] 接続バーが見つかりません。vmconnect の見えている窓: " + (Get-ConsoleWindowDiag $left))
                 }
             }
         } catch { }
     }
     $hideBar = ($cfg.ConsoleHideBar -ne $false)
+    if ($hideBar) { try { Get-ConsoleWindows | Out-Null } catch { Log ("左画面の見張り役: 接続バー探しの準備に失敗しました: " + $_.Exception.Message); $hideBar = $false } }
 
     $released = $false
     $helperPids = @(); $lastScan = [datetime]::MinValue
@@ -1528,42 +1602,33 @@ function Start-ConsoleWindow {
 }
 
 # --- EdgeBox のコンソール画面 (vmconnect) を指定モニターに表示 ---
-# 全画面のときに上部へ出る接続バーは、RDP クライアントの "BBarWindowClass" という別ウィンドウ。
-# vmconnect の設定ファイルにはこの項目が無い (実機の診断: ZoomLevel, ConnectionDialogServers,
-# StartingPosition, ShowToolbar のみ) ため、ウィンドウそのものを非表示にする
+# 全画面のときに上部へ出る接続バーは、RDP クライアントが出す別ウィンドウ。vmconnect の設定ファイルには
+# この項目が無い (実機の診断: ZoomLevel, ConnectionDialogServers, StartingPosition, ShowToolbar のみ) ため、
+# ウィンドウそのものを非表示にする。名前 (クラス名) は環境で違い (実機では BBarWindowClass では見つからなかった)、
+# 出るまで少し時間もかかるため、形で探して数秒間は探し直す。見つからなければ手掛かりを記録に残す
 function Hide-ConsoleBar($screen) {
-    # ウィンドウのクラス名は環境で違う (実機では BBarWindowClass では見つからなかった) ため、
-    # 「vmconnect のプロセスが持つ、画面上端に張り付いた横長で背の低い窓」を接続バーとみなして隠す
     if ($cfg.ConsoleHideBar -eq $false) { return $false }
-    $hid = $false
+    $b = $screen.Bounds
+    $hidden = @{}
     try {
-        $pids = @(Get-Process vmconnect -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Id)
-        if ($pids.Count -eq 0) { return $false }
         $main = Get-ConsoleHwnd
-        $h = [IntPtr]::Zero
-        for ($i = 0; $i -lt 600; $i++) {
-            $h = [FieldWin]::FindWindowEx([IntPtr]::Zero, $h, $null, $null)
-            if ($h -eq [IntPtr]::Zero) { break }
-            if ($h -eq $main) { continue }
-            $ownerPid = [uint32]0
-            [FieldWin]::GetWindowThreadProcessId($h, [ref]$ownerPid) | Out-Null
-            if (-not ($pids -contains [int]$ownerPid)) { continue }
-            if (-not [FieldWin]::IsWindowVisible($h)) { continue }
-            $r = New-Object 'FieldWin+RECT'
-            if (-not [FieldWin]::GetWindowRect($h, [ref]$r)) { continue }
-            $w = $r.Right - $r.Left; $hh = $r.Bottom - $r.Top
-            if ($hh -gt 0 -and $hh -le 80 -and $w -gt 100 -and $w -lt $screen.Bounds.Width -and
-                [Math]::Abs($r.Top - $screen.Bounds.Y) -le 8 -and
-                $r.Left -ge $screen.Bounds.X -and $r.Right -le ($screen.Bounds.X + $screen.Bounds.Width)) {
-                $sb = New-Object System.Text.StringBuilder 256
-                [FieldWin]::GetClassName($h, $sb, 256) | Out-Null
-                [FieldWin]::ShowWindow($h, 0) | Out-Null
-                $hid = $true
-                Log ("コンソール: 上部の接続バーを隠しました (クラス " + $sb.ToString() + " / " + $w + "x" + $hh + ")。")
+        for ($try = 1; $try -le 8; $try++) {
+            foreach ($w in Find-ConsoleBarWindows $b $main) {
+                [BarFinder]::ShowWindow($w.Hwnd, 0) | Out-Null
+                $key = [string]$w.Hwnd
+                if (-not $hidden.ContainsKey($key)) {
+                    $hidden[$key] = $true
+                    Log ("コンソール: 上部の接続バーを隠しました (" + (Format-ConsoleWindow $w) + ")。")
+                }
             }
+            if ($hidden.Count -gt 0 -and $try -ge 3) { break }   # 隠せたあとも 2 回は探し直す (出直してくる場合)
+            Start-Sleep -Milliseconds 750
         }
-    } catch { }
-    return $hid
+        if ($hidden.Count -eq 0) {
+            Log ("コンソール: [診断] 接続バーが見つかりません。vmconnect の見えている窓: " + (Get-ConsoleWindowDiag $b))
+        }
+    } catch { Log ("コンソール: 接続バーの非表示でエラー: " + $_.Exception.Message) }
+    return ($hidden.Count -gt 0)
 }
 
 function Open-Console($screen, [bool]$fullScreen) {
