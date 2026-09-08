@@ -117,16 +117,20 @@ public class BarFinder {
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetClassName(IntPtr hWnd, StringBuilder s, int n);
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetWindowText(IntPtr hWnd, StringBuilder s, int n);
     [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int cmd);
+    [DllImport("user32.dll")] static extern int GetWindowLong(IntPtr hWnd, int nIndex);
     [StructLayout(LayoutKind.Sequential)] public struct RECT { public int Left, Top, Right, Bottom; }
     public class Info {
-        public IntPtr Hwnd; public IntPtr Parent; public int Pid; public bool Visible;
+        public IntPtr Hwnd; public IntPtr Parent; public int Pid; public bool Visible; public int Style;
         public string Class; public string Title; public int Left, Top, Right, Bottom;
         public int Width { get { return Right - Left; } }
         public int Height { get { return Bottom - Top; } }
+        // タイトルバー付きの普通の窓か (WS_CAPTION = 0x00C00000)。全画面モードの窓は枠なし
+        public bool HasCaption { get { return (Style & 0x00C00000) == 0x00C00000; } }
     }
     static Info Describe(IntPtr h, IntPtr parent) {
         uint pid; GetWindowThreadProcessId(h, out pid);
         Info i = new Info(); i.Hwnd = h; i.Parent = parent; i.Pid = (int)pid; i.Visible = IsWindowVisible(h);
+        i.Style = GetWindowLong(h, -16);   // GWL_STYLE
         RECT r; if (GetWindowRect(h, out r)) { i.Left = r.Left; i.Top = r.Top; i.Right = r.Right; i.Bottom = r.Bottom; }
         StringBuilder sb = new StringBuilder(256); GetClassName(h, sb, 256); i.Class = sb.ToString();
         StringBuilder st = new StringBuilder(256); GetWindowText(h, st, 256); i.Title = st.ToString();
@@ -181,6 +185,37 @@ function Get-ConsoleWindowDiag($b) {
     $list = @(Get-ConsoleWindows | Where-Object { $_.Visible } | Sort-Object { [Math]::Abs($_.Top - $b.Y) } | Select-Object -First 12)
     if ($list.Count -eq 0) { return "(見えている窓なし)" }
     return (($list | ForEach-Object { Format-ConsoleWindow $_ }) -join "; ")
+}
+
+# コンソールが「本当の全画面モード」でモニターの範囲 $b を覆っているか。
+# 最大化しただけの窓もモニターを覆うので、大きさだけでは区別できない (実機では最大化のまま
+# 「全画面になった」と誤判定していた)。全画面モードでは枠なし (タイトルバーなし) の窓が
+# モニターを覆う点で見分ける。vmconnect 本体が枠なしになる場合も、RDP 部品が別窓を作る場合も
+# トップレベルの窓として見つかる。タイトルバーを画面の上に押し出す方式にも備える
+function Test-ConsoleFullScreenOn($b) {
+    foreach ($w in Get-ConsoleWindows) {
+        if ($w.Hwnd -eq [IntPtr]::Zero -or $w.Parent -ne [IntPtr]::Zero -or -not $w.Visible) { continue }
+        if ($w.Left -gt ($b.X + 4) -or $w.Right -lt ($b.X + $b.Width - 4) -or $w.Bottom -lt ($b.Y + $b.Height - 4)) { continue }
+        if (-not $w.HasCaption -and $w.Top -le ($b.Y + 4)) { return $true }
+        if ($w.HasCaption -and $w.Top -le ($b.Y - 20)) { return $true }   # タイトルバーが画面外に隠れている
+    }
+    return $false
+}
+# 枠なしのコンソール窓がモニター $b の中にあるか (代替表示 = 黒背景の上に枠を外して中央表示 の状態)。
+# 見張り役がこれを「全画面が外れた」と誤って戻さないために使う
+function Test-ConsoleFramelessOn($b) {
+    foreach ($w in Get-ConsoleWindows) {
+        if ($w.Hwnd -eq [IntPtr]::Zero -or $w.Parent -ne [IntPtr]::Zero -or -not $w.Visible -or $w.HasCaption) { continue }
+        $cx = [int](($w.Left + $w.Right) / 2); $cy = [int](($w.Top + $w.Bottom) / 2)
+        if ($cx -ge $b.X -and $cx -lt ($b.X + $b.Width) -and $cy -ge $b.Y -and $cy -lt ($b.Y + $b.Height)) { return $true }
+    }
+    return $false
+}
+# 全画面かどうかの判定の手掛かり (記録用): vmconnect のトップレベルの窓を「枠あり/なし」付きで列挙
+function Get-ConsoleTopWindowDiag {
+    $list = @(Get-ConsoleWindows | Where-Object { $_.Parent -eq [IntPtr]::Zero -and $_.Visible })
+    if ($list.Count -eq 0) { return "(見えている窓なし)" }
+    return (($list | ForEach-Object { (Format-ConsoleWindow $_) + $(if ($_.HasCaption) { " 枠あり" } else { " 枠なし" }) }) -join "; ")
 }
 
 # ============================================================
@@ -605,11 +640,6 @@ public class GuardApi {
         $p = Get-Process vmconnect -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object -First 1
         if ($p) { return [IntPtr]$p.MainWindowHandle } else { return [IntPtr]::Zero }
     }
-    function Test-Covers([IntPtr]$h, $b) {
-        $r = New-Object 'GuardApi+RECT'
-        if (-not [GuardApi]::GetWindowRect($h, [ref]$r)) { return $false }
-        return ($r.Left -le $b.X -and $r.Top -le $b.Y -and $r.Right -ge ($b.X + $b.Width) -and $r.Bottom -ge ($b.Y + $b.Height))
-    }
     function Find-MenuId([IntPtr]$menu, [string]$pattern, [int]$depth) {
         if ($depth -gt 3) { return -1 }
         $n = [GuardApi]::GetMenuItemCount($menu)
@@ -630,10 +660,17 @@ public class GuardApi {
             $id = Find-MenuId $menu '全画面|Full' 0
             if ($id -ge 0) { [GuardApi]::PostMessage($h, 0x0111, [IntPtr]$id, [IntPtr]::Zero) | Out-Null; return }
         }
+        # 前面化 (見張り役は自分の窓を持たないので、ALT の疑似押下で前面化のブロックを避ける)
+        [GuardApi]::keybd_event(0x12, 0, 0, 0)
         [GuardApi]::SetForegroundWindow($h) | Out-Null
-        Start-Sleep -Milliseconds 200
-        [GuardApi]::keybd_event(0x11, 0, 0, 0); [GuardApi]::keybd_event(0x12, 0, 0, 0); [GuardApi]::keybd_event(0x13, 0, 0, 0)
-        [GuardApi]::keybd_event(0x13, 0, 2, 0); [GuardApi]::keybd_event(0x12, 0, 2, 0); [GuardApi]::keybd_event(0x11, 0, 2, 0)
+        [GuardApi]::keybd_event(0x12, 0, 2, 0)
+        Start-Sleep -Milliseconds 300
+        # Ctrl+Alt+Break。Break は実際のキーと同じ「VK_CANCEL (0x03) + 拡張スキャンコード 0x46」で送る
+        [GuardApi]::keybd_event(0x11, 0, 0, 0); [GuardApi]::keybd_event(0x12, 0, 0, 0)
+        [GuardApi]::keybd_event(0x03, 0x46, 1, 0)
+        Start-Sleep -Milliseconds 60
+        [GuardApi]::keybd_event(0x03, 0x46, 3, 0)
+        [GuardApi]::keybd_event(0x12, 0, 2, 0); [GuardApi]::keybd_event(0x11, 0, 2, 0)
     }
     $script:notice = $null; $script:noticeUntil = [datetime]::MinValue
     function Show-Notice([string]$text) {
@@ -675,7 +712,7 @@ public class GuardApi {
             # 開始から 30 秒たっても一度も見つからなければ、手掛かりを 1 回だけ記録する
             if ($script:HiddenBars.Count -eq 0 -and -not $script:BarDiagDone -and ((Get-Date) - $script:GuardStart).TotalSeconds -gt 30) {
                 $script:BarDiagDone = $true
-                if (Test-Covers $main $left) {
+                if (Test-ConsoleFullScreenOn $left) {
                     Log ("左画面の見張り役: [診断] 接続バーが見つかりません。vmconnect の見えている窓: " + (Get-ConsoleWindowDiag $left))
                 }
             }
@@ -687,6 +724,7 @@ public class GuardApi {
     $released = $false
     $helperPids = @(); $lastScan = [datetime]::MinValue
     $lastFs = [datetime]::MinValue; $notCover = 0
+    $fsFail = 0   # 全画面に戻せなかった回数 (続けて失敗したら試す間隔を広げ、操作の邪魔をしない)
     while ($true) {
         try {
             # --- ホットキー: 固定の解除 ⇔ 再固定 ---
@@ -696,7 +734,7 @@ public class GuardApi {
                 $released = -not $released
                 $h = Get-ConsoleMain
                 if ($released) {
-                    if ($h -ne [IntPtr]::Zero -and (Test-Covers $h $left)) { Invoke-FullScreenToggle $h }
+                    if ($h -ne [IntPtr]::Zero -and (Test-ConsoleFullScreenOn $left)) { Invoke-FullScreenToggle $h }
                     Show-Notice "左画面の固定を解除しました ($hotkey でもう一度固定)"
                     Log "左画面の見張り役: $hotkey により固定を解除しました。"
                 } else {
@@ -719,23 +757,36 @@ public class GuardApi {
                         Where-Object { $_.CommandLine -match '03-field-display-kiosk' } | Select-Object -ExpandProperty ProcessId)
                     $lastScan = Get-Date
                 }
-                # 1) コンソールの全画面が外れていたら左画面の全画面に戻す (連続 3 回確認・10 秒に 1 回まで)
+                # 1) コンソールの全画面が外れていたら左画面の全画面に戻す
+                #    (最大化しただけの窓は「全画面」とみなさない: 共通の Test-ConsoleFullScreenOn で判定)
                 $h = Get-ConsoleMain
                 if ($h -ne [IntPtr]::Zero -and -not [GuardApi]::IsIconic($h)) {
-                    if (Test-Covers $h $left) { $notCover = 0 }
+                    if ((Test-ConsoleFullScreenOn $left) -or (Test-ConsoleFramelessOn $left)) { $notCover = 0; $fsFail = 0 }   # 全画面か、代替表示 (枠なし中央表示) ならそのまま
                     else {
                         # ブラウザや他アプリがフォーカスを奪うと vmconnect の全画面が外れることがある。
-                        # 連続 2 回確認・6 秒に 1 回まで、素早く左画面の全画面に戻す
+                        # 連続 2 回確認・6 秒に 1 回まで、素早く左画面の全画面に戻す。
+                        # 3 回続けて戻せなければ (切り替えが効かない環境)、5 分に 1 回だけ試す
                         $notCover++
-                        if ($notCover -ge 2 -and ((Get-Date) - $lastFs).TotalSeconds -gt 6) {
-                            if (Test-Covers $h $right) { Invoke-FullScreenToggle $h; Start-Sleep -Milliseconds 800 }   # 右で全画面 → いったん解除
+                        $interval = if ($fsFail -ge 3) { 300 } else { 6 }
+                        if ($notCover -ge 2 -and ((Get-Date) - $lastFs).TotalSeconds -gt $interval) {
+                            if (Test-ConsoleFullScreenOn $right) { Invoke-FullScreenToggle $h; Start-Sleep -Milliseconds 800 }   # 右で全画面 → いったん解除
+                            $h2 = Get-ConsoleMain; if ($h2 -ne [IntPtr]::Zero) { $h = $h2 }
                             [GuardApi]::ShowWindow($h, 9) | Out-Null
                             [GuardApi]::MoveWindow($h, $left.X, $left.Y, 900, 700, $true) | Out-Null
                             Start-Sleep -Milliseconds 300
-                            [GuardApi]::SetForegroundWindow($h) | Out-Null
                             Invoke-FullScreenToggle $h
+                            Start-Sleep -Milliseconds 1500
                             $lastFs = Get-Date; $notCover = 0
-                            Log "左画面の見張り役: コンソールを左画面の全画面に戻しました。"
+                            if (Test-ConsoleFullScreenOn $left) {
+                                $fsFail = 0
+                                Log "左画面の見張り役: コンソールを左画面の全画面に戻しました。"
+                            } else {
+                                $fsFail++
+                                if ($fsFail -le 3) {
+                                    Log ("左画面の見張り役: コンソールを全画面に戻せませんでした ($fsFail 回目)。窓: " + (Get-ConsoleTopWindowDiag))
+                                }
+                                if ($fsFail -eq 3) { Log "左画面の見張り役: 3 回続けて戻せなかったため、以後は 5 分に 1 回だけ試します。" }
+                            }
                         }
                     }
                 }
@@ -1282,6 +1333,8 @@ public class FieldWin {
     [DllImport("user32.dll")] public static extern IntPtr GetMenu(IntPtr hWnd);
     [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hWnd);
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetClassName(IntPtr hWnd, StringBuilder s, int n);
+    [DllImport("user32.dll")] public static extern bool SetCursorPos(int X, int Y);
+    [DllImport("user32.dll")] public static extern void mouse_event(uint dwFlags, int dx, int dy, uint dwData, UIntPtr dwExtraInfo);
 }
 "@
 }
@@ -1415,50 +1468,143 @@ function Invoke-ConsoleMenuCommand([IntPtr]$hwnd, [string]$pattern) {
     return $hit.Text
 }
 
-# vmconnect のメニュー『表示 → 全画面モード』を UI Automation で直接クリックする
-# (キー送信と違い、タイミングやフォーカスの影響を受けにくい)
+# UI Automation の要素を「押す」: Invoke → Expand → 中心をマウスでクリック の順に試し、使えた方法名を返す
+# (vmconnect のメニューは WinForms 製で、環境によって対応するパターンが違うため)
+function Invoke-UiaElement($el) {
+    try {
+        $pat = $null
+        if ($el.TryGetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern, [ref]$pat)) { $pat.Invoke(); return "Invoke" }
+    } catch { }
+    try {
+        $pat = $null
+        if ($el.TryGetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern, [ref]$pat)) { $pat.Expand(); return "Expand" }
+    } catch { }
+    try {
+        $r = $el.Current.BoundingRectangle
+        if ($r.Width -gt 0 -and $r.Height -gt 0) {
+            $x = [int]($r.Left + $r.Width / 2); $y = [int]($r.Top + $r.Height / 2)
+            [FieldWin]::SetCursorPos($x, $y) | Out-Null
+            Start-Sleep -Milliseconds 80
+            [FieldWin]::mouse_event(0x0002, 0, 0, 0, [UIntPtr]::Zero)   # 左ボタン押す
+            Start-Sleep -Milliseconds 60
+            [FieldWin]::mouse_event(0x0004, 0, 0, 0, [UIntPtr]::Zero)   # 左ボタン離す
+            return "Click"
+        }
+    } catch { }
+    return $null
+}
+
+# vmconnect の窓 (本体と、開いたメニューのポップアップ) から名前が一致するメニュー項目を探す
+function Find-ConsoleMenuItem([IntPtr]$hwnd, $root, [string]$pattern, [ref]$seen) {
+    $condMi = New-Object System.Windows.Automation.PropertyCondition(
+        [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+        [System.Windows.Automation.ControlType]::MenuItem)
+    $scopes = @()
+    if ($root) { $scopes += $root }
+    $procId = [uint32]0
+    [FieldWin]::GetWindowThreadProcessId($hwnd, [ref]$procId) | Out-Null
+    $pidCond = New-Object System.Windows.Automation.PropertyCondition(
+        [System.Windows.Automation.AutomationElement]::ProcessIdProperty, [int]$procId)
+    $scopes += @([System.Windows.Automation.AutomationElement]::RootElement.FindAll([System.Windows.Automation.TreeScope]::Children, $pidCond))
+    foreach ($sc in $scopes) {
+        foreach ($i in $sc.FindAll([System.Windows.Automation.TreeScope]::Descendants, $condMi)) {
+            $n = [string]$i.Current.Name
+            if ($n -and $seen.Value -notcontains $n) { $seen.Value += $n }
+            if ($n -match $pattern) { return $i }
+        }
+    }
+    return $null
+}
+
+# vmconnect のメニュー『表示 → 全画面モード』を UI 操作で実行する
+# (キー送信と違い、タイミングやフォーカスの影響を受けにくい)。
+# 成否の理由は $script:MenuDiag に残す (実機で何が見えていたかを記録に出すため)
 function Invoke-ConsoleFullScreenMenu([IntPtr]$hwnd) {
+    $script:MenuDiag = ""
     try {
         $ae = [System.Windows.Automation.AutomationElement]::FromHandle($hwnd)
-        $condMi = New-Object System.Windows.Automation.PropertyCondition(
-            [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
-            [System.Windows.Automation.ControlType]::MenuItem)
+        $seen = @()
+        $view = Find-ConsoleMenuItem $hwnd $ae '^表示|^View' ([ref]$seen)
 
-        # メニューバーの「表示」を開く
-        $view = $null
-        foreach ($i in $ae.FindAll([System.Windows.Automation.TreeScope]::Descendants, $condMi)) {
-            if ($i.Current.Name -match '表示|View') { $view = $i; break }
-        }
-        if (-not $view) { return $false }
-        ($view.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern)).Expand()
-        Start-Sleep -Milliseconds 700
-
-        # 開いた項目から「全画面」を探す (まずメニュー配下、なければ vmconnect のポップアップから)
-        $full = $null
-        foreach ($i in $view.FindAll([System.Windows.Automation.TreeScope]::Descendants, $condMi)) {
-            if ($i.Current.Name -match '全画面|Full') { $full = $i; break }
-        }
-        if (-not $full) {
-            $procId = [uint32]0
-            [FieldWin]::GetWindowThreadProcessId($hwnd, [ref]$procId) | Out-Null
-            $pidCond = New-Object System.Windows.Automation.PropertyCondition(
-                [System.Windows.Automation.AutomationElement]::ProcessIdProperty, [int]$procId)
-            $rootEl = [System.Windows.Automation.AutomationElement]::RootElement
-            foreach ($w in $rootEl.FindAll([System.Windows.Automation.TreeScope]::Children, $pidCond)) {
-                foreach ($i in $w.FindAll([System.Windows.Automation.TreeScope]::Descendants, $condMi)) {
-                    if ($i.Current.Name -match '全画面|Full') { $full = $i; break }
-                }
-                if ($full) { break }
+        # 「表示」メニューを開く: UI 操作 → 駄目なら Alt+V (メニューの見出し「表示(V)」のキー)
+        $full = $null; $how = ""
+        foreach ($attempt in 1, 2) {
+            if ($attempt -eq 1 -and $view) { $how = Invoke-UiaElement $view; if (-not $how) { continue } }
+            else { [System.Windows.Forms.SendKeys]::SendWait("%v"); $how = "Alt+V" }
+            for ($k = 0; $k -lt 4 -and -not $full; $k++) {
+                Start-Sleep -Milliseconds 400
+                $full = Find-ConsoleMenuItem $hwnd $view '全画面|Full' ([ref]$seen)
             }
+            if ($full) { break }
+            [System.Windows.Forms.SendKeys]::SendWait("{ESC}")   # 開いたメニューがあれば閉じる
+            Start-Sleep -Milliseconds 300
         }
         if (-not $full) {
-            [System.Windows.Forms.SendKeys]::SendWait("{ESC}")   # 開いたメニューを閉じる
+            $script:MenuDiag = "『全画面』の項目が見つかりません (『表示』" + $(if ($view) { "あり" } else { "なし" }) + " / 開き方=$how / 見えた項目: " + ($seen -join ", ") + ")"
             return $false
         }
-        ($full.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern)).Invoke()
+        $name = [string]$full.Current.Name
+        $how2 = Invoke-UiaElement $full
+        if (-not $how2) { $script:MenuDiag = "『$name』を押せませんでした"; return $false }
         Start-Sleep -Milliseconds 900
+        $script:MenuDiag = "『表示』($how) → 『$name』($how2)"
         return $true
-    } catch { return $false }
+    } catch { $script:MenuDiag = "エラー: " + $_.Exception.Message; return $false }
+}
+
+# 全画面モードの切り替え操作を 1 回だけ送る (成否は確かめない。別モニターの全画面を解除するときなどに使う)
+function Send-ConsoleFullScreenToggle([IntPtr]$hwnd) {
+    if (Invoke-ConsoleMenuCommand $hwnd '全画面|Full') { return }
+    Force-Foreground $hwnd | Out-Null
+    if (Invoke-ConsoleFullScreenMenu $hwnd) { return }
+    Send-CtrlAltBreak
+}
+
+# コンソールを全画面モードにする (成功したら $true)。
+#   方法1: Win32 メニューの『全画面』を WM_COMMAND で実行 (フォーカス不要。vmconnect の版によっては無い)
+#   方法2: メニュー『表示 → 全画面モード』の UI 操作
+#   方法3: Ctrl+Alt+Break のキー送信
+# 成否は「枠なしの窓がモニターを覆っているか」(Test-ConsoleFullScreenOn) で確かめる。
+# 最大化しただけの窓を全画面と誤判定していたため、大きさだけの判定はやめた
+function Enter-ConsoleFullScreen($screen) {
+    $b = $screen.Bounds
+    $hwnd = Get-ConsoleHwnd
+    if ($hwnd -eq [IntPtr]::Zero) { return $false }
+    $diagDone = $false
+
+    # 方法1
+    $hit = Invoke-ConsoleMenuCommand $hwnd '全画面|Full'
+    if ($hit) {
+        Start-Sleep -Milliseconds 1000
+        if (Test-ConsoleFullScreenOn $b) { Log "コンソール: 全画面モードになりました (メニューコマンド『$hit』)"; return $true }
+        Log ("コンソール: メニューコマンド『$hit』を実行しましたが全画面になりませんでした。窓: " + (Get-ConsoleTopWindowDiag)); $diagDone = $true
+    }
+
+    # 方法2
+    for ($try = 1; $try -le 2; $try++) {
+        $h2 = Get-ConsoleHwnd; if ($h2 -ne [IntPtr]::Zero) { $hwnd = $h2 }
+        Force-Foreground $hwnd | Out-Null
+        if (Invoke-ConsoleFullScreenMenu $hwnd) {
+            Start-Sleep -Milliseconds 700
+            if (Test-ConsoleFullScreenOn $b) { Log "コンソール: 全画面モードになりました (メニュー操作: $script:MenuDiag)"; return $true }
+            $msg = "コンソール: メニューを操作しましたが全画面になりませんでした (試行 ${try}: $script:MenuDiag)"
+            if (-not $diagDone) { $msg += "。窓: " + (Get-ConsoleTopWindowDiag); $diagDone = $true }
+            Log $msg
+        } else {
+            Log "コンソール: メニュー操作に失敗 (試行 ${try}): $script:MenuDiag"
+        }
+    }
+
+    # 方法3
+    for ($try = 1; $try -le 4; $try++) {
+        $h2 = Get-ConsoleHwnd; if ($h2 -ne [IntPtr]::Zero) { $hwnd = $h2 }
+        if (-not (Force-Foreground $hwnd)) { Log "コンソール: 前面化に失敗 (キー送信 試行 $try)" }
+        if ($try % 2 -eq 1) { Send-CtrlAltBreak } else { [System.Windows.Forms.SendKeys]::SendWait("^%{BREAK}") }
+        Start-Sleep -Milliseconds 1500
+        if (Test-ConsoleFullScreenOn $b) { Log "コンソール: 全画面モードになりました (キー送信 試行 $try)"; return $true }
+    }
+    Log ("コンソール: 全画面モードにできませんでした。窓: " + (Get-ConsoleTopWindowDiag))
+    return $false
 }
 
 # ウィンドウ上端からツールバー下端までの高さ (メニュー・ツールバー領域のサイズ)
@@ -1639,6 +1785,7 @@ function Hide-ConsoleBar($screen) {
     return ($hidden.Count -gt 0)
 }
 
+$script:ConsoleFallback = $false   # 全画面にできず代替表示 (黒背景 + 枠なし中央表示) にしたか
 function Open-Console($screen, [bool]$fullScreen) {
     Log ("コンソールを開きます (モニター {0},{1} / {2})" -f $screen.Bounds.X, $screen.Bounds.Y,
          $(if ($fullScreen) { "全画面" } else { "最大化ウィンドウ" }))
@@ -1697,16 +1844,17 @@ function Open-Console($screen, [bool]$fullScreen) {
     if ($fullScreen) {
         Start-Sleep -Milliseconds 1200
         $h2 = Get-ConsoleHwnd; if ($h2 -ne [IntPtr]::Zero) { $hwnd = $h2 }
-        if (Test-CoversScreen $hwnd $screen) {
+        if (Test-ConsoleFullScreenOn $screen.Bounds) {
             Log "コンソール: 保存設定により最初から全画面で起動しました。"
             Start-Sleep -Milliseconds 800
             Hide-ConsoleBar $screen | Out-Null
             return
         }
         $own = [System.Windows.Forms.Screen]::FromHandle($hwnd)
-        if ($own -and ($own.Bounds -ne $screen.Bounds) -and (Test-CoversScreen $hwnd $own)) {
+        if ($own -and ($own.Bounds -ne $screen.Bounds) -and (Test-ConsoleFullScreenOn $own.Bounds)) {
             # 別のモニターで全画面になってしまった → いったん解除してから配置し直す
-            Invoke-ConsoleMenuCommand $hwnd '全画面|Full' | Out-Null
+            Log "コンソール: 別のモニターで全画面になっていたため、いったん解除して配置し直します。"
+            Send-ConsoleFullScreenToggle $hwnd
             Start-Sleep -Milliseconds 800
         }
     }
@@ -1719,45 +1867,14 @@ function Open-Console($screen, [bool]$fullScreen) {
     if (-not $fullScreen) { Log "コンソール: 最大化ウィンドウで表示します (全画面の指定なし)。"; return }
 
     # 全画面モード (メニューバーなし・余白は黒)。解除/再開は Ctrl+Alt+Break
-    $done = $false
-    $hadWin32Menu = ([FieldWin]::GetMenu($hwnd) -ne [IntPtr]::Zero)
-
-    # 方法1: メニューの「全画面」コマンドを WM_COMMAND で直接実行 (フォーカス不要で最も確実)
-    for ($try = 1; $try -le 2 -and -not $done; $try++) {
-        $h2 = Get-ConsoleHwnd; if ($h2 -ne [IntPtr]::Zero) { $hwnd = $h2 }
-        $hit = Invoke-ConsoleMenuCommand $hwnd '全画面|Full'
-        if ($hit) {
-            Start-Sleep -Milliseconds 1000
-            if (Test-CoversScreen $hwnd $screen) { $done = $true; Log "コンソール: 全画面モードになりました (メニューコマンド『$hit』)" }
-            else { Log "コンソール: メニューコマンド『$hit』を実行しましたが全画面になりませんでした (試行 $try)" }
-        } else { break }   # Win32 メニューが無い場合は方法2へ
-    }
-
-    # 方法2: メニュー『表示 → 全画面モード』を UI Automation でクリック
-    for ($try = 1; $try -le 2 -and -not $done; $try++) {
-        $h2 = Get-ConsoleHwnd; if ($h2 -ne [IntPtr]::Zero) { $hwnd = $h2 }
-        Force-Foreground $hwnd | Out-Null
-        if (Invoke-ConsoleFullScreenMenu $hwnd) {
-            Start-Sleep -Milliseconds 700
-            if (Test-CoversScreen $hwnd $screen) { $done = $true; Log "コンソール: 全画面モードになりました (メニュー操作)" }
-        }
-    }
-
-    # 方法3: Ctrl+Alt+Break のキー送信
-    for ($try = 1; $try -le 4 -and -not $done; $try++) {
-        $h2 = Get-ConsoleHwnd; if ($h2 -ne [IntPtr]::Zero) { $hwnd = $h2 }
-        $fgOk = Force-Foreground $hwnd
-        if (-not $fgOk) { Log "コンソール: 前面化に失敗 (キー送信 試行 $try)" }
-        if ($try % 2 -eq 1) { [System.Windows.Forms.SendKeys]::SendWait("^%{BREAK}") } else { Send-CtrlAltBreak }
-        Start-Sleep -Milliseconds 1500
-        if (Test-CoversScreen $hwnd $screen) { $done = $true; Log "コンソール: 全画面モードになりました (キー送信 試行 $try)" }
-    }
+    $done = Enter-ConsoleFullScreen $screen
 
     if ($done) { Start-Sleep -Milliseconds 800; Hide-ConsoleBar $screen | Out-Null }
 
     # 方法4: 黒背景を敷き、枠を外したコンソールを「実際の映像サイズ」で中央に重ねる
     if (-not $done) {
         Log "コンソール: 全画面モードの切り替えが効きませんでした。代替表示に切り替えます。"
+        $script:ConsoleFallback = $true   # 仕上げの処理で全画面に戻そうとしない
         if ($cfg.ConsoleStripFrame -ne $false) {
             # EdgeBox がいま実際に出している映像の解像度を調べる (設定値ではなく実測)
             $vw = 0; $vh = 0
@@ -1858,17 +1975,16 @@ if ($leftIsConsole -and $rightIsBrowser) {
     }
     $ch = Get-ConsoleHwnd
     if ($ch -ne [IntPtr]::Zero) {
-        if (-not (Test-CoversScreen $ch $leftScreen)) {
+        if ($LeftFull -and -not $script:ConsoleFallback -and -not (Test-ConsoleFullScreenOn $leftScreen.Bounds)) {
             Log "コンソール: ブラウザ表示後に全画面が外れていたため、戻します。"
             [FieldWin]::ShowWindow($ch, 9) | Out-Null
             [FieldWin]::MoveWindow($ch, $leftScreen.Bounds.X, $leftScreen.Bounds.Y, 900, 700, $true) | Out-Null
             Start-Sleep -Milliseconds 300
-            Invoke-ConsoleMenuCommand $ch '全画面|Full' | Out-Null
-            Start-Sleep -Milliseconds 900
+            Enter-ConsoleFullScreen $leftScreen | Out-Null
             $ch2 = Get-ConsoleHwnd; if ($ch2 -ne [IntPtr]::Zero) { $ch = $ch2 }
         }
         Force-Foreground $ch | Out-Null
-        Hide-ConsoleBar $leftScreen | Out-Null
+        if ($LeftFull -and -not $script:ConsoleFallback) { Hide-ConsoleBar $leftScreen | Out-Null }
     }
 }
 
