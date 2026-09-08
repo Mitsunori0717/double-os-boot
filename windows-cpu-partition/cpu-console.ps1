@@ -23,8 +23,8 @@
 param(
     [string]$VMName = "EdgeBox",
     [switch]$Setup,
-    # EdgeBox に最低限割り当てるべき物理コア数 (安全装置)
-    [int]$MinGuestCores = 4
+    # EdgeBox に最低限割り当てるべき物理コア数 (安全装置)。E コア 8 個を EdgeBox 専用にする運用が既定
+    [int]$MinGuestCores = 8
 )
 
 $ErrorActionPreference = "Stop"
@@ -469,6 +469,12 @@ $script:SavedCfg = $null
 if (Test-Path $ConfigFile) {
     try { $script:SavedCfg = Get-Content $ConfigFile -Raw -Encoding UTF8 | ConvertFrom-Json } catch { }
 }
+# 混成 CPU の既定の割り当て: 末尾の E コアを $MinGuestCores 個 (足りなければ全部) EdgeBox に、残りは Windows に
+function Set-DefaultHybridPlan {
+    foreach ($c in $script:Cores) { $c.State = "Host" }
+    $eTail = @($script:Cores | Where-Object { $_.Kind -eq "E" } | Sort-Object Id -Descending | Select-Object -First $MinGuestCores)
+    foreach ($c in $eTail) { $c.State = "Guest" }
+}
 function Set-StatesFromLps($HostLps, $GuestLps) {
     foreach ($c in $script:Cores) {
         $inHost  = @($c.Lps | Where-Object { $HostLps  -contains $_ }).Count -gt 0
@@ -479,9 +485,10 @@ function Set-StatesFromLps($HostLps, $GuestLps) {
 if ($script:SavedCfg) {
     Set-StatesFromLps @([int[]]$script:SavedCfg.HostLps) @([int[]]$script:SavedCfg.GuestLps)
 } else {
-    # 既定の初期表示: 混成 CPU なら P=Windows / E=EdgeBox、それ以外は前半/後半で半分ずつ
+    # 既定の初期表示: 混成 CPU なら「末尾の E コア 8 個 = EdgeBox / 残り (P コア全部 + 先頭の E コア) = Windows」、
+    # それ以外は前半/後半で半分ずつ
     if ($script:Hybrid) {
-        foreach ($c in $script:Cores) { $c.State = $(if ($c.Kind -eq "E") { "Guest" } else { "Host" }) }
+        Set-DefaultHybridPlan
     } else {
         $half = [Math]::Max(1, [int]($script:Cores.Count / 2))
         foreach ($c in $script:Cores) { $c.State = $(if ($c.Id -lt $half) { "Host" } else { "Guest" }) }
@@ -553,19 +560,20 @@ $script:rbRuntime.Text = "runtime (再起動なし・Windows 側も締め出し)
 $script:rbRuntime.Location = New-Object System.Drawing.Point(96, 55)
 $script:rbRuntime.Size = New-Object System.Drawing.Size(250, 24)
 $script:rbFull = New-Object System.Windows.Forms.RadioButton
-$script:rbFull.Text = "full (完全分割・再起動が必要)"
+$script:rbFull.Text = "full (完全分割・再起動 1 回。推奨)"
 $script:rbFull.Location = New-Object System.Drawing.Point(356, 55)
 $script:rbFull.Size = New-Object System.Drawing.Size(240, 24)
-if ($script:SavedCfg -and $script:SavedCfg.Mode -eq "full") { $script:rbFull.Checked = $true } else { $script:rbRuntime.Checked = $true }
+# 既定は full (完全分割)。保存済みの計画があればその方式に従う
+if ($script:SavedCfg -and $script:SavedCfg.Mode -eq "runtime") { $script:rbRuntime.Checked = $true } else { $script:rbFull.Checked = $true }
 $grpMode.Controls.AddRange(@($script:rbRuntime, $script:rbFull))
 
 $grpMode.Controls.Add((New-Lbl "EdgeBox 側の最低コア数:" 646 58))
 $script:numMin = New-Object System.Windows.Forms.NumericUpDown
 $script:numMin.Location = New-Object System.Drawing.Point(790, 55)
 $script:numMin.Size = New-Object System.Drawing.Size(56, 24)
-$script:numMin.Minimum = 1
+$script:numMin.Minimum = $(if ($script:Hybrid -and @($script:Cores | Where-Object { $_.Kind -eq "E" }).Count -ge $MinGuestCores) { $MinGuestCores } else { 1 })
 $script:numMin.Maximum = 32
-$script:numMin.Value = [Math]::Max(1, [Math]::Min(32, $MinGuestCores))
+$script:numMin.Value = [Math]::Max([int]$script:numMin.Minimum, [Math]::Min(32, $MinGuestCores))
 $grpMode.Controls.Add($script:numMin)
 $grpMode.Controls.Add((New-Lbl "コア" 852 58))
 $form.Controls.Add($grpMode)
@@ -585,11 +593,11 @@ function Set-AllStates([string]$State) {
 }
 $presetX = 112
 if ($script:Hybrid) {
-    $form.Controls.Add((New-Preset "P コア = Windows / E コア = EdgeBox (推奨)" $presetX 280 {
-        foreach ($c in $script:Cores) { $c.State = $(if ($c.Kind -eq "E") { "Guest" } else { "Host" }) }
+    $form.Controls.Add((New-Preset ("末尾の E コア {0} 個 = EdgeBox / 残り = Windows (推奨)" -f $MinGuestCores) $presetX 300 {
+        Set-DefaultHybridPlan
         Sync-AllTiles; Update-Validation
     }))
-    $presetX += 288
+    $presetX += 308
 }
 $form.Controls.Add((New-Preset "EdgeBox は最低数だけ" $presetX 160 {
     $need = [int]$script:numMin.Value
@@ -622,10 +630,15 @@ function New-Tile($Core) {
     $b.Add_Click({
         param($s, $e)
         $c = $script:Cores[[int]$s.Tag]
-        switch ($c.State) {
-            "Host"  { $c.State = "Guest" }
-            "Guest" { $c.State = "None" }
-            default { $c.State = "Host" }
+        if ($script:Hybrid -and $c.Kind -eq "P") {
+            # P コアは Windows 専用 (EdgeBox には割り当てない): Windows 用 ⇔ 未割当
+            $c.State = $(if ($c.State -eq "Host") { "None" } else { "Host" })
+        } else {
+            switch ($c.State) {
+                "Host"  { $c.State = "Guest" }
+                "Guest" { $c.State = "None" }
+                default { $c.State = "Host" }
+            }
         }
         Sync-Tile $c
         Update-Validation
@@ -682,7 +695,7 @@ if ($script:Hybrid) {
     $form.Controls.Add($grpA)
 }
 
-$lblHint = New-Lbl "タイルをクリックするたびに  Windows 用 → EdgeBox 用 → 未割当  と切り替わります" 16 478 700
+$lblHint = New-Lbl "タイルをクリックするたびに  Windows 用 → EdgeBox 用 → 未割当  と切り替わります (P コアは Windows 専用。EdgeBox は末尾の E コアに、最低数以上)" 16 478 900
 $lblHint.ForeColor = [System.Drawing.Color]::DimGray
 $form.Controls.Add($lblHint)
 
@@ -839,7 +852,16 @@ function Update-Header {
     }
     $script:lblCpu1.Text = $t
     $mr = if ($script:UnderMinroot) { "有効 — Windows は $($script:VisibleLps) 論理 CPU に封じ込め中" } else { "未使用" }
-    $script:lblCpu2.Text = "ハイパーバイザーのスケジューラ: {0}    minroot: {1}" -f $script:Scheduler, $mr
+    $fs = ""
+    if ($script:SavedCfg -and $script:SavedCfg.Mode -eq "full") {
+        $st = $null
+        try { $f = Join-Path $PSScriptRoot "cpu-full-status.json"; if (Test-Path $f) { $st = Get-Content $f -Raw -Encoding UTF8 | ConvertFrom-Json } } catch { }
+        if (-not $st) { $fs = "    完全分割: 再起動待ち" }
+        elseif ($st.Bound) { $fs = "    完全分割: 成立 (EdgeBox = CPU $($st.GuestLps))" }
+        elseif (-not $st.MinrootOk) { $fs = "    完全分割: 再起動待ち" }
+        else { $fs = "    完全分割: 準分割 (EdgeBox の固定が効いていません。『EdgeBox 監視』で確認)" }
+    }
+    $script:lblCpu2.Text = ("ハイパーバイザーのスケジューラ: {0}    minroot: {1}" -f $script:Scheduler, $mr) + $fs
     if ($script:Vm) {
         $script:lblVm.Text = "状態: {0}    プロセッサ: {1}    メモリ: {2} GB{3}" -f $script:Vm.State, $script:Vcpu,
             $script:MemVmGB, $(if ($script:MemDynamic) { " (動的)" } else { "" })
@@ -897,6 +919,19 @@ function Update-Validation {
     if ($sel.GuestLps.Count -gt 0 -and $sel.GuestLps.Count -lt 8) {
         $warnings += "$($script:VmNameSel) 側が $($sel.GuestLps.Count) スレッドです (EdgeBox の元の構成 4 コア 8 スレッドを下回ります)。"
     }
+    if ($script:Hybrid) {
+        # EdgeBox は E コア専用。P コアは Windows 側に残す (混ざらない・速さの違うコアを混ぜない)
+        $gp0 = @($guestCoreObjs | Where-Object { $_.Kind -eq "P" })
+        if ($gp0.Count -gt 0) { $errors += "$($script:VmNameSel) に P コアは割り当てられません ($(($gp0 | ForEach-Object { $_.Label }) -join ', '))。EdgeBox は E コア専用です。" }
+        # EdgeBox 用の E コアは末尾に固めておく (full の minroot 条件 = Windows は先頭から連番 を満たすため)
+        $eAll = @($script:Cores | Where-Object { $_.Kind -eq "E" } | Sort-Object Id)
+        $firstGuest = -1
+        for ($k = 0; $k -lt $eAll.Count; $k++) { if ($eAll[$k].State -eq "Guest") { $firstGuest = $k; break } }
+        if ($firstGuest -ge 0) {
+            $gap = @($eAll | Select-Object -Skip $firstGuest | Where-Object { $_.State -ne "Guest" })
+            if ($gap.Count -gt 0) { $errors += "$($script:VmNameSel) 用の E コアは末尾に続けて並べてください (間に Windows 用・未割当の E コアがあります: $(($gap | ForEach-Object { $_.Label }) -join ', '))。" }
+        }
+    }
 
     # --- 方式ごとの成立条件 ---
     $script:btnFix.Visible = $false
@@ -925,7 +960,7 @@ function Update-Validation {
             $errors += "full では Windows 側が CPU 0 から続き番号である必要があります (minroot の仕様)。現在: CPU $(ConvertTo-LpRangeText $sel.HostLps)"
             $script:btnFix.Visible = $true
         }
-        $warnings += "full は再起動が必要です (設定を書き込み → 再起動 → もう一度 [この内容で適用] で完了)。"
+        $warnings += "full は再起動が 1 回必要です (適用 → 再起動。再起動後は起動タスクが自動で完了します)。"
     }
 
     # --- 分割の質 ---
@@ -1131,7 +1166,7 @@ $script:btnApply.Add_Click({
         "  Windows            : CPU $hostText  ($($sel.HostCores) コア)`n" +
         "  $($script:VmNameSel) : CPU $guestText  ($($sel.GuestCores) コア)`n" +
         "  方式               : $mode`n`n" +
-        $(if ($mode -eq "full") { "この後 PC の再起動が必要です。`n`n" } else { "" }) +
+        $(if ($mode -eq "full") { "この後 PC の再起動が 1 回必要です (再起動後は自動で完了します)。`n`n" } else { "" }) +
         "よろしいですか? (いつでも [分割を解除] で元に戻せます)"
     $r = [System.Windows.Forms.MessageBox]::Show($confirm, "CPU コア割り当て",
         [System.Windows.Forms.MessageBoxButtons]::YesNo, [System.Windows.Forms.MessageBoxIcon]::Question)
@@ -1164,8 +1199,9 @@ $script:btnApply.Add_Click({
     $pending = $script:Bcd -and ($script:Bcd.RootProc -gt 0) -and ($script:VisibleLps -ne $script:Bcd.RootProc)
     if ($mode -eq "full" -and $pending) {
         $r2 = [System.Windows.Forms.MessageBox]::Show(
-            "設定を書き込みました (第 1 段階)。`n`n" +
-            "PC を再起動したあと、もう一度この画面で [この内容で適用] を押すと完了します。`n`n" +
+            "設定を書き込みました。`n`n" +
+            "PC を再起動すると、起動タスクが CPU グループを作成して EdgeBox を E コアに固定し、EdgeBox を起動します (以後、起動のたびに自動)。`n" +
+            "成立したかは、この画面の上部か『EdgeBox 監視』の「分離の状態」で確認できます。`n`n" +
             "今すぐ再起動しますか?", "CPU コア割り当て",
             [System.Windows.Forms.MessageBoxButtons]::YesNo, [System.Windows.Forms.MessageBoxIcon]::Question)
         if ($r2 -eq [System.Windows.Forms.DialogResult]::Yes) { Restart-Computer -Force }
@@ -1223,7 +1259,7 @@ function Show-CoreChooser([int[]]$Preselect, [string]$Title, [int[]]$GuestLps) {
     $d.MaximizeBox = $false
     $d.Font = New-Object System.Drawing.Font("Meiryo UI", 9)
 
-    $lbl = New-Lbl "このアプリを動かすコアを選びます (複数選択可)。緑はEdgeBox 用のコアです。" 12 10 660
+    $lbl = New-Lbl "このアプリを動かすコアを選びます (複数選択可)。EdgeBox 用のコアは選べないため表示していません。" 12 10 660
     $d.Controls.Add($lbl)
 
     $fp = New-Object System.Windows.Forms.FlowLayoutPanel
@@ -1235,6 +1271,7 @@ function Show-CoreChooser([int[]]$Preselect, [string]$Title, [int[]]$GuestLps) {
 
     $boxes = @{}
     foreach ($c in $script:Cores) {
+        if (@($c.Lps | Where-Object { $GuestLps -contains $_ }).Count -gt 0) { continue }   # EdgeBox 用は選ばせない
         $cb = New-Object System.Windows.Forms.CheckBox
         $cb.Text = "{0}  (CPU {1})" -f $c.Label, (ConvertTo-LpRangeText $c.Lps)
         $cb.Size = New-Object System.Drawing.Size(158, 24)
@@ -1250,6 +1287,7 @@ function Show-CoreChooser([int[]]$Preselect, [string]$Title, [int[]]$GuestLps) {
         param([string]$Kind)
         foreach ($c in $script:Cores) {
             $b = $boxes[$c.Id]
+            if (-not $b) { continue }
             switch ($Kind) {
                 "host"  { $b.Checked = ($c.State -eq "Host") }
                 "p"     { $b.Checked = ($c.Kind -eq "P" -and $c.State -ne "Guest") }
@@ -1287,7 +1325,7 @@ function Show-CoreChooser([int[]]$Preselect, [string]$Title, [int[]]$GuestLps) {
 
     if ($d.ShowDialog() -ne "OK") { return $null }
     $lps = @()
-    foreach ($c in $script:Cores) { if ($boxes[$c.Id].Checked) { $lps += $c.Lps } }
+    foreach ($c in $script:Cores) { if ($boxes[$c.Id] -and $boxes[$c.Id].Checked) { $lps += $c.Lps } }
     $lps = @($lps | Sort-Object -Unique)
     if ($lps.Count -eq 0) {
         Show-Info "コアが 1 つも選ばれていません。変更しませんでした。" "Warning"

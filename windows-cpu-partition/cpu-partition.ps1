@@ -32,6 +32,10 @@
         両方向とも物理的な分割になります。CpuGroups.exe が使えない環境では
         minroot + 処理能力予約 (-Reserve) までの「準分割」で止まり、その旨を
         正直に報告します。
+        手順は「-Apply -Mode full → 再起動」だけ。再起動後は起動タスク 'CpuPartition-Boot' が
+        CPU グループの作成と EdgeBox の固定を自動で行い、以後も起動のたびに作り直します
+        (CPU グループは再起動で消えるため)。成立状態は cpu-full-status.json に書き、
+        『EdgeBox 監視』と設定コンソールに表示します。
         ※ スケジューラ変更はクライアント版 Windows では Microsoft の公式
            サポート外の構成です (動作実績は広くあります)。工場 PC のような
            専用用途向けで、-Undo でいつでも既定へ戻せます。
@@ -96,6 +100,7 @@ param(
     # --- 内部用 (自動タスクが呼ぶ) ---
     [switch]$ApplyRuntime,
     [switch]$Watch,             # 常駐: vmmem を EdgeBox 用コアへ、それ以外の全プロセスを Windows 用コアへ固定し続ける
+    [switch]$BootApply,         # full モードの起動時処理: CPU グループを作り直して EdgeBox を固定し、EdgeBox を起動する
     [switch]$Quiet,
     [switch]$NoConfirm
 )
@@ -107,6 +112,8 @@ $LogFile     = Join-Path $PSScriptRoot "cpu-partition-log.txt"
 $ToolsDir    = Join-Path $PSScriptRoot "tools"
 $PinTaskName = "CpuPartition-Pin"
 $WatchTaskName = "CpuPartition-Watch"                        # 締め出しの常駐タスク
+$BootTaskName  = "CpuPartition-Boot"                         # full モード: 起動のたびに CPU グループを作り直すタスク
+$FullStatusFile = Join-Path $PSScriptRoot "cpu-full-status.json"   # full モードの成立状態 (監視画面・設定コンソールが読む)
 $ContainStatusFile = Join-Path $PSScriptRoot "cpu-contain-status.json"   # 常駐の状態 (監視画面が読む)
 $AppsFile    = Join-Path $PSScriptRoot "cpu-apps.json"       # アプリ単位の割り当て (締め出しの例外)
 $GroupId     = "b0edb0ed-c01e-4a11-8000-0000000000e1"   # 本ツール専用の CPU グループ固定 ID
@@ -348,6 +355,210 @@ function Invoke-CpuGroups([string]$Exe, [string[]]$CgArgs) {
     $ErrorActionPreference = "Continue"   # 失敗も戻り値で扱う (stderr で停止させない)
     $out = (& $Exe $CgArgs 2>&1 | Out-String).Trim()
     [pscustomobject]@{ Ok = ($LASTEXITCODE -eq 0); ExitCode = $LASTEXITCODE; Output = $out }
+}
+
+# --- CpuGroups.exe の取得 (Microsoft Download Center)。戻り値: パス (取れなければ $null) ---
+function Get-CpuGroupsExe {
+    $exe = Find-CpuGroupsExe
+    if ($exe) { return $exe }
+    try {
+        if (-not (Test-Path $ToolsDir)) { New-Item -ItemType Directory -Path $ToolsDir | Out-Null }
+        $dest = Join-Path $ToolsDir "CpuGroups.exe"
+        try { [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12 } catch { }
+        Invoke-WebRequest -Uri $CpuGroupsUrl -OutFile $dest -UseBasicParsing
+        $head = [System.IO.File]::ReadAllBytes($dest)[0..1]
+        if ($head[0] -ne 0x4D -or $head[1] -ne 0x5A) {   # "MZ" = 実行ファイルの印
+            Remove-Item $dest -Force
+            throw "取得したファイルが実行ファイルではありません (リンク先が変更された可能性)"
+        }
+        Write-PinLog "CpuGroups.exe を取得: $dest"
+        return $dest
+    } catch {
+        Write-PinLog "CpuGroups.exe の取得に失敗: $($_.Exception.Message)"
+        return $null
+    }
+}
+
+# --- EdgeBox がいまどの CPU グループに属しているか (GUID 小文字。無し/不明は "") ---
+function Get-VmGroupId([string]$Exe, [string]$Name) {
+    $r = Invoke-CpuGroups $Exe @("GetVmGroup", "/VmName:$Name")
+    if (-not $r.Ok) { return "" }
+    if ($r.Output -match '([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})') { return $Matches[1].ToLower() }
+    return ""
+}
+
+# --- CPU グループを作り直して EdgeBox を固定する (何度呼んでも同じ結果になる) ---
+# 戻り値: @{ Bound = 成立したか; Message = 説明 }
+function Invoke-FullBind([string]$Exe, [int[]]$GuestArr, $VmObj) {
+    if (-not $Exe) { return [pscustomobject]@{ Bound = $false; Message = "CpuGroups.exe がありません" } }
+    if (-not $VmObj) { return [pscustomobject]@{ Bound = $false; Message = "登録 '$VMName' が未作成です" } }
+    $cur = Get-VmGroupId $Exe $VMName
+    if ($cur -eq $GroupId.ToLower()) {
+        return [pscustomobject]@{ Bound = $true; Message = "EdgeBox は CPU グループ (CPU $(ConvertTo-LpRangeText $GuestArr)) に固定済み" }
+    }
+    if (-not $cur) {
+        # 所属を照会できない環境では、グループが既にあれば固定済みとみなす
+        # (照会できないからといって 5 分ごとにほどいて作り直すと、固定が外れる瞬間ができる)
+        $rHave = Invoke-CpuGroups $Exe @("GetGroups", "/GroupId:$GroupId")
+        if ($rHave.Ok -and $rHave.Output -match [regex]::Escape($GroupId.Substring(0, 8))) {
+            return [pscustomobject]@{ Bound = $true; Message = "CPU グループ (CPU $(ConvertTo-LpRangeText $GuestArr)) は作成済み (所属の照会は不可)" }
+        }
+    }
+    # 作り直しに備えて一旦ほどく (存在しなければ単に失敗し、無視してよい)
+    Invoke-CpuGroups $Exe @("SetVmGroup", "/VmName:$VMName", "/GroupId:$NullGroupId") | Out-Null
+    Invoke-CpuGroups $Exe @("DeleteGroup", "/GroupId:$GroupId") | Out-Null
+    $rCreate = Invoke-CpuGroups $Exe @("CreateGroup", "/GroupId:$GroupId", "/GroupAffinity:$($GuestArr -join ',')")
+    if (-not $rCreate.Ok) {
+        return [pscustomobject]@{ Bound = $false; Message = "CPU グループを作成できません: $($rCreate.Output)" }
+    }
+    $rBind = Invoke-CpuGroups $Exe @("SetVmGroup", "/VmName:$VMName", "/GroupId:$GroupId")
+    if (-not $rBind.Ok) {
+        $why = $rBind.Output
+        if ([string]$VmObj.State -ne "Off") { $why += " (EdgeBox 実行中。停止中なら固定できる可能性があります)" }
+        return [pscustomobject]@{ Bound = $false; Message = "EdgeBox を CPU グループに割り当てられません: $why" }
+    }
+    return [pscustomobject]@{ Bound = $true; Message = "CPU グループを作成し、EdgeBox を CPU $(ConvertTo-LpRangeText $GuestArr) に固定しました" }
+}
+
+function Write-FullStatus([hashtable]$H) {
+    try {
+        $H["At"] = (Get-Date -Format "yyyy-MM-dd HH:mm:ss")
+        [pscustomobject]$H | ConvertTo-Json -Depth 3 | Set-Content -Path $FullStatusFile -Encoding UTF8
+    } catch { }
+}
+
+# full モードの起動時タスク (SYSTEM・起動時に開始・その後 5 分ごとに確かめ直す)
+function Register-BootTask {
+    $action = New-ScheduledTaskAction -Execute "powershell.exe" `
+        -Argument "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$PSCommandPath`" -BootApply -Quiet"
+    $principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
+    $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
+        -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 10)
+    $boot = New-ScheduledTaskTrigger -AtStartup
+    $logonRep = New-ScheduledTaskTrigger -AtLogOn
+    try {
+        $logonRep.Repetition = (New-ScheduledTaskTrigger -Once -At (Get-Date) `
+            -RepetitionInterval (New-TimeSpan -Minutes 5)).Repetition
+    } catch { }
+    $logonPlain = New-ScheduledTaskTrigger -AtLogOn
+    $lastErr = $null
+    foreach ($trig in @(@($boot, $logonRep), @($boot, $logonPlain), @($boot))) {
+        try {
+            Register-ScheduledTask -TaskName $BootTaskName -Trigger $trig -Action $action -Principal $principal -Settings $settings -Force | Out-Null
+            return
+        } catch { $lastErr = $_ }
+    }
+    throw "起動タスク '$BootTaskName' を登録できませんでした: $($lastErr.Exception.Message)"
+}
+function Unregister-BootTask {
+    try { Unregister-ScheduledTask -TaskName $BootTaskName -Confirm:$false -ErrorAction SilentlyContinue } catch { }
+    Remove-Item $FullStatusFile -Force -ErrorAction SilentlyContinue
+}
+
+# full モードの成立状態 (状態ファイルから)。戻り値: 表示用の 1 行
+function Get-FullStatusText {
+    $st = $null
+    try { if (Test-Path $FullStatusFile) { $st = Get-Content $FullStatusFile -Raw -Encoding UTF8 | ConvertFrom-Json } } catch { }
+    if (-not $st) { return "まだ起動タスクが動いていません (再起動後に自動で行います)" }
+    if ($st.Bound) { return ("完全分割 成立 — Windows は CPU {0} に封じ込め (minroot) / EdgeBox は CPU {1} に固定 (CPU グループ)  最終確認 {2}" -f $st.HostLps, $st.GuestLps, $st.At) }
+    if (-not $st.MinrootOk) { return ("未反映 — {0}  最終確認 {1}" -f $st.Message, $st.At) }
+    return ("準分割 (EdgeBox の固定が効いていません: {0})  最終確認 {1}" -f $st.Message, $st.At)
+}
+
+# full モードの第 2 段階 (再起動後): minroot の反映を確かめ、CPU グループで EdgeBox を固定し、
+# 状態を記録して、自動起動を任されていれば EdgeBox を起動する。起動タスクからも手動 -Apply からも呼ぶ。
+# 何度呼んでも同じ結果になる。戻り値: 完全分割が成立したか
+function Invoke-FullStage2([int[]]$HostArr, [int[]]$GuestArr, [bool]$Interactive) {
+    $hostText = ConvertTo-LpRangeText $HostArr
+    $guestText = ConvertTo-LpRangeText $GuestArr
+    $wantRootProc = $HostArr.Count
+    $topo2 = Get-CpuTopology
+    $schedNow2 = Get-HvSchedulerType
+    $visibleLps = [Environment]::ProcessorCount
+    # SMT なしの CPU では core 指定でも classic として動作・報告される (仕様) ため同一視する
+    $schedOk = ($schedNow2 -eq $Scheduler) -or
+        ($Scheduler -eq "core" -and $schedNow2 -eq "classic" -and $topo2.SmtPerCore -eq 1)
+    if (-not $schedOk -or $visibleLps -ne $wantRootProc) {
+        $msg = "ハイパーバイザー設定が未反映 (スケジューラ=$schedNow2 期待=$Scheduler / Windows から見える論理 CPU=$visibleLps 期待=$wantRootProc)"
+        Write-FullStatus @{ MinrootOk = $false; Bound = $false; Message = $msg; HostLps = $hostText; GuestLps = $guestText; Scheduler = $schedNow2; VisibleLps = $visibleLps }
+        Write-PinLog "Full: $msg"
+        if ($Interactive) {
+            Write-Host ""
+            Write-Host "設定はまだ反映されていません:" -ForegroundColor Yellow
+            Write-Host "  現在のスケジューラ: $schedNow2 (期待: $Scheduler)"
+            Write-Host "  Windows から見える論理 CPU: $visibleLps (期待: $wantRootProc)"
+            if ($schedNow2 -eq "root") {
+                Write-Host "PC をまだ再起動していない場合は、再起動してください (再起動後は起動タスクが自動で完了します)。" -ForegroundColor Yellow
+            } else {
+                Write-Host "再起動済みでこの表示の場合、この PC では minroot が効いていません。" -ForegroundColor Red
+                Write-Host "  → .\cpu-partition.ps1 -Undo で戻したうえで、-Mode runtime をご利用ください。" -ForegroundColor Red
+            }
+        }
+        return $false
+    }
+    Say "  反映を確認: スケジューラ=$schedNow2 / Windows は論理 $visibleLps 個に封じ込め済み" "Green"
+    Say "  → Windows のプロセス・割り込みは CPU $hostText の外には出られません (isolcpus 相当)"
+
+    # runtime 用の自動タスク・常駐は不要 (minroot が Windows を封じ込める)
+    try { Unregister-ScheduledTask -TaskName $PinTaskName -Confirm:$false -ErrorAction Stop } catch { }
+    Stop-WatchTask
+
+    # CpuGroups.exe
+    $exe2 = Find-CpuGroupsExe
+    if (-not $exe2) {
+        $get = (-not $Interactive) -or $AutoGetTools
+        if (-not $get -and $Interactive -and -not $NoConfirm) {
+            Write-Host ""
+            Write-Host "EdgeBox 側の完全固定には Microsoft 製 CpuGroups.exe が必要です (未検出)。" -ForegroundColor Yellow
+            $get = ((Read-Host "Microsoft Download Center から取得しますか? (y/N)") -eq "y")
+        }
+        if ($get) { $exe2 = Get-CpuGroupsExe }
+        if ($exe2) { Say "  CpuGroups.exe を取得しました: $exe2" "Green" }
+        elseif ($Interactive) { Write-Host "  CpuGroups.exe がありません。手動で入手する場合: $CpuGroupsUrl をブラウザで開き、tools\ に置いてください。" -ForegroundColor Yellow }
+    }
+
+    $vm2 = $null
+    try { $vm2 = Get-VM -Name $VMName -ErrorAction Stop } catch { }
+    # vCPU 数と EdgeBox 用コア数を合わせる (停止中のみ変更可能)
+    if ($vm2 -and [string]$vm2.State -eq "Off") {
+        try {
+            $vcpu2 = [int](Get-VMProcessor -VMName $VMName).Count
+            if ($vcpu2 -ne $GuestArr.Count) {
+                Set-VMProcessor -VMName $VMName -Count $GuestArr.Count
+                Write-PinLog "Full: プロセッサ数を $vcpu2 → $($GuestArr.Count) に合わせました"
+            }
+        } catch { }
+    }
+
+    $bind = Invoke-FullBind $exe2 $GuestArr $vm2
+    Write-PinLog "Full: $($bind.Message)"
+    if ($bind.Bound) {
+        Say "  $($bind.Message)" "Green"
+    } else {
+        Say "  $($bind.Message)" "Yellow"
+        if ($Interactive) {
+            Write-Host "  (CPU グループは Windows Server の機能で、クライアント版では動かない環境もあります)" -ForegroundColor Yellow
+        }
+        # 準分割の仕上げ: 処理能力予約 (停止中のみ設定可能)
+        if (-not $NoReserve -and $vm2 -and [string]$vm2.State -eq "Off") {
+            try { Set-VMProcessor -VMName $VMName -Reserve 100; Say "  代わりに処理能力予約 (Reserve 100%) を設定しました" "Yellow" } catch { }
+        }
+    }
+
+    $cfg2 = Get-SavedConfig
+    if ($cfg2) {
+        $cfg2 | Add-Member -NotePropertyName GroupBound -NotePropertyValue ([bool]$bind.Bound) -Force
+        $cfg2 | Add-Member -NotePropertyName PendingReboot -NotePropertyValue $false -Force
+        Save-Config $cfg2
+    }
+    Write-FullStatus @{ MinrootOk = $true; Bound = [bool]$bind.Bound; Message = $bind.Message; HostLps = $hostText; GuestLps = $guestText; Scheduler = $schedNow2; VisibleLps = $visibleLps }
+
+    # EdgeBox の自動起動を任されている場合は、固定したあとに起動する (固定できなくても止めたままにはしない)
+    if ($vm2 -and [string]$vm2.State -eq "Off" -and $cfg2 -and $cfg2.ManageVmStart) {
+        try { Start-VM -Name $VMName -ErrorAction Stop; Write-PinLog "Full: EdgeBox を起動しました" }
+        catch { Write-PinLog "Full: EdgeBox の起動に失敗: $($_.Exception.Message)" }
+    }
+    return [bool]$bind.Bound
 }
 
 # ============================================================ 分割案の決定
@@ -722,6 +933,31 @@ if ($MemoryGB -gt 0) {
     exit 0
 }
 
+# ============================================================ -BootApply (full モードの起動時処理・内部用)
+#   CPU グループは再起動で消えるため、起動のたびに作り直して EdgeBox を固定し、そのあと EdgeBox を起動する。
+#   5 分ごとにも呼ばれ、固定が外れていれば作り直す (何度呼んでも同じ結果)
+
+if ($BootApply) {
+    $cfgB = Get-SavedConfig
+    if (-not $cfgB -or $cfgB.Mode -ne "full") { exit 0 }
+    if ($cfgB.VMName) { $VMName = [string]$cfgB.VMName }
+    if ($cfgB.Scheduler) { $Scheduler = [string]$cfgB.Scheduler }
+    # Hyper-V の管理サービスが上がるまで待つ (最大 3 分)
+    for ($i = 0; $i -lt 36; $i++) {
+        $svc = Get-Service vmms -ErrorAction SilentlyContinue
+        if ($svc -and $svc.Status -eq "Running") { break }
+        Start-Sleep -Seconds 5
+    }
+    Start-Sleep -Seconds 3
+    try {
+        Invoke-FullStage2 @([int[]]$cfgB.HostLps) @([int[]]$cfgB.GuestLps) $false | Out-Null
+    } catch {
+        Write-PinLog "BootApply: エラー $($_.Exception.Message)"
+        Write-FullStatus @{ MinrootOk = $false; Bound = $false; Message = ("起動時処理でエラー: " + $_.Exception.Message); HostLps = (ConvertTo-LpRangeText @([int[]]$cfgB.HostLps)); GuestLps = (ConvertTo-LpRangeText @([int[]]$cfgB.GuestLps)) }
+    }
+    exit 0
+}
+
 # ============================================================ -Watch (常駐・内部用)
 #   3 秒ごとに見回り: (1) 10 秒に 1 回 vmmem / vmwp の固定を確かめ直す
 #                     (2) EdgeBox 用コアに掛かっている Windows 側のプロセスを Windows 用コアへ戻す
@@ -1003,6 +1239,18 @@ if ($Undo) {
     $hadWatch = [bool](Get-ScheduledTask -TaskName $WatchTaskName -ErrorAction SilentlyContinue)
     Stop-WatchTask
     if ($hadWatch) { Write-Host "  常駐 '$WatchTaskName' を停止・削除しました" -ForegroundColor Green }
+    if (Get-ScheduledTask -TaskName $BootTaskName -ErrorAction SilentlyContinue) {
+        Unregister-BootTask
+        Write-Host "  起動タスク '$BootTaskName' を削除しました" -ForegroundColor Green
+    }
+    # full モードで EdgeBox の自動起動を起動タスクに任せていた場合は、元の自動起動設定に戻す
+    if ($cfgU -and $cfgU.VmAutoStart -and $cfgU.VmAutoStart.Action) {
+        try {
+            $vmA = Get-VM -Name $VMName -ErrorAction Stop
+            Set-VM -Name $VMName -AutomaticStartAction ([string]$cfgU.VmAutoStart.Action) -AutomaticStartDelay ([int]$cfgU.VmAutoStart.Delay)
+            Write-Host "  EdgeBox の自動起動設定を元に戻しました ($($cfgU.VmAutoStart.Action))" -ForegroundColor Green
+        } catch { }
+    }
     try {
         if ($cfgU -and $cfgU.HostLps) {
             $topoU = Get-CpuTopology
@@ -1323,6 +1571,7 @@ if (-not $Apply) {
         Write-Host ""
         Write-Host "  適用済みの計画    : $($cfg.Mode) モード / Windows = CPU $(ConvertTo-LpRangeText @([int[]]$cfg.HostLps)) / EdgeBox = CPU $(ConvertTo-LpRangeText @([int[]]$cfg.GuestLps))" -ForegroundColor Green
         if ($cfg.Mode -eq "runtime") { Write-Host "  Windows の締め出し : $(Get-ContainStatusText)" }
+        if ($cfg.Mode -eq "full")    { Write-Host "  完全分割の状態    : $(Get-FullStatusText)" }
     } else {
         Write-Host ""
         Write-Host "  適用済みの計画    : なし" -ForegroundColor Yellow
@@ -1480,7 +1729,7 @@ if (-not $bcd) { $bcd = Get-BcdHvSettings }
 $bcdReady = ($bcd.SchedulerType -eq $Scheduler) -and ($bcd.RootProc -eq $wantRootProc)
 
 if (-not $bcdReady) {
-    # ---- 第 1 段階: ハイパーバイザー設定の書き込み (要再起動) ----
+    # ---- 第 1 段階: ハイパーバイザー設定の書き込み (要再起動)。再起動後は起動タスクが残りを自動で行う ----
     Write-Host ""
     Write-Host "【第 1 段階】ハイパーバイザー設定を書き込みます (反映には再起動が必要):" -ForegroundColor Cyan
     Write-Host "    bcdedit /set hypervisorschedulertype $Scheduler"
@@ -1496,138 +1745,84 @@ if (-not $bcdReady) {
         if ($ans -ne "y") { exit 0 }
     }
 
+    # CpuGroups.exe は再起動前に用意しておく (起動直後はネットワークが無いことがある)
+    if (-not $exe) {
+        $get = [bool]$AutoGetTools
+        if (-not $get -and -not $NoConfirm) {
+            Write-Host "EdgeBox 側の完全固定には Microsoft 製 CpuGroups.exe が必要です (未検出)。" -ForegroundColor Yellow
+            $get = ((Read-Host "Microsoft Download Center から取得しますか? (y/N)") -eq "y")
+        }
+        if ($get) {
+            $exe = Get-CpuGroupsExe
+            if ($exe) { Write-Host "  CpuGroups.exe を取得しました: $exe" -ForegroundColor Green }
+            else { Write-Host "  CpuGroups.exe を取得できませんでした。手動で入手する場合: $CpuGroupsUrl をブラウザで開き、tools\ に置いてください。" -ForegroundColor Yellow }
+        }
+    }
+
     Invoke-Bcdedit @("/set", "hypervisorschedulertype", $Scheduler)
     Invoke-Bcdedit @("/set", "hypervisorrootproc", "$wantRootProc")
+
+    # EdgeBox の自動起動は起動タスクに任せる (CPU グループに固定してから起動するため)。元の設定は控えて -Undo で戻す
+    $auto = $null
+    if ($vm) {
+        try {
+            $auto = @{ Action = [string]$vm.AutomaticStartAction; Delay = [int]$vm.AutomaticStartDelay }
+            Set-VM -Name $VMName -AutomaticStartAction Nothing
+            Write-Host "  EdgeBox の自動起動は起動タスク '$BootTaskName' が行います (固定してから起動)" -ForegroundColor Green
+        } catch { $auto = $null }
+    }
 
     Save-Config ([pscustomobject]@{
         Mode = "full"; VMName = $VMName
         HostLps = $plan.HostLps; GuestLps = $plan.GuestLps
         Scheduler = $Scheduler; NoPriorityBoost = $false
+        VmAutoStart = $auto; ManageVmStart = [bool]$auto
+        PendingReboot = $true; GroupBound = $false
+        PendingVM = (-not $vm)
         UpdatedAt = (Get-Date -Format "yyyy-MM-dd HH:mm:ss")
     })
     Write-PinLog "Apply(full) 第1段階: sched=$Scheduler rootproc=$wantRootProc"
 
+    # runtime 用の自動タスク・常駐は外し、full 用の起動タスクを登録する
+    try { Unregister-ScheduledTask -TaskName $PinTaskName -Confirm:$false -ErrorAction Stop } catch { }
+    Stop-WatchTask
+    Register-BootTask
+    Write-FullStatus @{ MinrootOk = $false; Bound = $false; Message = "再起動待ち (再起動後に起動タスクが CPU グループを作成します)"; HostLps = $hostText; GuestLps = $guestText }
+    Write-Host "  起動タスク '$BootTaskName' を登録しました (再起動後、EdgeBox の固定まで自動で完了します)" -ForegroundColor Green
+
     Write-Host ""
-    Write-Host "書き込みました。PC を再起動してから、もう一度同じコマンドを実行してください:" -ForegroundColor Green
-    Write-Host "    .\cpu-partition.ps1 -Apply -Mode full" -ForegroundColor Cyan
-    Write-Host "  (計画は保存済みのため、コア指定の再入力は不要です)"
+    Write-Host "書き込みました。PC を再起動してください。再起動後は自動で完了します。" -ForegroundColor Green
+    Write-Host "  成立の確認: .\cpu-partition.ps1 (現状表示) または『EdgeBox 監視』の「分離の状態」" -ForegroundColor Cyan
     exit 0
 }
 
-# ---- 第 2 段階: 再起動後の確認とEdgeBox のコア固定 ----
+# ---- 第 2 段階: 再起動後の確認と EdgeBox のコア固定 (起動タスクと同じ処理を手動で行う) ----
 Write-Host ""
-Write-Host "【第 2 段階】再起動後の反映確認とEdgeBox のコア固定を行います。" -ForegroundColor Cyan
-
-$visibleLps = [Environment]::ProcessorCount
-# SMT なしの CPU では core 指定でも classic として動作・報告される (仕様) ため同一視する
-$schedOk = ($schedNow -eq $Scheduler) -or
-    ($Scheduler -eq "core" -and $schedNow -eq "classic" -and $topo.SmtPerCore -eq 1)
-if (-not $schedOk -or $visibleLps -ne $wantRootProc) {
-    Write-Host ""
-    Write-Host "設定はまだ反映されていません:" -ForegroundColor Yellow
-    Write-Host "  現在のスケジューラ: $schedNow (期待: $Scheduler)"
-    Write-Host "  Windows から見える論理 CPU: $visibleLps (期待: $wantRootProc)"
-    if ($schedNow -eq "root") {
-        Write-Host "PC をまだ再起動していない場合は、再起動してから再実行してください。" -ForegroundColor Yellow
-    } else {
-        Write-Host "再起動済みでこの表示の場合、この PC では minroot が効いていません。" -ForegroundColor Red
-        Write-Host "  → .\cpu-partition.ps1 -Undo で戻したうえで、-Mode runtime をご利用ください。" -ForegroundColor Red
-    }
-    exit 1
+Write-Host "【第 2 段階】再起動後の反映確認と EdgeBox のコア固定を行います。" -ForegroundColor Cyan
+Register-BootTask   # 旧版で登録されていない場合に備えて (再登録は無害)
+$bound = Invoke-FullStage2 $plan.HostLps $plan.GuestLps $true
+$cfgF = Get-SavedConfig
+if (-not $cfgF -or $cfgF.Mode -ne "full") {
+    Save-Config ([pscustomobject]@{
+        Mode = "full"; VMName = $VMName
+        HostLps = $plan.HostLps; GuestLps = $plan.GuestLps
+        Scheduler = $Scheduler; GroupBound = $bound; NoPriorityBoost = $false
+        PendingVM = (-not $vm); PendingReboot = $false
+        UpdatedAt = (Get-Date -Format "yyyy-MM-dd HH:mm:ss")
+    })
 }
-Write-Host "  反映を確認: スケジューラ=$schedNow / Windows は論理 $visibleLps 個に封じ込め済み" -ForegroundColor Green
-Write-Host "  → Windows のプロセス・割り込みは CPU $hostText の外には出られません (isolcpus 相当)"
-
-# runtime 用の自動タスク・常駐が残っていたら外す (full では minroot が Windows を封じ込めるので不要)
-try { Unregister-ScheduledTask -TaskName $PinTaskName -Confirm:$false -ErrorAction Stop } catch { }
-Stop-WatchTask
-
-# --- CpuGroups.exe の用意 ---
-if (-not $exe) {
-    Write-Host ""
-    Write-Host "EdgeBox 側の完全固定には Microsoft 製 CpuGroups.exe が必要です (未検出)。" -ForegroundColor Yellow
-    $dl = "n"
-    if (-not $NoConfirm) { $dl = Read-Host "Microsoft Download Center から取得しますか? (y/N)" }
-    if ($AutoGetTools) { $dl = "y" }
-    if ($dl -eq "y") {
-        try {
-            if (-not (Test-Path $ToolsDir)) { New-Item -ItemType Directory -Path $ToolsDir | Out-Null }
-            $dest = Join-Path $ToolsDir "CpuGroups.exe"
-            Invoke-WebRequest -Uri $CpuGroupsUrl -OutFile $dest -UseBasicParsing
-            $head = [System.IO.File]::ReadAllBytes($dest)[0..1]
-            if ($head[0] -ne 0x4D -or $head[1] -ne 0x5A) {   # "MZ" = 実行ファイルの印
-                Remove-Item $dest -Force
-                throw "取得したファイルが実行ファイルではありません (リンク先が変更された可能性)"
-            }
-            $exe = $dest
-            Write-Host "  取得しました: $dest" -ForegroundColor Green
-        } catch {
-            Write-Host "  取得できませんでした: $($_.Exception.Message)" -ForegroundColor Yellow
-            Write-Host "  手動で入手する場合: $CpuGroupsUrl をブラウザで開き、CpuGroups.exe を windows-host\tools\ に置いてください。"
-        }
-    }
-}
-
-$groupBound = $false
-if ($exe) {
-    Write-Host ""
-    Write-Host "CPU グループで 登録 '$VMName' を CPU $guestText に固定します..." -ForegroundColor Cyan
-    # 作り直しに備えて一旦ほどく (存在しなければ単に失敗し、無視してよい)
-    Invoke-CpuGroups $exe @("SetVmGroup", "/VmName:$VMName", "/GroupId:$NullGroupId") | Out-Null
-    Invoke-CpuGroups $exe @("DeleteGroup", "/GroupId:$GroupId") | Out-Null
-
-    $affinityArg = ($plan.GuestLps -join ",")
-    $rCreate = Invoke-CpuGroups $exe @("CreateGroup", "/GroupId:$GroupId", "/GroupAffinity:$affinityArg")
-    $rBind = $null
-    if ($rCreate.Ok -and $vm) {
-        $rBind = Invoke-CpuGroups $exe @("SetVmGroup", "/VmName:$VMName", "/GroupId:$GroupId")
-    } elseif ($rCreate.Ok) {
-        Write-Host "  CPU グループを作成しました (EdgeBox 未作成のため割り当ては EdgeBox 作成後に -Apply し直してください)" -ForegroundColor Yellow
-    }
-    if ($rCreate.Ok -and $rBind -and $rBind.Ok) {
-        $groupBound = $true
-        Write-Host "  CPU グループを作成し、登録 '$VMName' を割り当てました" -ForegroundColor Green
-        $rShow = Invoke-CpuGroups $exe @("GetGroups")
-        if ($rShow.Ok -and $rShow.Output) { Write-Host ($rShow.Output -replace "(?m)^", "    ") }
-    } else {
-        $failOut = ""
-        if (-not $rCreate.Ok) { $failOut = $rCreate.Output } elseif ($rBind) { $failOut = $rBind.Output }
-        Write-Host "  CPU グループの作成に失敗しました: $failOut" -ForegroundColor Yellow
-        Write-Host "  (CPU グループは Windows Server の機能で、クライアント版では動かない環境もあります)" -ForegroundColor Yellow
-        if ($vm -and $vm.State -ne "Off") {
-            Write-Host "  EdgeBox 実行中が原因の可能性もあります。EdgeBox を停止して再実行してみてください: Stop-VM $VMName" -ForegroundColor Yellow
-        }
-    }
-}
-
-# --- CPU グループが使えない場合の処理能力予約 (準分割の仕上げ) ---
-if (-not $groupBound -and -not $NoReserve -and $vm) {
-    if ($vm.State -eq "Off") {
-        Set-VMProcessor -VMName $VMName -Reserve 100
-        Write-Host "  代わりに処理能力予約 (Reserve 100%) を設定しました ($Scheduler スケジューラでは有効に機能します)" -ForegroundColor Green
-    } else {
-        Write-Host "  処理能力予約は EdgeBox 停止中に設定できます: Set-VMProcessor -VMName $VMName -Reserve 100" -ForegroundColor Yellow
-    }
-}
-
-Save-Config ([pscustomobject]@{
-    Mode = "full"; VMName = $VMName
-    HostLps = $plan.HostLps; GuestLps = $plan.GuestLps
-    Scheduler = $Scheduler; GroupBound = $groupBound; NoPriorityBoost = $false
-    PendingVM = (-not $vm)
-    UpdatedAt = (Get-Date -Format "yyyy-MM-dd HH:mm:ss")
-})
-Write-PinLog "Apply(full) 第2段階: groupBound=$groupBound"
+Write-PinLog "Apply(full) 第2段階: groupBound=$bound"
 
 Write-Host ""
-if ($groupBound) {
+if ($bound) {
     Write-Host "完全分割が成立しました (Linux 主構成の isolcpus + vcpupin 相当)。" -ForegroundColor Green
     Write-Host "  - Windows : CPU $hostText から出られません (minroot)"
-    Write-Host "  - EdgeBox      : CPU $guestText から出られません (CPU グループ)"
+    Write-Host "  - EdgeBox      : CPU $guestText から出られません (CPU グループ。起動のたびに '$BootTaskName' が作り直します)"
 } else {
     Write-Host "準分割で適用しました。" -ForegroundColor Yellow
     Write-Host "  - Windows : CPU $hostText から出られません (minroot) ← ここは完全"
     Write-Host "  - EdgeBox      : 空いている CPU $guestText 上でほぼ実行されます (ハイパーバイザー任せ + 予約で保証)"
+    Write-Host "  - 起動タスク '$BootTaskName' が 5 分ごとに固定を試し直します。EdgeBox 停止中に効くこともあります"
 }
 Write-Host ""
-Write-Host "EdgeBox を起動して実測してください: Start-VM $VMName → .\cpu-partition.ps1 -Verify" -ForegroundColor Cyan
+Write-Host "確認: 『EdgeBox 監視』の「分離の状態」、または .\cpu-partition.ps1 -Verify" -ForegroundColor Cyan

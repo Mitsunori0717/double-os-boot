@@ -1297,8 +1297,35 @@ try {
 # --- EdgeBox の起動を待つ (止まっていれば起動する: 自動起動が働かなかった場合の保険) ---
 $vm = Get-VM -Name $VMName -ErrorAction SilentlyContinue
 if ($vm -and $vm.State -eq "Off") {
-    Log "EdgeBox が起動していないため、ここで起動します。"
-    try { Start-VM -Name $VMName -ErrorAction Stop } catch { Log "警告: EdgeBox を起動できませんでした: $($_.Exception.Message)" }
+    # CPU コア分割ツール (別フォルダ windows-cpu-partition) が full モードのときは、起動タスクが
+    # 「CPU グループで EdgeBox を固定してから起動する」ため、その完了を少し待つ (最大 90 秒)。
+    # ツールが無ければ何もしない (互いに独立。あるときだけ順番を譲る)
+    try {
+        $cpuDir = Join-Path (Split-Path $PSScriptRoot -Parent) "windows-cpu-partition"
+        $cpuCfgFile = Join-Path $cpuDir "cpu-partition.json"; $cpuStFile = Join-Path $cpuDir "cpu-full-status.json"
+        if (Test-Path $cpuCfgFile) {
+            $cpuCfg = Get-Content $cpuCfgFile -Raw -Encoding UTF8 | ConvertFrom-Json
+            if ($cpuCfg.Mode -eq "full" -and $cpuCfg.ManageVmStart) {
+                Log "CPU コア分割 (full) の起動タスクが EdgeBox を固定してから起動するため、少し待ちます。"
+                $csw = [System.Diagnostics.Stopwatch]::StartNew()
+                while ($csw.Elapsed.TotalSeconds -lt 90) {
+                    $vmC = Get-VM -Name $VMName -ErrorAction SilentlyContinue
+                    if ($vmC -and $vmC.State -eq "Running") { break }
+                    $stC = $null
+                    try { if (Test-Path $cpuStFile) { $stC = Get-Content $cpuStFile -Raw -Encoding UTF8 | ConvertFrom-Json } } catch { }
+                    if ($stC -and $stC.At -and ((Get-Date) - [datetime]$stC.At).TotalSeconds -lt 120 -and $stC.MinrootOk) { break }   # 起動タスクは処理済み
+                    Start-Sleep -Seconds 5
+                }
+            }
+        }
+    } catch { }
+    $vm = Get-VM -Name $VMName -ErrorAction SilentlyContinue
+    if ($vm -and $vm.State -eq "Running") {
+        Log "EdgeBox は起動タスクにより起動済みです。"
+    } else {
+        Log "EdgeBox が起動していないため、ここで起動します。"
+        try { Start-VM -Name $VMName -ErrorAction Stop } catch { Log "警告: EdgeBox を起動できませんでした: $($_.Exception.Message)" }
+    }
 }
 $sw = [System.Diagnostics.Stopwatch]::StartNew()
 while ($sw.Elapsed.TotalSeconds -lt $TimeoutSec) {
