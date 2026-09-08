@@ -287,14 +287,18 @@ if ($Splash) {
         return $f
     }
 
-    # つながっている全モニターを覆う (あとから2枚目が認識されたらそこにも出す)
+    # 右端のモニターだけを「EdgeBox 起動中」で覆う (あとから2枚目が認識されたらそちらへ移す)。
+    # 左画面 (EdgeBox のコンソール) は覆わない。モニターが 1 枚のときはその 1 枚を覆う
     $script:LeftOff = $false
     function Sync-SplashScreens {
         $all = @([System.Windows.Forms.Screen]::AllScreens | ForEach-Object { $_.Bounds })
-        if ($script:LeftOff -and $all.Count -gt 1) {
-            # 左 (EdgeBox のコンソール) が出たあとは、右端の画面だけを覆う
+        if ($all.Count -gt 1) {
             $maxX = ($all | ForEach-Object { $_.X } | Measure-Object -Maximum).Maximum
             $all = @($all | Where-Object { $_.X -eq $maxX })
+            # 左端の画面に出してしまった覆い (モニターが 1 枚のときに出したもの) は閉じる
+            foreach ($f in $script:SplashForms) {
+                if (-not $f.IsDisposed -and $f.Bounds.X -ne $maxX) { $f.Close() }
+            }
         }
         foreach ($b in $all) {
             $covered = @($script:SplashForms | Where-Object { -not $_.IsDisposed -and $_.Bounds -eq $b })
@@ -522,10 +526,11 @@ function Stop-UrlRetry {
 # ============================================================
 $DefaultConfig = [ordered]@{
     "_説明"             = "EdgeBox 表示の設定。『EdgeBox表示設定』アイコンから編集できます。"
-    "RightUrl"          = "https://192.168.0.205/"
+    "RightUrl"          = ""       # 右画面は通常の Windows デスクトップ (URL を入れるとブラウザで表示)
     "RightFullScreen"   = $false
     "LeftUrl"           = "console"
     "LeftFullScreen"    = $true
+    "RightBrowserV2"    = $true    # 「右画面はデスクトップ」既定に切り替え済みの印 (旧設定ファイルの移行用)
     "EscEnabled"        = $true
     "ConsoleStripFrame" = $true
     "ConsoleAutoClose"  = $false   # コンソール窓は閉じない (閉じてほしい場合だけオン)
@@ -553,6 +558,17 @@ if (-not $cfg.PSObject.Properties["ConsoleAutoCloseV2"]) {
     else { $cfg | Add-Member -NotePropertyName ConsoleAutoClose -NotePropertyValue $false -Force }
     $cfg | Add-Member -NotePropertyName ConsoleAutoCloseV2 -NotePropertyValue $true -Force
     if (-not $cfg.PSObject.Properties["ConsoleHideBar"]) { $cfg | Add-Member -NotePropertyName ConsoleHideBar -NotePropertyValue $true -Force }
+    try { $cfg | ConvertTo-Json | Set-Content -Path $ConfigFile -Encoding UTF8 } catch { }
+}
+# 右画面のブラウザ全画面はやめ、通常の Windows デスクトップのままにする方針に変更。
+# 旧既定の管理画面 URL (.205) がそのまま残っている設定ファイルは一度だけ空にする
+# (『設定』で URL を入れ直せば、以前どおり右画面にブラウザを出せる)
+if (-not $cfg.PSObject.Properties["RightBrowserV2"]) {
+    if ([string]$cfg.RightUrl -eq "https://192.168.0.205/") {
+        if ($cfg.PSObject.Properties["RightUrl"]) { $cfg.RightUrl = "" }
+        else { $cfg | Add-Member -NotePropertyName RightUrl -NotePropertyValue "" -Force }
+    }
+    $cfg | Add-Member -NotePropertyName RightBrowserV2 -NotePropertyValue $true -Force
     try { $cfg | ConvertTo-Json | Set-Content -Path $ConfigFile -Encoding UTF8 } catch { }
 }
 if (-not $PSBoundParameters.ContainsKey("RightUrl")) { $RightUrl = [string]$cfg.RightUrl }
@@ -1322,7 +1338,9 @@ $edge = @(
     "$env:ProgramFiles\Microsoft\Edge\Application\msedge.exe",
     "${env:ProgramFiles(x86)}\Microsoft\Edge\Application\msedge.exe"
 ) | Where-Object { Test-Path $_ } | Select-Object -First 1
-if (-not $edge) { Log "エラー: Microsoft Edge が見つかりません。"; exit 1 }
+$needsBrowser = (($RightUrl -and $RightUrl -notmatch '^(console|コンソール)$') -or
+                 ($LeftUrl  -and $LeftUrl  -notmatch '^(console|コンソール)$'))
+if (-not $edge -and $needsBrowser) { Log "エラー: Microsoft Edge が見つかりません。"; exit 1 }
 
 # --- ウィンドウ操作用 API ---
 if (-not ([System.Management.Automation.PSTypeName]'FieldWin').Type) {
@@ -2025,7 +2043,7 @@ if ($leftIsConsole) {
     Open-Display $LeftUrl $leftScreen "FieldKioskL" $LeftFull
     # 左は出たので、起動中画面は右画面だけに縮める (右は管理画面が出るまで「応答待ち」を表示)
     try { Set-Content -Path $SplashLeftOffFile -Value "1" -Encoding ASCII } catch { }
-    Set-Status "管理画面の応答を待っています"
+    if ($RightUrl) { Set-Status "管理画面の応答を待っています" } else { Set-Status "左画面の表示を仕上げています" }
 }
 Wait-ForUrls
 Open-Display $RightUrl $rightScreen "FieldKioskR" $RightFull

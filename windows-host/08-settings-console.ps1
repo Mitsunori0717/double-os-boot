@@ -228,10 +228,11 @@ function Split-Account([string]$text) {
 # ============================================================
 $DefaultConfig = [ordered]@{
     "_説明"             = "EdgeBox 表示の設定。『設定』アイコンから編集できます。"
-    "RightUrl"          = "https://192.168.0.205/"
+    "RightUrl"          = ""       # 右画面は通常の Windows デスクトップ (URL を入れるとブラウザで表示)
     "RightFullScreen"   = $false
     "LeftUrl"           = "console"
     "LeftFullScreen"    = $true
+    "RightBrowserV2"    = $true
     "EscEnabled"        = $true
     "ConsoleStripFrame" = $true
     "ConsoleAutoClose"  = $false
@@ -352,7 +353,7 @@ $tp1.Controls.Add($tbR)
 $cbRF = New-Check "全画面" 485 79 100 ($cfg.RightFullScreen -eq $true)
 $tp1.Controls.Add($cbRF)
 
-$lblFs = New-Label "全画面 = 枠なしで画面全体 / チェックなし = 最大化ウィンドウ" 110 108
+$lblFs = New-Label "右モニター 空欄 = 通常のデスクトップ (起動中だけ『EdgeBox 起動中』を表示) / 全画面 = 枠なしで画面全体" 110 108
 $lblFs.ForeColor = [System.Drawing.Color]::DimGray
 $tp1.Controls.Add($lblFs)
 
@@ -510,6 +511,7 @@ $out = [ordered]@{
     "ConsoleStripFrame" = $cbSF.Checked
     "ConsoleAutoClose"  = $cbAC.Checked
     "ConsoleAutoCloseV2" = $true
+    "RightBrowserV2"    = $true    # 右画面の既定を切り替え済み (03 側の一度きりの移行を再実行させない)
     "ConsoleHideBar"    = $cbBar.Checked
     "LeftGuard"         = $cbLG.Checked
     "LeftGuardHotkey"   = $lgHot

@@ -13,7 +13,7 @@ LAN ポート5つ / 工作機械との接続は Ethernet。
 | ⑥ | 初回起動: `.\02-start-field-vm.ps1`。起動中 **Ctrl 長押し厳禁** (工場出荷リセット) | コンソールに EdgeBox の画面 |
 | ⑦ | IP 確認: `Get-VMNetworkAdapter -VMName EdgeBox`。ブラウザで管理画面を開く | 管理画面が開き収集再開 |
 | ⑧ | Windows 側 EdgeBox アプリの接続先に ⑦ の IP を設定 | アプリからデータが見える |
-| ⑨ | 起動時の自動表示 + EdgeBox 自動起動: `.\03-field-display-kiosk.ps1 -Install` (EdgeBox の自動起動も一緒に設定される。登録名が EdgeBox でなくても自動で見つける) | 電源ONだけで収集開始・左に EdgeBox・右に管理画面 |
+| ⑨ | 起動時の自動表示 + EdgeBox 自動起動: `.\03-field-display-kiosk.ps1 -Install` (EdgeBox の自動起動も一緒に設定される。登録名が EdgeBox でなくても自動で見つける) | 電源ONだけで収集開始・左に EdgeBox 全画面・右は通常のデスクトップ |
 | ⑩ | 予行: F8 からネイティブ起動できることを確認。撤退手順 (`Remove-VM` + `Set-Disk -IsOffline $false`) を把握 | ネイティブ起動を1回確認 |
 
 ## いちばん簡単な導入・起動 (①〜⑥をまとめて行う)
@@ -82,13 +82,13 @@ cd ..\windows-cpu-partition
 .\03-field-display-kiosk.ps1 -Install   # ログオン時の自動表示を登録 (EdgeBox の自動起動も設定)
 ```
 
-既定は **左 = EdgeBox のコンソール (EdgeBox の起動画面) / 右 = 管理画面 `https://192.168.0.205/`**。
-右画面の URL は『EdgeBox設定』の[画面表示]タブで変更できる (再登録は不要)。
+既定は **左 = EdgeBox のコンソール (全画面) / 右 = 通常の Windows デスクトップ**。
+起動中は右画面だけに「EdgeBox 起動中」を表示し、左の表示が仕上がると消えてデスクトップに戻る。
+右画面に管理画面のブラウザを出したい場合は『EdgeBox設定』の[画面表示]タブで URL を入れる (再登録は不要)。
 登録名が EdgeBox でなくても (旧名称のままでも)、EdgeBox のディスクを持つ EdgeBox を自動で見つける。
 
-EdgeBox の起動と Web 画面の応答を待ってから、サブモニターに Edge キオスクモード (枠なし全画面) で表示する。
 これと `Set-VM -AutomaticStartAction Start` の組み合わせで、電源 ON → ログオンだけで
-「モニター1 = Windows / モニター2 = EdgeBox 全画面」になる。終了は Alt+F4。
+「左 = EdgeBox 全画面 / 右 = Windows」になる。
 
 コンソール表示 (console 指定) は **閉じずに残る** (既定)。閉じてほしい場合だけ『設定』の[画面表示]で
 「自動で閉じる」をオンにできる (閉じても EdgeBox は動き続ける)。
