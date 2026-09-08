@@ -241,12 +241,23 @@ if ($apps.Count -eq 0) {
     exit 0
 }
 
+# アプリは Windows 用コアの中でだけ動かす: EdgeBox 用コア (cpu-partition.json の GuestLps) と、
+# Windows から見えない CPU (minroot で隠れている分) は指定から外す。EdgeBox の処理と混ざらないための決まり
+$guestMaskAll = [int64]0
+try {
+    $pf = Join-Path $PSScriptRoot "cpu-partition.json"
+    if (Test-Path $pf) { $pc = Get-Content $pf -Raw -Encoding UTF8 | ConvertFrom-Json; if ($pc.GuestLps) { $guestMaskAll = Get-LpMask @([int[]]$pc.GuestLps) } }
+} catch { }
+$visibleMask = [int64]0
+foreach ($i in 0..([Math]::Min([Environment]::ProcessorCount, 63) - 1)) { $visibleMask = $visibleMask -bor ([int64]1 -shl $i) }
+
 $done = 0; $miss = 0; $fail = @()
 foreach ($a in $apps) {
     $lps = @([int[]]$a.Lps)
     if ($lps.Count -eq 0) { continue }
     $mask = Get-LpMask $lps
-    if ($mask -eq 0) { continue }
+    $mask = ($mask -band (-bnot $guestMaskAll)) -band $visibleMask
+    if ($mask -eq 0) { Write-AppLog "  $($a.Name): 指定コアがすべて EdgeBox 用か見えない CPU のため適用しません (CPU $(ConvertTo-LpRangeText $lps))"; continue }
     $pri = Resolve-Priority ([string]$a.Priority)
     $procs = Get-MatchingProcesses $a
     if ($procs.Count -eq 0) { $miss++; continue }

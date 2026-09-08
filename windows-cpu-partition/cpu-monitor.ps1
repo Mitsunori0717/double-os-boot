@@ -37,6 +37,7 @@ Add-Type -AssemblyName System.Drawing
 $ConfigFile   = Join-Path $PSScriptRoot "cpu-partition.json"
 $SnapshotFile = Join-Path $PSScriptRoot "cpu-topology.json"
 $ContainFile  = Join-Path $PSScriptRoot "cpu-contain-status.json"   # 締め出しの常駐 (CpuPartition-Watch) が書く状態
+$FullFile     = Join-Path $PSScriptRoot "cpu-full-status.json"      # full モードの起動タスク (CpuPartition-Boot) が書く状態
 
 # -VMName を明示していない場合は、保存済み計画の 登録名を使う
 if (-not $PSBoundParameters.ContainsKey("VMName") -and (Test-Path $ConfigFile)) {
@@ -189,8 +190,15 @@ function Get-Plan {
 function Get-ContainState {
     $plan = $script:Plan
     if (-not $plan -or $plan.Mode -ne "runtime") {
-        if ($plan -and $plan.Mode -eq "full") { return @{ Text = "Windows の締め出し: full モード (minroot でハイパーバイザーが封じ込め)"; Ok = $true } }
-        return @{ Text = "Windows の締め出し: 未設定 (設定コンソールで runtime を適用すると常駐が始まります)"; Ok = $false }
+        if ($plan -and $plan.Mode -eq "full") {
+            $fs = $null
+            try { if (Test-Path $FullFile) { $fs = Get-Content $FullFile -Raw -Encoding UTF8 | ConvertFrom-Json } } catch { }
+            if (-not $fs) { return @{ Text = "完全分割 (full): 起動タスクの記録がまだありません (再起動待ち)"; Ok = $false } }
+            if ($fs.Bound) { return @{ Text = ("完全分割 (full): 成立 — Windows は CPU {0} に封じ込め (minroot) / EdgeBox は CPU {1} に固定 (CPU グループ)" -f $fs.HostLps, $fs.GuestLps); Ok = $true } }
+            if (-not $fs.MinrootOk) { return @{ Text = ("完全分割 (full): 未反映 — " + $fs.Message); Ok = $false } }
+            return @{ Text = ("完全分割 (full): 準分割 — EdgeBox の固定が効いていません (" + $fs.Message + ")"); Ok = $false }
+        }
+        return @{ Text = "Windows の締め出し: 未設定 (設定コンソールで割り当てを適用すると始まります)"; Ok = $false }
     }
     $st = $null
     try { if (Test-Path $ContainFile) { $st = Get-Content $ContainFile -Raw -Encoding UTF8 | ConvertFrom-Json } } catch { }

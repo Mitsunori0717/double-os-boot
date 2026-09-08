@@ -63,19 +63,23 @@ Windows のプロセス → EdgeBox 用コアには載らない (常駐が固定
 
 締め出しを使わない場合は `-NoContain` を付ける (優先度だけの旧方式)。
 
-### full モード — 完全分割 (Linux 主構成と同等。再起動 1 回 + コマンド 2 回)
+### full モード — 完全分割 (Linux 主構成と同等。再起動 1 回。既定)
 
 ```powershell
-.\cpu-partition.ps1 -Apply -Mode full -HostCores 4   # ① 設定書き込み
-Restart-Computer                                      # ② 再起動
-.\cpu-partition.ps1 -Apply -Mode full                 # ③ 反映確認 + EdgeBox固定
+.\cpu-partition.ps1 -Apply -Mode full -HostLps "0-19" -GuestLps "20-27"   # ① 設定書き込み (設定コンソールなら [この内容で適用])
+Restart-Computer                                                          # ② 再起動 → 以後は自動
 ```
+
+再起動後は起動タスク `CpuPartition-Boot` が CPU グループを作成して EdgeBox を固定し、そのあと EdgeBox を
+起動します。CPU グループは再起動で消えるため、**起動のたびに作り直し、5 分ごとに確かめ直します**。
+成立したかは `cpu-full-status.json` に書かれ、設定コンソールの上部と『EdgeBox 監視』の「分離の状態」に出ます。
 
 - ハイパーバイザーのスケジューラを **core** に切り替え (EdgeBox のコア割り当てを
   ハイパーバイザー自身が管理する方式。SMT 単位で分離するため安全性も高い)
 - **minroot** でWindows を先頭 N 論理 CPU に封じ込め
   (適用後、タスクマネージャーで Windows から見える CPU 数自体が減る)
-- **CPU グループ** でEdgeBox を残りのコアへ固定
+- **CPU グループ** でEdgeBox を残りのコアへ固定 (起動タスクが毎回作り直す)
+- EdgeBox の自動起動は起動タスクに任せる (固定してから起動する。`-Undo` で元の自動起動設定に戻す)
 
 **保証の強さ**: 双方向とも物理分割。Windows がどれだけ暴れてもEdgeBox 用コアには
 構造的に到達できません (Linux の isolcpus + vcpupin と同格)。
@@ -90,6 +94,19 @@ Restart-Computer                                      # ② 再起動
   **minroot + 処理能力予約までの「準分割」** で止まり、どこまで効いているかを
   そのまま報告します (Windows 側の封じ込めだけでも効果の大半が得られます)
 - Windows Server 2025 では `CpuGroups.exe` の不具合報告があります
+
+### この PC での標準の割り当て (P コア 8 + E コア 12 の場合)
+
+```
+ 論理CPU:  0 ... 15 | 16 17 18 19 | 20 21 22 23 24 25 26 27
+           P0 .. P7 | E0 E1 E2 E3 | E4 E5 E6 E7 E8 E9 E10 E11
+           └─ Windows (P コア 8 + E コア 4 = 20 スレッド) ─┘ └── EdgeBox (E コア 8) ──┘
+```
+
+- **EdgeBox は E コア専用**で、末尾の E コアを最低 8 個。増やすことはできる (再起動が必要) が、P コアは割り当てられない
+- **Windows 側のアプリ** (『アプリの割り当て』) は Windows 用の 12 コアの中で自由に個別指定できる。
+  EdgeBox 用のコアは選択肢に出ず、指定に含まれていても適用時に外される
+- 設定コンソールの既定は **full**。runtime に切り替えることもできる
 
 ### どちらを選ぶか
 
@@ -392,6 +409,7 @@ Get-Item .\cpu-console.ps1 -Stream Zone.Identifier            # 表示されれ�
 
 | 症状 | 対処 |
 |---|---|
+| 『EdgeBox 監視』が「準分割 — EdgeBox の固定が効いていません」と出る (full) | CpuGroups.exe がこの Windows で動かないか、EdgeBox 実行中に固定しようとした。起動タスク `CpuPartition-Boot` が 5 分ごとに試し直す。『EdgeBox 再起動』(停止 → 起動) の直後に成立することが多い。それでも駄目なら CpuGroups.exe が使えない環境なので、設定コンソールで runtime (締め出し付き) に切り替える (`[分割を解除]` → 再起動 → runtime で適用) |
 | `-Verify` でEdgeBox実行がWindows 用コアに出る | `-Apply` 後に EdgeBox を再起動したか確認 → 自動タスク `CpuPartition-Pin` の登録を `Get-ScheduledTask` で確認 → だめなら再度 `-Apply` |
 | full 第 2 段階で「反映されていません」 | 再起動したか確認。再起動済みなら、その PC では minroot が効かないため `-Undo` して runtime モードへ |
 | CPU グループ作成に失敗する | EdgeBox を停止して再実行 (`Stop-VM <登録名>`)。それでも失敗する場合はクライアント版の制限 — 準分割のまま運用可 |
