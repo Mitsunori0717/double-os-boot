@@ -13,9 +13,14 @@
           - vmmem (= EdgeBox の CPU 実行の実体) をEdgeBox 用コアへ物理固定
           - vmwp (= EdgeBox のディスク/ネットワーク処理) をWindows 用コアへ固定
           - vmmem の優先度を High に昇格 (EdgeBox 用コアを Windows 側の処理が
-            奪いにくくする = Windows 側の締め出しを優先度で担保)
+            奪いにくくする)
+          - 常駐 'CpuPartition-Watch' が 3 秒ごとに、vmmem 以外の全プロセス
+            (Windows 側のすべて) を Windows 用コアへ固定し直す = Windows 側の締め出し。
+            新しく起動したプロセスも数秒以内に Windows 用コアへ戻される
         EdgeBox の起動を検出して自動で再適用するタスクも登録するため、一度 -Apply
         すれば電源 ON だけの運用でも効き続けます。
+        残る混ざりは、固定できない保護されたシステムプロセス (csrss 等) とカーネル・
+        割り込みの分だけ (通常 1% 未満)。それも無くすには full モード。
 
     ■ full モード (完全分割。要再起動 + 設定変更 2 段階)
         ハイパーバイザーのスケジューラを core に切り替えたうえで:
@@ -73,6 +78,7 @@ param(
     [string]$Scheduler = "core",
 
     [switch]$NoPriorityBoost,   # runtime: vmmem の優先度昇格をしない
+    [switch]$NoContain,         # runtime: Windows 側のプロセスを Windows 用コアへ締め出す常駐 (CpuPartition-Watch) を使わない
     [switch]$NoReserve,         # full: CPU グループ不成立時の処理能力予約をしない
     [switch]$AutoGetTools,      # full: CpuGroups.exe を確認なしで取得する (設定コンソール用)
     [switch]$AllowMissingVM,    # EdgeBox が未作成でも計画を保存する (作成・起動後に自動タスクが適用)
@@ -89,6 +95,7 @@ param(
 
     # --- 内部用 (自動タスクが呼ぶ) ---
     [switch]$ApplyRuntime,
+    [switch]$Watch,             # 常駐: vmmem を EdgeBox 用コアへ、それ以外の全プロセスを Windows 用コアへ固定し続ける
     [switch]$Quiet,
     [switch]$NoConfirm
 )
@@ -99,6 +106,9 @@ $ConfigFile  = Join-Path $PSScriptRoot "cpu-partition.json"
 $LogFile     = Join-Path $PSScriptRoot "cpu-partition-log.txt"
 $ToolsDir    = Join-Path $PSScriptRoot "tools"
 $PinTaskName = "CpuPartition-Pin"
+$WatchTaskName = "CpuPartition-Watch"                        # 締め出しの常駐タスク
+$ContainStatusFile = Join-Path $PSScriptRoot "cpu-contain-status.json"   # 常駐の状態 (監視画面が読む)
+$AppsFile    = Join-Path $PSScriptRoot "cpu-apps.json"       # アプリ単位の割り当て (締め出しの例外)
 $GroupId     = "b0edb0ed-c01e-4a11-8000-0000000000e1"   # 本ツール専用の CPU グループ固定 ID
 $NullGroupId = "00000000-0000-0000-0000-000000000000"
 $CpuGroupsUrl = "https://go.microsoft.com/fwlink/?linkid=865968"  # Microsoft 公式配布の CpuGroups.exe
@@ -462,6 +472,105 @@ function Set-RuntimePin([int[]]$HostArr, [int[]]$GuestArr, [bool]$Boost) {
     return "ok: " + ($results -join " / ")
 }
 
+# ============================================================ Windows 側の締め出し (runtime モードの常駐)
+#   vmmem 以外の全プロセスを Windows 用コアに固定し直す。EdgeBox 用コアには Windows のプロセスが
+#   載らなくなる (minroot 無しでできる範囲の締め出し)。固定できないのは保護されたシステムプロセス
+#   (csrss, wininit, services, Registry, System など) とカーネルの処理だけで、それらは記録に残す。
+
+# アプリ単位の割り当て (cpu-apps.json) に登録されたプロセスは、そちらの指定を優先して触らない
+function Get-AppExceptionPids {
+    $set = @{}
+    if (-not (Test-Path $AppsFile)) { return $set }
+    try {
+        foreach ($a in @(Get-Content $AppsFile -Raw -Encoding UTF8 | ConvertFrom-Json)) {
+            if (-not $a.Match) { continue }
+            foreach ($p in @(Get-Process -Name ([string]$a.Match) -ErrorAction SilentlyContinue)) { $set[[int]$p.Id] = $true }
+        }
+    } catch { }
+    return $set
+}
+
+# 1 回の見回り: EdgeBox 用コアに掛かっている Windows 側のプロセスを Windows 用コアへ固定する
+# $Skip = 固定できなかった PID → 時刻 (5 分は再試行しない)。戻り値: 件数と固定できなかった名前
+function Invoke-HostContainment([int64]$HostMask, [int64]$GuestMask, [hashtable]$Skip, [hashtable]$Except) {
+    $contained = 0; $pinned = 0; $unpin = @{}
+    $now = Get-Date
+    foreach ($p in @(Get-Process -ErrorAction SilentlyContinue)) {
+        $id = [int]$p.Id
+        if ($id -le 4) { continue }                       # Idle / System (固定不可)
+        $n = [string]$p.ProcessName
+        if ($n -like 'vmmem*') { continue }              # EdgeBox の CPU 実行そのもの (EdgeBox 用コアに固定済み)
+        if ($Except.ContainsKey($id)) { continue }
+        if ($Skip.ContainsKey($id) -and (($now - $Skip[$id]).TotalSeconds -lt 300)) { continue }
+        try {
+            $aff = [int64]$p.ProcessorAffinity
+            if (($aff -band $GuestMask) -ne 0) {
+                $p.ProcessorAffinity = [IntPtr]$HostMask
+                $pinned++
+            }
+            $contained++
+        } catch {
+            $gone = $false
+            try { $gone = $p.HasExited } catch { }
+            if ($gone) { continue }
+            $Skip[$id] = $now
+            $unpin[$n] = $true
+        }
+    }
+    return [pscustomobject]@{ Contained = $contained; Pinned = $pinned; Unpinnable = @($unpin.Keys | Sort-Object) }
+}
+
+function Get-WatchProcesses {
+    return @(Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" -ErrorAction SilentlyContinue |
+        Where-Object { $_.CommandLine -match 'cpu-partition\.ps1' -and $_.CommandLine -match '-Watch' -and $_.ProcessId -ne $PID })
+}
+
+# 常駐タスクの登録 (SYSTEM 権限・起動時とログオン時に開始・実行時間の制限なし・落ちたら再開)
+function Register-WatchTask {
+    $action = New-ScheduledTaskAction -Execute "powershell.exe" `
+        -Argument "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$PSCommandPath`" -Watch -Quiet"
+    $principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
+    $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
+        -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Seconds 0) `
+        -RestartCount 5 -RestartInterval (New-TimeSpan -Minutes 1)
+    $boot = New-ScheduledTaskTrigger -AtStartup
+    try { $boot.Delay = "PT1M" } catch { }
+    $logon = New-ScheduledTaskTrigger -AtLogOn
+    Register-ScheduledTask -TaskName $WatchTaskName -Trigger @($boot, $logon) `
+        -Action $action -Principal $principal -Settings $settings -Force | Out-Null
+}
+
+# 常駐が動いていなければ起動する。戻り値: 起動したか
+function Start-WatchTask {
+    $t = Get-ScheduledTask -TaskName $WatchTaskName -ErrorAction SilentlyContinue
+    if (-not $t) { return $false }
+    if ($t.State -eq "Running") { return $false }
+    Start-ScheduledTask -TaskName $WatchTaskName -ErrorAction Stop
+    return $true
+}
+
+function Stop-WatchTask {
+    try { Stop-ScheduledTask -TaskName $WatchTaskName -ErrorAction SilentlyContinue } catch { }
+    try { Unregister-ScheduledTask -TaskName $WatchTaskName -Confirm:$false -ErrorAction SilentlyContinue } catch { }
+    foreach ($w in (Get-WatchProcesses)) { Stop-Process -Id $w.ProcessId -Force -ErrorAction SilentlyContinue }
+    Remove-Item $ContainStatusFile -Force -ErrorAction SilentlyContinue
+}
+
+# 常駐の状態 (状態ファイルから)。戻り値: 表示用の 1 行
+function Get-ContainStatusText {
+    $t = Get-ScheduledTask -TaskName $WatchTaskName -ErrorAction SilentlyContinue
+    if (-not $t) { return "未設定 (runtime モードを適用すると常駐 '$WatchTaskName' が登録されます)" }
+    $st = $null
+    try { if (Test-Path $ContainStatusFile) { $st = Get-Content $ContainStatusFile -Raw -Encoding UTF8 | ConvertFrom-Json } } catch { }
+    if (-not $st) { return ("タスクは登録済み (" + $t.State + ") ですが、まだ状態の記録がありません") }
+    $age = ((Get-Date) - [datetime]$st.At).TotalSeconds
+    $alive = ($age -lt 30)
+    $unp = @($st.Unpinnable)
+    return ("{0} — Windows のプロセス {1} 個を CPU {2} に固定中 (固定不可: {3}) 最終確認 {4}" -f
+        $(if ($alive) { "動作中" } else { "停止中? (最終確認から " + [int]$age + " 秒)" }),
+        $st.Contained, $st.HostLps, $(if ($unp.Count -gt 0) { $unp -join ", " } else { "なし" }), $st.At)
+}
+
 # EdgeBox 起動を検出して自動で再適用するタスク (SYSTEM 権限)
 # 戻り値: 制限があった場合の説明 (無ければ空文字)
 function Register-PinTask {
@@ -613,6 +722,67 @@ if ($MemoryGB -gt 0) {
     exit 0
 }
 
+# ============================================================ -Watch (常駐・内部用)
+#   3 秒ごとに見回り: (1) 10 秒に 1 回 vmmem / vmwp の固定を確かめ直す
+#                     (2) EdgeBox 用コアに掛かっている Windows 側のプロセスを Windows 用コアへ戻す
+#   状態は cpu-contain-status.json に書き、監視画面『EdgeBox 監視』がそれを表示する
+
+if ($Watch) {
+    Write-PinLog "Watch: 常駐を開始 (PID $PID)"
+    $skip = @{}; $except = @{}
+    $cfgW = $null; $lastCfgRead = [datetime]::MinValue
+    $hostArr = @(); $guestArr = @(); $hostMask = [int64]0; $guestMask = [int64]0
+    $vmMsg = ""; $lastVmMsg = ""; $lastVmAt = [datetime]::MinValue
+    $acc = 0; $lastAccLog = Get-Date; $lastUnpin = ""
+    while ($true) {
+        try {
+            if (((Get-Date) - $lastCfgRead).TotalSeconds -gt 30) {
+                $lastCfgRead = Get-Date
+                $cfgW = Get-SavedConfig
+                if (-not $cfgW -or $cfgW.Mode -ne "runtime" -or $cfgW.HostContain -eq $false) {
+                    Write-PinLog "Watch: 締め出しの対象外 (設定なし / full モード / 締め出しオフ) のため終了します"
+                    Remove-Item $ContainStatusFile -Force -ErrorAction SilentlyContinue
+                    exit 0
+                }
+                if ($cfgW.VMName) { $VMName = [string]$cfgW.VMName }
+                $hostArr = @([int[]]$cfgW.HostLps); $guestArr = @([int[]]$cfgW.GuestLps)
+                $hostMask = Get-LpMask $hostArr; $guestMask = Get-LpMask $guestArr
+                $except = Get-AppExceptionPids
+                try { (Get-Process -Id $PID).ProcessorAffinity = [IntPtr]$hostMask } catch { }   # 自分も Windows 用コアで動く
+            }
+            # (1) vmmem / vmwp
+            if (((Get-Date) - $lastVmAt).TotalSeconds -ge 10) {
+                $lastVmAt = Get-Date
+                try { $vmMsg = Set-RuntimePin $hostArr $guestArr (-not [bool]$cfgW.NoPriorityBoost) } catch { $vmMsg = "fail: " + $_.Exception.Message }
+                if ($vmMsg -ne $lastVmMsg) { Write-PinLog "Watch: $vmMsg"; $lastVmMsg = $vmMsg }
+            }
+            # (2) 締め出し
+            $sw = [System.Diagnostics.Stopwatch]::StartNew()
+            $r = Invoke-HostContainment $hostMask $guestMask $skip $except
+            $sw.Stop()
+            $acc += $r.Pinned
+            if ($acc -gt 0 -and ((Get-Date) - $lastAccLog).TotalSeconds -ge 60) {
+                Write-PinLog "Watch: この 1 分で $acc 個のプロセスを Windows 用コア (CPU $(ConvertTo-LpRangeText $hostArr)) へ戻しました (固定中 $($r.Contained) 個)"
+                $acc = 0; $lastAccLog = Get-Date
+            }
+            $unpinText = ($r.Unpinnable -join ", ")
+            if ($unpinText -and $unpinText -ne $lastUnpin) {
+                Write-PinLog "Watch: 固定できないプロセス (保護されたシステムプロセス。カーネルと同様に固定の対象外): $unpinText"
+                $lastUnpin = $unpinText
+            }
+            [pscustomobject]@{
+                At = (Get-Date -Format "yyyy-MM-dd HH:mm:ss"); Pid = $PID; VMName = $VMName
+                HostLps = (ConvertTo-LpRangeText $hostArr); GuestLps = (ConvertTo-LpRangeText $guestArr)
+                Contained = $r.Contained; Pinned = $r.Pinned; Unpinnable = $r.Unpinnable
+                Vm = $vmMsg; SweepMs = $sw.ElapsedMilliseconds
+            } | ConvertTo-Json -Depth 3 | Set-Content -Path $ContainStatusFile -Encoding UTF8
+        } catch {
+            Write-PinLog ("Watch: エラー " + $_.Exception.Message)
+        }
+        Start-Sleep -Seconds 3
+    }
+}
+
 # ============================================================ -ApplyRuntime (内部用)
 
 if ($ApplyRuntime) {
@@ -633,6 +803,10 @@ if ($ApplyRuntime) {
         Start-Sleep -Seconds 5
     }
     Write-PinLog "ApplyRuntime: $msg"
+    # 締め出しの常駐が止まっていれば起こす (2 分ごとのこのタスクが保険になる)
+    if ($cfg.HostContain -ne $false) {
+        try { if (Start-WatchTask) { Write-PinLog "ApplyRuntime: 常駐 '$WatchTaskName' を起動し直しました" } } catch { Write-PinLog "ApplyRuntime: 常駐の起動に失敗: $($_.Exception.Message)" }
+    }
     if (-not $Quiet) {
         if ($msg -like "ok:*") { Write-Host "CPU コア固定を適用: $msg" -ForegroundColor Green }
         elseif ($msg -like "skip:*") { Write-Host $msg }
@@ -822,6 +996,26 @@ if ($Undo) {
         $ans = Read-Host "よろしいですか? (y/N)"
         if ($ans -ne "y") { exit 0 }
     }
+
+    $cfgU = Get-SavedConfig
+
+    # 0) 締め出しの常駐を止める (先に止めないと固定し直されてしまう)。固定していたプロセスを全コアへ戻す
+    $hadWatch = [bool](Get-ScheduledTask -TaskName $WatchTaskName -ErrorAction SilentlyContinue)
+    Stop-WatchTask
+    if ($hadWatch) { Write-Host "  常駐 '$WatchTaskName' を停止・削除しました" -ForegroundColor Green }
+    try {
+        if ($cfgU -and $cfgU.HostLps) {
+            $topoU = Get-CpuTopology
+            $allMaskU = Get-LpMask @(0..([Math]::Min($topoU.Lps, 63) - 1))
+            $hostMaskU = Get-LpMask @([int[]]$cfgU.HostLps)
+            $released = 0
+            foreach ($p in @(Get-Process -ErrorAction SilentlyContinue)) {
+                if ($p.Id -le 4 -or $p.ProcessName -like 'vmmem*') { continue }
+                try { if ([int64]$p.ProcessorAffinity -eq $hostMaskU) { $p.ProcessorAffinity = [IntPtr]$allMaskU; $released++ } } catch { }
+            }
+            if ($released -gt 0) { Write-Host "  Windows 側のプロセス $released 個のコア固定を解除しました" -ForegroundColor Green }
+        }
+    } catch { }
 
     # 1) 自動タスク
     try {
@@ -1128,6 +1322,7 @@ if (-not $Apply) {
     if ($cfg) {
         Write-Host ""
         Write-Host "  適用済みの計画    : $($cfg.Mode) モード / Windows = CPU $(ConvertTo-LpRangeText @([int[]]$cfg.HostLps)) / EdgeBox = CPU $(ConvertTo-LpRangeText @([int[]]$cfg.GuestLps))" -ForegroundColor Green
+        if ($cfg.Mode -eq "runtime") { Write-Host "  Windows の締め出し : $(Get-ContainStatusText)" }
     } else {
         Write-Host ""
         Write-Host "  適用済みの計画    : なし" -ForegroundColor Yellow
@@ -1234,14 +1429,26 @@ if ($Mode -eq "runtime") {
         Mode = "runtime"; VMName = $VMName
         HostLps = $plan.HostLps; GuestLps = $plan.GuestLps
         NoPriorityBoost = [bool]$NoPriorityBoost
+        HostContain = (-not $NoContain)   # Windows 側のプロセスを Windows 用コアへ締め出す常駐を使う
         PendingVM = (-not $vm)     # EdgeBox 未作成のまま保存した計画かどうか
         UpdatedAt = (Get-Date -Format "yyyy-MM-dd HH:mm:ss")
     })
-    Write-PinLog "Apply(runtime): Windows=$hostText EdgeBox=$guestText"
+    Write-PinLog "Apply(runtime): Windows=$hostText EdgeBox=$guestText contain=$(-not $NoContain)"
 
     $taskNote = Register-PinTask
     Write-Host "  EdgeBox 起動時に自動で固定し直すタスク '$PinTaskName' を登録しました" -ForegroundColor Green
     if ($taskNote) { Write-Host "  ($taskNote)" -ForegroundColor Yellow }
+
+    if ($NoContain) {
+        Stop-WatchTask
+        Write-Host "  Windows 側の締め出し (常駐) は使いません (-NoContain)" -ForegroundColor Yellow
+    } else {
+        # 設定が変わった場合に備えて常駐は作り直す (古い常駐は設定を 30 秒ごとに読み直すが、確実に)
+        Stop-WatchTask
+        Register-WatchTask
+        Start-WatchTask | Out-Null
+        Write-Host "  Windows 側のプロセスを CPU $hostText へ締め出す常駐 '$WatchTaskName' を登録して起動しました" -ForegroundColor Green
+    }
 
     if ($vm -and $vm.State -eq "Running") {
         $msg = Set-RuntimePin $plan.HostLps $plan.GuestLps (-not $NoPriorityBoost)
@@ -1257,8 +1464,13 @@ if ($Mode -eq "runtime") {
     Write-Host ""
     Write-Host "適用しました (runtime モード)。" -ForegroundColor Green
     Write-Host "  - $VMName の CPU 実行は CPU $guestText に物理固定されました"
-    Write-Host "  - Windows 側の処理は優先度で押し出されます (完全な締め出しは -Mode full)"
-    Write-Host "  - 効き具合の実測: .\cpu-partition.ps1 -Verify" -ForegroundColor Cyan
+    if ($NoContain) {
+        Write-Host "  - Windows 側の処理は優先度で押し出されます (締め出しは -NoContain を外すか、完全分割は -Mode full)"
+    } else {
+        Write-Host "  - Windows 側のプロセスは常駐が 3 秒ごとに CPU $hostText へ固定し直します (新しいプロセスも数秒で戻る)"
+        Write-Host "  - 残るのは固定できない保護プロセスとカーネル・割り込みの分だけ (通常 1% 未満)。それも無くすには -Mode full"
+    }
+    Write-Host "  - 効き具合の実測: .\cpu-partition.ps1 -Verify  / 常時の確認: 『EdgeBox 監視』の「分離の状態」" -ForegroundColor Cyan
     exit 0
 }
 
@@ -1326,8 +1538,9 @@ if (-not $schedOk -or $visibleLps -ne $wantRootProc) {
 Write-Host "  反映を確認: スケジューラ=$schedNow / Windows は論理 $visibleLps 個に封じ込め済み" -ForegroundColor Green
 Write-Host "  → Windows のプロセス・割り込みは CPU $hostText の外には出られません (isolcpus 相当)"
 
-# runtime 用の自動タスクが残っていたら外す (full では不要)
+# runtime 用の自動タスク・常駐が残っていたら外す (full では minroot が Windows を封じ込めるので不要)
 try { Unregister-ScheduledTask -TaskName $PinTaskName -Confirm:$false -ErrorAction Stop } catch { }
+Stop-WatchTask
 
 # --- CpuGroups.exe の用意 ---
 if (-not $exe) {
