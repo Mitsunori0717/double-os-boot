@@ -762,9 +762,13 @@ public class GuardApi {
     $released = $false
     $helperPids = @(); $lastScan = [datetime]::MinValue
     $lastFs = [datetime]::MinValue; $notCover = 0
-    $fsFail = 0   # 全画面に戻せなかった回数 (続けて失敗したら試す間隔を広げ、操作の邪魔をしない)
+    $fsFail = 0   # 全画面に戻せなかった回数 (3 回続いたら 30 秒に 1 回に広げる。あきらめはしない)
+    $missingSince = $null; $lastRelaunch = [datetime]::MinValue   # コンソール窓が閉じられたときの立て直し用
+    $tick = 0
     while ($true) {
         try {
+            # ホットキーは 0.1 秒ごとに見る (短い押下も取りこぼさない)。窓の見回りは 0.5 秒ごと
+            $tick++
             # --- ホットキー: 固定の解除 ⇔ 再固定 ---
             $allDown = $true
             foreach ($vk in $vkeys) { if (([GuardApi]::GetAsyncKeyState($vk) -band 0x8000) -eq 0) { $allDown = $false; break } }
@@ -788,7 +792,7 @@ public class GuardApi {
                     Start-Sleep -Milliseconds 50
                 }
             }
-            if (-not $released) {
+            if (-not $released -and ($tick % 5) -eq 0) {
                 # 自分たちの補助ウィンドウ (起動中画面・黒背景) は動かさない。PID を 10 秒ごとに更新
                 if (((Get-Date) - $lastScan).TotalSeconds -gt 10) {
                     $helperPids = @(Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" -ErrorAction SilentlyContinue |
@@ -798,14 +802,37 @@ public class GuardApi {
                 # 1) コンソールの全画面が外れていたら左画面の全画面に戻す
                 #    (最大化しただけの窓は「全画面」とみなさない: 共通の Test-ConsoleFullScreenOn で判定)
                 $h = Get-ConsoleMain
+                if ($h -eq [IntPtr]::Zero) {
+                    # 0) コンソール窓そのものが閉じられた → EdgeBox が動いていれば表示を立ち上げ直す
+                    #    (自動で閉じる設定のときは閉じたままにする。2 分に 1 回まで)
+                    if (-not $missingSince) { $missingSince = Get-Date }
+                    elseif (((Get-Date) - $missingSince).TotalSeconds -gt 15 -and ((Get-Date) - $lastRelaunch).TotalSeconds -gt 120 -and
+                            ($cfg.ConsoleAutoClose -ne $true)) {
+                        $vmState = ""
+                        try { $vmState = [string](Get-VM -Name $VMName -ErrorAction Stop).State } catch { }
+                        if ($vmState -eq "Running") {
+                            $lastRelaunch = Get-Date; $missingSince = $null
+                            Log "左画面の見張り役: コンソール窓が閉じられていたため、左画面の表示を立ち上げ直します。"
+                            Start-Process powershell.exe -WindowStyle Hidden -ArgumentList (
+                                "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" -VMName `"$VMName`" -LeftUrl console -RightUrl `"`" -NoSplash -KeepConsole")
+                            Start-Sleep -Seconds 20   # 立ち上げ直し (この見張り役も入れ替わる) の間は何もしない
+                        }
+                    }
+                } else { $missingSince = $null }
+                if ($h -ne [IntPtr]::Zero -and [GuardApi]::IsIconic($h)) {
+                    # 最小化されていたら戻す (最小化も「全画面が外れた」扱い)
+                    [GuardApi]::ShowWindow($h, 9) | Out-Null
+                    Start-Sleep -Milliseconds 300
+                    Log "左画面の見張り役: 最小化されていたコンソールを戻します。"
+                }
                 if ($h -ne [IntPtr]::Zero -and -not [GuardApi]::IsIconic($h)) {
                     if ((Test-ConsoleFullScreenOn $left) -or (Test-ConsoleFramelessOn $left)) { $notCover = 0; $fsFail = 0 }   # 全画面か、代替表示 (枠なし中央表示) ならそのまま
                     else {
                         # ブラウザや他アプリがフォーカスを奪うと vmconnect の全画面が外れることがある。
                         # 連続 2 回確認・6 秒に 1 回まで、素早く左画面の全画面に戻す。
-                        # 3 回続けて戻せなければ (切り替えが効かない環境)、5 分に 1 回だけ試す
+                        # 3 回続けて戻せなければ (切り替えが効かない状態)、30 秒に 1 回に広げて試し続ける
                         $notCover++
-                        $interval = if ($fsFail -ge 3) { 300 } else { 6 }
+                        $interval = if ($fsFail -ge 3) { 30 } else { 6 }
                         if ($notCover -ge 2 -and ((Get-Date) - $lastFs).TotalSeconds -gt $interval) {
                             if (Test-ConsoleFullScreenOn $right) { Invoke-FullScreenToggle $h; Start-Sleep -Milliseconds 800 }   # 右で全画面 → いったん解除
                             $h2 = Get-ConsoleMain; if ($h2 -ne [IntPtr]::Zero) { $h = $h2 }
@@ -823,7 +850,7 @@ public class GuardApi {
                                 if ($fsFail -le 3) {
                                     Log ("左画面の見張り役: コンソールを全画面に戻せませんでした ($fsFail 回目)。窓: " + (Get-ConsoleTopWindowDiag))
                                 }
-                                if ($fsFail -eq 3) { Log "左画面の見張り役: 3 回続けて戻せなかったため、以後は 5 分に 1 回だけ試します。" }
+                                if ($fsFail -eq 3) { Log "左画面の見張り役: 3 回続けて戻せなかったため、以後は 30 秒に 1 回試します。" }
                             }
                         }
                     }
@@ -859,7 +886,7 @@ public class GuardApi {
                 else { [System.Windows.Forms.Application]::DoEvents() }
             }
         } catch { }
-        Start-Sleep -Milliseconds 500
+        Start-Sleep -Milliseconds 100
     }
 }
 
