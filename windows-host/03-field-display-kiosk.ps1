@@ -31,6 +31,7 @@ param(
     [switch]$ConsoleCloser,
     [switch]$KeepConsole,     # コンソールを自動で閉じない (『EdgeBox 画面』アイコン用)
     [switch]$LeftGuard,       # 内部用: 左画面の見張り役 (コンソールの全画面を固定し、他の窓を右へ)
+    [switch]$UrlRetry,        # 内部用: 管理画面が応答してから右画面のブラウザを開き直す (起動時に応答が無かった場合)
     [int]$CloserDelaySec = 30,
     [string]$CloserWaitUrl = "",
     [string]$ConsoleResolution,
@@ -43,7 +44,7 @@ $ErrorActionPreference = "Stop"
 # -VMName を明示していない場合、既定名の EdgeBox が無ければ、EdgeBox のディスク
 # (物理ディスクのパススルー) を持つ EdgeBox を探して使う。00-field-launcher.ps1 と
 # 同じ考え方で、登録名が「EdgeBox」でなくても (旧名称のままでも) そのまま動くようにする
-if (-not $PSBoundParameters.ContainsKey("VMName") -and -not ($Splash -or $Backdrop -or $EscWatcher -or $ConsoleCloser -or $LeftGuard) -and
+if (-not $PSBoundParameters.ContainsKey("VMName") -and -not ($Splash -or $Backdrop -or $EscWatcher -or $ConsoleCloser -or $LeftGuard -or $UrlRetry) -and
     -not (Get-VM -Name $VMName -ErrorAction SilentlyContinue)) {
     $foundVms = @()
     foreach ($v in @(Get-VM -ErrorAction SilentlyContinue)) {
@@ -79,6 +80,22 @@ function Log([string]$m) {
         Set-Content -Path $StatusFile -Value $m -Encoding UTF8 -ErrorAction SilentlyContinue
     } catch { }
 }
+# 起動中画面に出す進捗だけを更新する (記録には残さない。待ち時間の経過表示用)
+function Set-Status([string]$m) {
+    try { Set-Content -Path $StatusFile -Value $m -Encoding UTF8 -ErrorAction SilentlyContinue } catch { }
+}
+# URL の先に 1 回だけ接続を試す (TCP が開くか)
+function Test-UrlOnce([string]$u) {
+    try {
+        $uri = [Uri]$u
+        $port = if ($uri.Port -gt 0) { $uri.Port } elseif ($uri.Scheme -eq "https") { 443 } else { 80 }
+        $tcp = New-Object Net.Sockets.TcpClient
+        $ok = $tcp.ConnectAsync($uri.Host, $port).Wait(3000)
+        $tcp.Dispose()
+        return [bool]$ok
+    } catch { return $false }
+}
+$SplashLeftOffFile = Join-Path $PSScriptRoot "display-splash-leftoff.flag"   # 起動中画面を右画面だけに縮める合図
 
 # ============================================================
 #  起動中画面: 表示準備が終わるまで、全モニターを黒い画面で覆う
@@ -128,13 +145,29 @@ if ($Splash) {
         $main.ForeColor = [System.Drawing.Color]::White
         $main.Font = New-Object System.Drawing.Font("Meiryo UI", 26)
         $main.Text = "EdgeBox 起動中"
+        $sub = New-Object System.Windows.Forms.Label
+        $sub.Name = "sub"
+        $sub.Dock = "Bottom"
+        $sub.Height = 110
+        $sub.TextAlign = "MiddleCenter"
+        $sub.BackColor = [System.Drawing.Color]::Black
+        $sub.ForeColor = [System.Drawing.Color]::LightGray
+        $sub.Font = New-Object System.Drawing.Font("Meiryo UI", 14)
         $f.Controls.Add($main)
+        $f.Controls.Add($sub)
         return $f
     }
 
     # つながっている全モニターを覆う (あとから2枚目が認識されたらそこにも出す)
+    $script:LeftOff = $false
     function Sync-SplashScreens {
-        foreach ($b in @([System.Windows.Forms.Screen]::AllScreens | ForEach-Object { $_.Bounds })) {
+        $all = @([System.Windows.Forms.Screen]::AllScreens | ForEach-Object { $_.Bounds })
+        if ($script:LeftOff -and $all.Count -gt 1) {
+            # 左 (EdgeBox のコンソール) が出たあとは、右端の画面だけを覆う
+            $maxX = ($all | ForEach-Object { $_.X } | Measure-Object -Maximum).Maximum
+            $all = @($all | Where-Object { $_.X -eq $maxX })
+        }
+        foreach ($b in $all) {
             $covered = @($script:SplashForms | Where-Object { -not $_.IsDisposed -and $_.Bounds -eq $b })
             if ($covered.Count -eq 0) {
                 $f = New-SplashForm $b
@@ -158,10 +191,21 @@ if ($Splash) {
             }
         }
         $script:SplashDots = ($script:SplashDots + 1) % 4
+        # 本体から「左は出た」の合図が来たら、左の画面の覆いだけ外す (右は管理画面が出るまで覆ったまま)
+        if (-not $script:LeftOff -and (Test-Path $SplashLeftOffFile)) {
+            $script:LeftOff = $true
+            $maxX = (@([System.Windows.Forms.Screen]::AllScreens | ForEach-Object { $_.Bounds.X }) | Measure-Object -Maximum).Maximum
+            foreach ($f in $script:SplashForms) {
+                if (-not $f.IsDisposed -and $f.Bounds.X -ne $maxX) { $f.Close() }
+            }
+        }
+        $status = ""
+        try { if (Test-Path $StatusFile) { $status = ([string](Get-Content $StatusFile -Raw -Encoding UTF8)).Trim() } } catch { }
         foreach ($f in $script:SplashForms) {
             if ($f.IsDisposed) { continue }
             foreach ($c in $f.Controls) {
                 if ($c.Name -eq "main") { $c.Text = "EdgeBox 起動中" + ("." * $script:SplashDots) }
+                if ($c.Name -eq "sub")  { $c.Text = $status }
             }
         }
         Sync-SplashScreens
@@ -338,6 +382,11 @@ function Stop-LeftGuard {
         Where-Object { $_.CommandLine -match '-LeftGuard' -and $_.ProcessId -ne $PID } |
         ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
 }
+function Stop-UrlRetry {
+    Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" -ErrorAction SilentlyContinue |
+        Where-Object { $_.CommandLine -match '-UrlRetry' -and $_.ProcessId -ne $PID } |
+        ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+}
 
 # ============================================================
 #  設定ファイル
@@ -394,6 +443,26 @@ $RightFull = Get-SideFullScreen "Right" $RightUrl
 #  左画面の見張り役 (内部用): EdgeBox のコンソール全画面を左画面に固定し、
 #  左画面に出てきた他の窓は右画面へ移す。解除/再固定はホットキーだけ
 # ============================================================
+# ============================================================
+#  管理画面の後追い (内部用): 起動時に管理画面が応答しなかった場合、
+#  応答してから右画面のブラウザを開き直す (エラー画面のまま放置しない)
+# ============================================================
+if ($UrlRetry) {
+    if (-not $RightUrl) { exit 0 }
+    Log "管理画面の後追いを開始しました (応答したら右画面のブラウザを開き直します): $RightUrl"
+    $deadline = (Get-Date).AddMinutes(90)
+    while ((Get-Date) -lt $deadline) {
+        Start-Sleep -Seconds 20
+        if (Test-UrlOnce $RightUrl) {
+            Log "管理画面が応答したため、右画面のブラウザを開き直します。"
+            & $PSCommandPath -VMName $VMName -RightUrl $RightUrl -LeftUrl "" -NoSplash -KeepConsole
+            exit 0
+        }
+    }
+    Log "管理画面の後追い: 90 分待っても応答しないため終了します (『EdgeBox 再起動』で表示し直せます)。"
+    exit 0
+}
+
 if ($LeftGuard) {
     Add-Type -AssemblyName System.Windows.Forms
     Add-Type -AssemblyName System.Drawing
@@ -420,6 +489,7 @@ public class GuardApi {
     [DllImport("user32.dll")] public static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, uint dwExtraInfo);
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern IntPtr FindWindowEx(IntPtr parent, IntPtr after, string className, string windowName);
     [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint pid);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetClassName(IntPtr hWnd, StringBuilder s, int n);
 }
 "@
     # "Alt+F11" のような指定をキーコードの一覧にする
@@ -500,18 +570,37 @@ public class GuardApi {
         } catch { }
     }
 
+    $script:HiddenBars = @{}
     function Hide-GuardBar {
-        # 全画面のときに上部へ出る接続バー (BBarWindowClass) が見えていれば隠す
+        # 全画面のときに上部へ出る接続バー = vmconnect が持つ、左画面の上端に張り付いた横長で背の低い窓。
+        # 見えていれば隠す (クラス名は環境で違うため形で判断)
         try {
             $pids = @(Get-Process vmconnect -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Id)
             if ($pids.Count -eq 0) { return }
+            $main = Get-ConsoleMain
             $h = [IntPtr]::Zero
-            for ($i = 0; $i -lt 20; $i++) {
-                $h = [GuardApi]::FindWindowEx([IntPtr]::Zero, $h, "BBarWindowClass", $null)
+            for ($i = 0; $i -lt 600; $i++) {
+                $h = [GuardApi]::FindWindowEx([IntPtr]::Zero, $h, $null, $null)
                 if ($h -eq [IntPtr]::Zero) { break }
+                if ($h -eq $main) { continue }
                 $ownerPid = [uint32]0
                 [GuardApi]::GetWindowThreadProcessId($h, [ref]$ownerPid) | Out-Null
-                if (($pids -contains [int]$ownerPid) -and [GuardApi]::IsWindowVisible($h)) { [GuardApi]::ShowWindow($h, 0) | Out-Null }
+                if (-not ($pids -contains [int]$ownerPid)) { continue }
+                if (-not [GuardApi]::IsWindowVisible($h)) { continue }
+                $r = New-Object 'GuardApi+RECT'
+                if (-not [GuardApi]::GetWindowRect($h, [ref]$r)) { continue }
+                $w = $r.Right - $r.Left; $hh = $r.Bottom - $r.Top
+                if ($hh -gt 0 -and $hh -le 80 -and $w -gt 100 -and $w -lt $left.Width -and
+                    [Math]::Abs($r.Top - $left.Y) -le 8 -and $r.Left -ge $left.X -and $r.Right -le ($left.X + $left.Width)) {
+                    [GuardApi]::ShowWindow($h, 0) | Out-Null
+                    $key = [string]$h
+                    if (-not $script:HiddenBars.ContainsKey($key)) {
+                        $script:HiddenBars[$key] = $true
+                        $sb = New-Object System.Text.StringBuilder 256
+                        [GuardApi]::GetClassName($h, $sb, 256) | Out-Null
+                        Log ("左画面の見張り役: 上部の接続バーを隠しました (クラス " + $sb.ToString() + ")。")
+                    }
+                }
             }
         } catch { }
     }
@@ -959,6 +1048,7 @@ if ($Uninstall) {
     Unregister-ScheduledTask -TaskName "$TaskName-Splash" -Confirm:$false -ErrorAction SilentlyContinue
     Stop-EscWatcher
     Stop-LeftGuard
+    Stop-UrlRetry
     Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" -ErrorAction SilentlyContinue |
         Where-Object { $_.CommandLine -match '-(Splash|Backdrop)' -and $_.ProcessId -ne $PID } |
         ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
@@ -982,6 +1072,7 @@ function Stop-Splash {
     Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" -ErrorAction SilentlyContinue |
         Where-Object { $_.CommandLine -match '-Splash' -and $_.ProcessId -ne $PID } |
         ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+    Remove-Item $SplashLeftOffFile -Force -ErrorAction SilentlyContinue
 }
 if (-not $NoSplash) {
     # ログオンタスク (EdgeBox-Display-Kiosk-Splash) が先に出していればそれを使い、無ければここで出す
@@ -992,12 +1083,18 @@ if (-not $NoSplash) {
             -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" -Splash -TimeoutSec $TimeoutSec"
     }
 }
-# 前回の黒背景が残っていれば片付ける
-Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" -ErrorAction SilentlyContinue |
-    Where-Object { $_.CommandLine -match '-Backdrop' -and $_.ProcessId -ne $PID } |
-    ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
-# 見張り役は表示の組み立て中に窓を動かしてしまうため、いったん止めて最後に起動し直す
-Stop-LeftGuard
+$leftIsConsole = ($LeftUrl -match '^(console|コンソール)$')
+if ($leftIsConsole) {
+    # 前回の黒背景が残っていれば片付ける (コンソールを置き直すときだけ)
+    Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" -ErrorAction SilentlyContinue |
+        Where-Object { $_.CommandLine -match '-Backdrop' -and $_.ProcessId -ne $PID } |
+        ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+    # 見張り役は表示の組み立て中に窓を動かしてしまうため、いったん止めて最後に起動し直す
+    Stop-LeftGuard
+}
+Stop-UrlRetry
+Remove-Item $SplashLeftOffFile -Force -ErrorAction SilentlyContinue
+$script:RightUrlPending = $false
 try {
 
 # --- EdgeBox の起動を待つ (止まっていれば起動する: 自動起動が働かなかった場合の保険) ---
@@ -1042,12 +1139,9 @@ function Wait-Url([string]$u) {
     $port = if ($uri.Port -gt 0) { $uri.Port } elseif ($uri.Scheme -eq "https") { 443 } else { 80 }
     $usw = [System.Diagnostics.Stopwatch]::StartNew()
     while ($usw.Elapsed.TotalSeconds -lt $UrlTimeoutSec) {
-        try {
-            $tcp = New-Object Net.Sockets.TcpClient
-            $ok = $tcp.ConnectAsync($uri.Host, $port).Wait(3000)
-            $tcp.Dispose()
-            if ($ok) { return $true }
-        } catch { }
+        if (Test-UrlOnce $u) { return $true }
+        $el = [int]$usw.Elapsed.TotalSeconds
+        Set-Status ("管理画面 (" + $uri.Host + ") の応答を待っています  経過 " + [int]($el / 60) + " 分 " + ($el % 60) + " 秒")
         Start-Sleep -Seconds 5
     }
     return $false
@@ -1056,6 +1150,7 @@ function Wait-OneUrl([string]$u, [string]$label) {
     if (-not $u -or $u -match '^(console|コンソール)$') { return }
     if (Wait-Url $u) { Log "$label URL が応答しました: $u"; return }
     Log "警告: $label URL が応答しません (それでも開きます): $u"
+    if ($label -eq "右画面用") { $script:RightUrlPending = $true }
     # 次の切り分けのために、EdgeBox 側のネットワークの様子を残す
     try {
         $nics = @(Get-VMNetworkAdapter -VMName $VMName -ErrorAction SilentlyContinue)
@@ -1104,6 +1199,8 @@ public class FieldWin {
     [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr hWnd, IntPtr after, int X, int Y, int cx, int cy, uint flags);
     [DllImport("user32.dll")] public static extern bool SetMenu(IntPtr hWnd, IntPtr hMenu);
     [DllImport("user32.dll")] public static extern IntPtr GetMenu(IntPtr hWnd);
+    [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hWnd);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetClassName(IntPtr hWnd, StringBuilder s, int n);
 }
 "@
 }
@@ -1155,6 +1252,11 @@ function Open-Kiosk([string]$u, $screen, [string]$profile, [bool]$fullScreen) {
          $(if ($fullScreen) { "全画面" } else { "最大化ウィンドウ" }))
     # --test-type: 「サポートされていないフラグ」警告バーを非表示にする
     # 全画面指定は --start-fullscreen で最初から全画面にする (F11 と同じ状態 = ESC 見張りで解除可)
+    # 同じ用途の古い窓 (前回の表示や、応答待ちで開いたエラー画面) が残っていれば閉じてから開く
+    Get-CimInstance Win32_Process -Filter "Name='msedge.exe'" -ErrorAction SilentlyContinue |
+        Where-Object { $_.CommandLine -match [regex]::Escape($profile) } |
+        ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+    Start-Sleep -Milliseconds 500
     $eargs = @(
         "--user-data-dir=$env:LOCALAPPDATA\$profile", "--no-first-run",
         "--ignore-certificate-errors", "--test-type",
@@ -1429,22 +1531,38 @@ function Start-ConsoleWindow {
 # 全画面のときに上部へ出る接続バーは、RDP クライアントの "BBarWindowClass" という別ウィンドウ。
 # vmconnect の設定ファイルにはこの項目が無い (実機の診断: ZoomLevel, ConnectionDialogServers,
 # StartingPosition, ShowToolbar のみ) ため、ウィンドウそのものを非表示にする
-function Hide-ConsoleBar {
+function Hide-ConsoleBar($screen) {
+    # ウィンドウのクラス名は環境で違う (実機では BBarWindowClass では見つからなかった) ため、
+    # 「vmconnect のプロセスが持つ、画面上端に張り付いた横長で背の低い窓」を接続バーとみなして隠す
     if ($cfg.ConsoleHideBar -eq $false) { return $false }
     $hid = $false
     try {
         $pids = @(Get-Process vmconnect -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Id)
         if ($pids.Count -eq 0) { return $false }
+        $main = Get-ConsoleHwnd
         $h = [IntPtr]::Zero
-        for ($i = 0; $i -lt 20; $i++) {
-            $h = [FieldWin]::FindWindowEx([IntPtr]::Zero, $h, "BBarWindowClass", $null)
+        for ($i = 0; $i -lt 600; $i++) {
+            $h = [FieldWin]::FindWindowEx([IntPtr]::Zero, $h, $null, $null)
             if ($h -eq [IntPtr]::Zero) { break }
+            if ($h -eq $main) { continue }
             $ownerPid = [uint32]0
             [FieldWin]::GetWindowThreadProcessId($h, [ref]$ownerPid) | Out-Null
-            if ($pids -contains [int]$ownerPid) { [FieldWin]::ShowWindow($h, 0) | Out-Null; $hid = $true }
+            if (-not ($pids -contains [int]$ownerPid)) { continue }
+            if (-not [FieldWin]::IsWindowVisible($h)) { continue }
+            $r = New-Object 'FieldWin+RECT'
+            if (-not [FieldWin]::GetWindowRect($h, [ref]$r)) { continue }
+            $w = $r.Right - $r.Left; $hh = $r.Bottom - $r.Top
+            if ($hh -gt 0 -and $hh -le 80 -and $w -gt 100 -and $w -lt $screen.Bounds.Width -and
+                [Math]::Abs($r.Top - $screen.Bounds.Y) -le 8 -and
+                $r.Left -ge $screen.Bounds.X -and $r.Right -le ($screen.Bounds.X + $screen.Bounds.Width)) {
+                $sb = New-Object System.Text.StringBuilder 256
+                [FieldWin]::GetClassName($h, $sb, 256) | Out-Null
+                [FieldWin]::ShowWindow($h, 0) | Out-Null
+                $hid = $true
+                Log ("コンソール: 上部の接続バーを隠しました (クラス " + $sb.ToString() + " / " + $w + "x" + $hh + ")。")
+            }
         }
     } catch { }
-    if ($hid) { Log "コンソール: 上部の接続バーを隠しました。" }
     return $hid
 }
 
@@ -1509,7 +1627,7 @@ function Open-Console($screen, [bool]$fullScreen) {
         if (Test-CoversScreen $hwnd $screen) {
             Log "コンソール: 保存設定により最初から全画面で起動しました。"
             Start-Sleep -Milliseconds 800
-            Hide-ConsoleBar | Out-Null
+            Hide-ConsoleBar $screen | Out-Null
             return
         }
         $own = [System.Windows.Forms.Screen]::FromHandle($hwnd)
@@ -1562,7 +1680,7 @@ function Open-Console($screen, [bool]$fullScreen) {
         if (Test-CoversScreen $hwnd $screen) { $done = $true; Log "コンソール: 全画面モードになりました (キー送信 試行 $try)" }
     }
 
-    if ($done) { Start-Sleep -Milliseconds 800; Hide-ConsoleBar | Out-Null }
+    if ($done) { Start-Sleep -Milliseconds 800; Hide-ConsoleBar $screen | Out-Null }
 
     # 方法4: 黒背景を敷き、枠を外したコンソールを「実際の映像サイズ」で中央に重ねる
     if (-not $done) {
@@ -1634,14 +1752,21 @@ function Open-Display([string]$val, $screen, [string]$profile, [bool]$fullScreen
 
 # 左 = コンソールなら先に出して起動中画面を閉じる (EdgeBox は起動済みなのですぐ出せる)。
 # 管理画面の応答待ちはそのあとに行う (長くかかっても左は見えている)
-$leftIsConsole = ($LeftUrl -match '^(console|コンソール)$')
 if ($leftIsConsole) {
     Open-Display $LeftUrl $leftScreen "FieldKioskL" $LeftFull
-    Stop-Splash
+    # 左は出たので、起動中画面は右画面だけに縮める (右は管理画面が出るまで「応答待ち」を表示)
+    try { Set-Content -Path $SplashLeftOffFile -Value "1" -Encoding ASCII } catch { }
+    Set-Status "管理画面の応答を待っています"
 }
 Wait-ForUrls
 Open-Display $RightUrl $rightScreen "FieldKioskR" $RightFull
 if (-not $leftIsConsole) { Open-Display $LeftUrl $leftScreen "FieldKioskL" $LeftFull }
+if ($script:RightUrlPending -and $RightUrl) {
+    # 応答が無いまま開いたので、応答したら開き直す後追いを残す
+    Start-Process powershell.exe -WindowStyle Hidden -ArgumentList (
+        "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" -UrlRetry -RightUrl `"$RightUrl`" -VMName `"$VMName`"")
+    Log "管理画面が応答したら右画面を開き直す後追いを起動しました。"
+}
 
 # --- ESC 見張り役 (ブラウザ表示があれば起動。全画面→最大化→元のサイズ の順に ESC で戻せる) ---
 $hasBrowser = (($RightUrl -and $RightUrl -notmatch '^(console|コンソール)$') -or
