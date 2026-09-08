@@ -36,6 +36,7 @@ Add-Type -AssemblyName System.Drawing
 
 $ConfigFile   = Join-Path $PSScriptRoot "cpu-partition.json"
 $SnapshotFile = Join-Path $PSScriptRoot "cpu-topology.json"
+$ContainFile  = Join-Path $PSScriptRoot "cpu-contain-status.json"   # 締め出しの常駐 (CpuPartition-Watch) が書く状態
 
 # -VMName を明示していない場合は、保存済み計画の 登録名を使う
 if (-not $PSBoundParameters.ContainsKey("VMName") -and (Test-Path $ConfigFile)) {
@@ -182,6 +183,26 @@ function Get-Plan {
         } catch { }
     }
     return [pscustomobject]@{ Host = $h; Guest = $g; Mode = $mode }
+}
+
+# Windows 側の締め出し (常駐 CpuPartition-Watch) の状態。戻り値: @{ Text; Ok }
+function Get-ContainState {
+    $plan = $script:Plan
+    if (-not $plan -or $plan.Mode -ne "runtime") {
+        if ($plan -and $plan.Mode -eq "full") { return @{ Text = "Windows の締め出し: full モード (minroot でハイパーバイザーが封じ込め)"; Ok = $true } }
+        return @{ Text = "Windows の締め出し: 未設定 (設定コンソールで runtime を適用すると常駐が始まります)"; Ok = $false }
+    }
+    $st = $null
+    try { if (Test-Path $ContainFile) { $st = Get-Content $ContainFile -Raw -Encoding UTF8 | ConvertFrom-Json } } catch { }
+    if (-not $st) { return @{ Text = "Windows の締め出し: 常駐の記録がありません (設定コンソールで runtime を適用し直してください)"; Ok = $false } }
+    $age = 9999
+    try { $age = ((Get-Date) - [datetime]$st.At).TotalSeconds } catch { }
+    $unp = @($st.Unpinnable)
+    if ($age -gt 30) {
+        return @{ Text = ("Windows の締め出し: 停止中? (最終確認 {0} / {1} 秒前)。2 分以内に自動で再開します" -f $st.At, [int]$age); Ok = $false }
+    }
+    return @{ Text = ("Windows の締め出し: 動作中 — Windows のプロセス {0} 個を CPU {1} に固定 (固定不可: {2})" -f
+        $st.Contained, $st.HostLps, $(if ($unp.Count -gt 0) { $unp -join ", " } else { "なし" })); Ok = $true }
 }
 
 # ハイパーバイザーの性能カウンター (-Verify と同じ考え方)
@@ -445,9 +466,11 @@ function Draw-All($g, [int]$W, [int]$H) {
         $l4 = "分離の状態: {0}   EdgeBox が Windows 用コアで動いた割合 {1:N1}%  /  Windows が EdgeBox 用コアで動いた割合 {2:N1}%" -f `
               $(if ($mixed) { "△ 混ざっています" } else { "○ 混ざっていません" }), $leakVm, $leakWin
         $g.DrawString($l4, $FontTitle, $(if ($mixed) { $BrBad } else { $BrGood }), (PointF $pad 58))
+        $cs = Get-ContainState
+        $g.DrawString($cs.Text, $FontBody, $(if ($cs.Ok) { $BrGood } else { $BrBad }), (PointF $pad 76))
 
         # --- 区画ごとに分けて、論理 CPU を番号順に (P/E は色付きの印で区別) ---
-        $top = 80
+        $top = 98
         $avail = $H - $top - $memH - $pad
         $allLpNums = @((Get-LpList) | ForEach-Object { $_.Lp })
         $other = @($allLpNums | Where-Object { ($hostLps -notcontains $_) -and ($guestLps -notcontains $_) })

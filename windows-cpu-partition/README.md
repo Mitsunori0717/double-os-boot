@@ -45,12 +45,23 @@ Windows クライアント版の Hyper-V には、コア固定の GUI も PowerS
 - EdgeBox の CPU 実行 (`vmmem`) を **EdgeBox 用コアへ物理固定**
 - EdgeBox のディスク/ネットワーク処理 (`vmwp`) を **Windows 用コアへ固定**
 - `vmmem` の優先度を High に昇格 — Windows 側の処理がEdgeBox 用コアに
-  来ても即座に押し出される (完全な立入禁止ではなく「最優先の先客」方式)
+  来ても即座に押し出される
+- **Windows 側の締め出し (常駐 `CpuPartition-Watch`)** — 3 秒ごとに、`vmmem` 以外の
+  **全プロセス** (Windows 側のすべて) を Windows 用コアへ固定し直す。新しく起動した
+  プロセスも数秒以内に Windows 用コアへ戻されるため、EdgeBox 用コアに Windows の
+  プロセスは載らない。固定できないのは保護されたシステムプロセス (csrss, wininit,
+  services, Registry, System など) だけで、名前を記録と監視画面に出す。
+  アプリ単位の割り当て (cpu-apps.json) に登録したアプリは、そちらの指定を優先して触らない
 - EdgeBox の起動を Windows イベントで検知して自動再適用するタスク
-  (`CpuPartition-Pin`) を登録 — 電源 ON だけの運用でも効き続ける
+  (`CpuPartition-Pin`) を登録 — 電源 ON だけの運用でも効き続ける。常駐が止まっていれば
+  このタスク (2 分ごと) が起こし直す
 
 **保証の強さ**: EdgeBox → Windows 用コアには載らない (物理固定)。
-Windows → EdgeBox 用コアに一瞬載ることはあるが、優先度で実効的に排除。
+Windows のプロセス → EdgeBox 用コアには載らない (常駐が固定し続ける)。
+残るのは、固定できない保護プロセスとカーネル・割り込みの分だけ (通常 1% 未満)。
+それも構造的に無くすには full モード。
+
+締め出しを使わない場合は `-NoContain` を付ける (優先度だけの旧方式)。
 
 ### full モード — 完全分割 (Linux 主構成と同等。再起動 1 回 + コマンド 2 回)
 
@@ -87,11 +98,12 @@ Restart-Computer                                      # ② 再起動
 | 再起動 | 不要 (稼働中の EdgeBox に後から適用可) | 1 回 |
 | Windows 標準構成 | 維持 (公式サポート内) | スケジューラ変更 (サポート外構成) |
 | EdgeBox → Windows 用コア | 載らない (物理固定) | 載らない (物理固定) |
-| Windows → EdgeBox 用コア | 優先度で実効排除 | **構造的に不可能** |
+| Windows のプロセス → EdgeBox 用コア | 載らない (常駐が固定し続ける) | **構造的に不可能** |
+| Windows のカーネル・割り込み → EdgeBox 用コア | わずかに残る (通常 1% 未満) | **構造的に不可能** |
 | 戻し方 | `-Undo` (即時) | `-Undo` + 再起動 |
 
-まず **runtime** で運用し、`-Verify` の実測で「Windows他実行%」がEdgeBox 用コアに
-目立って残るようなら **full** に上げる、が推奨手順です。
+まず **runtime** で運用し、『EdgeBox 監視』の「分離の状態」が「△ 混ざっています」のまま
+(Windows が EdgeBox 用コアで動いた割合が 1% を超え続ける) なら **full** に上げる、が推奨手順です。
 
 ## 設定コンソール (GUI) — おすすめの入口
 
@@ -407,6 +419,7 @@ Windows が起動できない場合 (通常起きません) は、回復環境 (
 | `cpu-partition.json` | 適用済みの分割計画 (自動タスクが参照) |
 | `cpu-topology.json` | 検出したコア構成の控え (minroot でコアが見えなくなったとき表示に使う) |
 | `cpu-partition-log.txt` | 自動適用の記録 (直近 200 行) |
+| `cpu-contain-status.json` | Windows 側の締め出し (常駐 `CpuPartition-Watch`) の状態。監視画面が読む |
 | `cpu-apps.json` | アプリのコア割り当て (自動タスクが参照) |
 | `cpu-apps-log.txt` | アプリ固定の記録 (直近 200 行) |
 | `tools\CpuGroups.exe` | full モード用の Microsoft 公式ツール (任意) |

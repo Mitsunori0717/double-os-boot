@@ -549,7 +549,7 @@ $grpMode.Controls.Add($script:lblVm)
 
 $grpMode.Controls.Add((New-Lbl "方式:" 14 58))
 $script:rbRuntime = New-Object System.Windows.Forms.RadioButton
-$script:rbRuntime.Text = "runtime (再起動なし・すぐ反映)"
+$script:rbRuntime.Text = "runtime (再起動なし・Windows 側も締め出し)"
 $script:rbRuntime.Location = New-Object System.Drawing.Point(96, 55)
 $script:rbRuntime.Size = New-Object System.Drawing.Size(250, 24)
 $script:rbFull = New-Object System.Windows.Forms.RadioButton
@@ -1176,7 +1176,9 @@ $script:btnApply.Add_Click({
             "登録『$($script:VmNameSel)』を作成して起動すると、この割り当てが自動で適用されます。`n" +
             "(常駐タスク CpuPartition-Pin が EdgeBox の起動を検出して適用します)")
     } else {
-    Show-Info "適用しました。`n`n  Windows            : CPU $hostText`n  $($script:VmNameSel) : CPU $guestText`n`n[効き具合を実測] で、実際にどのコアで動いているか確認できます。"
+    Show-Info ("適用しました。`n`n  Windows            : CPU $hostText`n  $($script:VmNameSel) : CPU $guestText`n`n" +
+        $(if ($mode -eq "runtime") { "常駐 'CpuPartition-Watch' が Windows 側のプロセスを CPU $hostText へ固定し続けます (EdgeBox 用コアに Windows のプロセスは載りません)。`n`n" } else { "" }) +
+        "[効き具合を実測] または『EdgeBox 監視』の「分離の状態」で、実際にどのコアで動いているか確認できます。")
     }
 })
 
