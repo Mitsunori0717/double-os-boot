@@ -61,10 +61,78 @@ function ConvertTo-LpRangeText([int[]]$Lps) {
     return ($parts -join ",")
 }
 
-# コア構成: 設定コンソールが保存した cpu-topology.json (P/E の区別付き)。無ければ 1 論理 = 1 コア
+# CPU トポロジの検出 (P コア / E コア / SMT を CPU 自身から取得。設定コンソールと同じ方法)
+if (-not ("CpuTopoApi" -as [type])) {
+    Add-Type -TypeDefinition @'
+using System;
+using System.Collections.Generic;
+using System.Runtime.InteropServices;
+using System.Text;
+
+public class CpuTopoApi {
+    [DllImport("kernel32.dll", SetLastError = true)]
+    static extern bool GetLogicalProcessorInformationEx(int RelationshipType, IntPtr Buffer, ref uint ReturnedLength);
+
+    // 物理コアごとに "効率クラス|論理CPU番号,..." を ";" 区切りで返す。
+    // 効率クラスは CPU が申告する値で、大きいほど高性能 (P コア)。
+    public static string GetCoreMap() {
+        uint len = 0;
+        GetLogicalProcessorInformationEx(0, IntPtr.Zero, ref len);   // 0 = RelationProcessorCore
+        if (len == 0) { return ""; }
+        IntPtr buf = Marshal.AllocHGlobal((int)len);
+        try {
+            if (!GetLogicalProcessorInformationEx(0, buf, ref len)) { return ""; }
+            StringBuilder sb = new StringBuilder();
+            int offset = 0;
+            while (offset < (int)len) {
+                IntPtr p = new IntPtr(buf.ToInt64() + offset);
+                int rel  = Marshal.ReadInt32(p, 0);
+                int size = Marshal.ReadInt32(p, 4);
+                if (size <= 0) { break; }
+                if (rel == 0) {
+                    byte eff = Marshal.ReadByte(p, 9);
+                    short groupCount = Marshal.ReadInt16(p, 30);
+                    List<string> lps = new List<string>();
+                    for (int g = 0; g < groupCount; g++) {
+                        int off = 32 + g * (IntPtr.Size + 8);        // GROUP_AFFINITY のサイズ
+                        long mask = (IntPtr.Size == 8)
+                            ? Marshal.ReadInt64(p, off)
+                            : (long)(uint)Marshal.ReadInt32(p, off);
+                        short grp = Marshal.ReadInt16(p, off + IntPtr.Size);
+                        for (int b = 0; b < 64; b++) {
+                            if (((mask >> b) & 1L) != 0) { lps.Add((grp * 64 + b).ToString()); }
+                        }
+                    }
+                    if (lps.Count > 0) {
+                        sb.Append(eff).Append('|').Append(string.Join(",", lps.ToArray())).Append(';');
+                    }
+                }
+                offset += size;
+            }
+            return sb.ToString();
+        } finally {
+            Marshal.FreeHGlobal(buf);
+        }
+    }
+}
+'@
+}
+
+# コア構成: まず CPU 自身から取得 (P/E の区別付き)。取れなければ設定コンソールが保存した
+# cpu-topology.json、それも無ければ 1 論理 = 1 コア とみなす
 function Get-Cores {
     $raw = @()
-    if (Test-Path $SnapshotFile) {
+    try {
+        $map = [CpuTopoApi]::GetCoreMap()
+        foreach ($entry in ($map -split ';')) {
+            if (-not $entry) { continue }
+            $parts = $entry -split '\|'
+            if ($parts.Count -lt 2) { continue }
+            $lps = @($parts[1] -split ',' | Where-Object { $_ -ne '' } | ForEach-Object { [int]$_ })
+            if ($lps.Count -gt 0) { $raw += [pscustomobject]@{ Eff = [int]$parts[0]; Lps = $lps; Kind = "C"; Label = "" } }
+        }
+    } catch { $raw = @() }
+    if ($raw.Count -eq 0 -and (Test-Path $SnapshotFile)) {
         try {
             $json = Get-Content $SnapshotFile -Raw -Encoding UTF8 | ConvertFrom-Json
             $items = @()
@@ -100,7 +168,8 @@ function Get-Cores {
             else                    { $c.Kind = "E"; $c.Label = "E$ne"; $ne++ }
         } else { $c.Kind = "C"; $c.Label = "C$nc"; $nc++ }
     }
-    return ,$raw
+    # 注意: ",$raw" で返すと呼び出し側の @() で二重に包まれる (1 要素の配列の中に配列) ため、そのまま返す
+    return $raw
 }
 
 # 割り当ての計画 (cpu-partition.json)
@@ -219,6 +288,10 @@ $BrHv    = New-Object System.Drawing.SolidBrush $ColHv
 $BrFree  = New-Object System.Drawing.SolidBrush $ColFree
 $BrText  = [System.Drawing.Brushes]::Black
 $BrGray  = [System.Drawing.Brushes]::DimGray
+$BrP     = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb(200, 110, 0))   # P コアの印
+$BrE     = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb(0, 130, 160))   # E コアの印
+$BrBad   = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb(200, 30, 30))   # 混ざっている印
+$BrGood  = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb(0, 130, 60))    # 分かれている印
 $PenHost  = New-Object System.Drawing.Pen -ArgumentList @($ColWin, [float]2)
 $PenGuest = New-Object System.Drawing.Pen -ArgumentList @($ColVm, [float]2)
 $PenNone  = New-Object System.Drawing.Pen -ArgumentList @([System.Drawing.Color]::Silver, [float]1)
@@ -241,56 +314,66 @@ function Draw-Legend($g, [int]$x, [int]$y) {
     }
 }
 
-function Draw-Row($g, [int]$x, [int]$y, [int]$w, [int]$h, [string]$title, $cs) {
-    $lpTotal = 0; foreach ($c in $cs) { $lpTotal += $c.Lps.Count }
-    $g.DrawString(("{0} — {1} コア / {2} スレッド" -f $title, $cs.Count, $lpTotal), $FontTitle, $BrText, (PointF $x $y))
-    if ($cs.Count -eq 0) { return }
-    $barTop = $y + 36
-    $labelH = 30
-    $barH = $h - 36 - $labelH - 4
-    if ($barH -lt 16) { $barH = 16 }
-    $slotW = [int]($w / $cs.Count)
-    if ($slotW -lt 12) { $slotW = 12 }
+# 論理 CPU を番号順に並べる (種類 P/E と、属するコアの名前を付ける)
+function Get-LpList {
+    $list = @()
+    foreach ($c in $script:Cores) {
+        foreach ($lp in $c.Lps) { $list += [pscustomobject]@{ Lp = [int]$lp; Kind = $c.Kind; Core = $c.Label } }
+    }
+    return @($list | Sort-Object Lp)
+}
+
+# 論理 CPU を番号順に格子で描く: 上に「CPU 番号」と種類 (P0/E3)、縦棒、下に使用率 (%)
+# (以前はコアごとに P/E の行に分けていたため、番号順に追いにくく、細い棒では数字も出なかった)
+# $only = 表示する論理 CPU 番号の一覧 ($null = 全部)。$side = "host" (Windows 用) / "guest" (EdgeBox 用) / ""
+# Windows 用の区画で EdgeBox が動いた、または EdgeBox 用の区画で Windows が動いた論理 CPU は、使用率を赤で出す
+function Draw-LpGrid($g, [int]$x, [int]$y, [int]$w, [int]$h, [string]$title, $only, [string]$side) {
+    $lps = @(Get-LpList)
+    if ($only) { $lps = @($lps | Where-Object { $only -contains $_.Lp }) }
+    if ($title) {
+        $g.DrawString($title, $FontTitle, $BrText, (PointF $x $y))
+        $y += 20; $h -= 20
+    }
+    if ($lps.Count -eq 0) { $g.DrawString("(該当する CPU なし)", $FontBody, $BrGray, (PointF $x $y)); return }
+    $minSlot = 54
+    $cols = [Math]::Max(1, [Math]::Min($lps.Count, [int]($w / $minSlot)))
+    $rows = [int][Math]::Ceiling($lps.Count / $cols)
+    $slotW = [int]($w / $cols)
+    $rowH = [int]($h / $rows)
+    if ($rowH -lt 80) { $rowH = 80 }
     $i = 0
-    foreach ($c in $cs) {
-        $sx = $x + $i * $slotW; $i++
-        # 枠: 割り当ての計画で色分け
-        $inGuest = 0; $inHost = 0
-        foreach ($lp in $c.Lps) {
-            if ($script:Plan.Guest -contains $lp) { $inGuest++ } elseif ($script:Plan.Host -contains $lp) { $inHost++ }
-        }
+    foreach ($e in $lps) {
+        $r = [int][Math]::Floor($i / $cols); $ci = $i % $cols; $i++
+        $sx = $x + $ci * $slotW; $sy = $y + $r * $rowH
+        $vm = 0.0; $win = 0.0; $hv = 0.0
+        $st = $script:Stat[[int]$e.Lp]
+        if ($st) { $vm = [double]$st.Vm; $win = [double]$st.Win; $hv = [double]$st.Hv }
+        $total = $vm + $win + $hv
+        # 上: 番号と種類
+        $g.DrawString(("CPU {0}" -f $e.Lp), $FontTitle, $BrText, (PointF ($sx + 2) $sy))
+        $brKind = if ($e.Kind -eq "P") { $BrP } elseif ($e.Kind -eq "E") { $BrE } else { $BrGray }
+        $g.DrawString($e.Core, $FontSmall, $brKind, (PointF ($sx + 3) ($sy + 16)))
+        # 縦棒 (枠の色 = 割り当ての計画: 青 = Windows 用 / 緑 = EdgeBox 用)
+        $barTop = $sy + 30
+        $barH = $rowH - 30 - 20
+        if ($barH -lt 12) { $barH = 12 }
+        $bx = $sx + 4; $bw = $slotW - 8
         $pen = $PenNone
-        if ($inGuest -eq $c.Lps.Count) { $pen = $PenGuest } elseif ($inHost -eq $c.Lps.Count) { $pen = $PenHost }
-        $g.DrawRectangle($pen, (Rect ($sx + 2) ($barTop - 2) ($slotW - 4) ($barH + 4)))
-        # 論理 CPU ごとの棒
-        $n = $c.Lps.Count
-        $inner = $slotW - 8
-        $bw = [int](($inner - ($n - 1) * 2) / $n)
-        if ($bw -lt 2) { $bw = 2 }
-        $k = 0
-        foreach ($lp in $c.Lps) {
-            $bx = $sx + 4 + $k * ($bw + 2); $k++
-            $vm = 0.0; $win = 0.0; $hv = 0.0
-            $st = $script:Stat[[int]$lp]
-            if ($st) { $vm = [double]$st.Vm; $win = [double]$st.Win; $hv = [double]$st.Hv }
-            $g.FillRectangle($BrFree, (Rect $bx $barTop $bw $barH))
-            $hVm  = [int]($barH * $vm / 100.0)
-            $hWin = [int]($barH * $win / 100.0)
-            $hHv  = [int]($barH * $hv / 100.0)
-            if (($hVm + $hWin + $hHv) -gt $barH) { $hHv = [Math]::Max(0, $barH - $hVm - $hWin) }
-            $yy = $barTop + $barH
-            if ($hVm -gt 0)  { $yy -= $hVm;  $g.FillRectangle($BrVm,  (Rect $bx $yy $bw $hVm)) }
-            if ($hWin -gt 0) { $yy -= $hWin; $g.FillRectangle($BrWin, (Rect $bx $yy $bw $hWin)) }
-            if ($hHv -gt 0)  { $yy -= $hHv;  $g.FillRectangle($BrHv,  (Rect $bx $yy $bw $hHv)) }
-            if ($bw -ge 16) {
-                $g.DrawString(("{0:N0}" -f ($vm + $win + $hv)), $FontSmall, $BrGray, (PointF $bx ($barTop - 15)))
-            }
-        }
-        # ラベル (コア名と論理 CPU 番号)
-        if ($slotW -ge 30) {
-            $lbl = "{0}`nCPU {1}" -f $c.Label, (ConvertTo-LpRangeText $c.Lps)
-            $g.DrawString($lbl, $FontSmall, $BrText, (PointF ($sx + 3) ($barTop + $barH + 4)))
-        }
+        if ($script:Plan.Guest -contains $e.Lp) { $pen = $PenGuest } elseif ($script:Plan.Host -contains $e.Lp) { $pen = $PenHost }
+        $g.DrawRectangle($pen, (Rect ($bx - 1) ($barTop - 1) ($bw + 2) ($barH + 2)))
+        $g.FillRectangle($BrFree, (Rect $bx $barTop $bw $barH))
+        $hVm  = [int]($barH * $vm / 100.0)
+        $hWin = [int]($barH * $win / 100.0)
+        $hHv  = [int]($barH * $hv / 100.0)
+        if (($hVm + $hWin + $hHv) -gt $barH) { $hHv = [Math]::Max(0, $barH - $hVm - $hWin) }
+        $yy = $barTop + $barH
+        if ($hVm -gt 0)  { $yy -= $hVm;  $g.FillRectangle($BrVm,  (Rect $bx $yy $bw $hVm)) }
+        if ($hWin -gt 0) { $yy -= $hWin; $g.FillRectangle($BrWin, (Rect $bx $yy $bw $hWin)) }
+        if ($hHv -gt 0)  { $yy -= $hHv;  $g.FillRectangle($BrHv,  (Rect $bx $yy $bw $hHv)) }
+        # 下: 使用率 (常に表示)。区画に合わない側の使用が 1% を超えていれば赤 (混ざっている印)
+        $brPct = $BrText
+        if (($side -eq "host" -and $vm -gt 1.0) -or ($side -eq "guest" -and $win -gt 1.0)) { $brPct = $BrBad }
+        $g.DrawString(("{0:N0}%" -f $total), $FontBody, $brPct, (PointF ($sx + 2) ($barTop + $barH + 2)))
     }
 }
 
@@ -340,23 +423,52 @@ function Draw-All($g, [int]$W, [int]$H) {
         $g.DrawString("ハイパーバイザーの性能カウンターが見つかりません (Hyper-V が無効か、カウンターの破損)。", $FontBody, [System.Drawing.Brushes]::Firebrick, (PointF $pad 44))
     }
 
-    # --- コアの行 ---
-    $rows = @()
+    # --- コア構成の見出し (P コア 8 / E コア 12 のように種類ごとの数と CPU 番号) ---
+    $pc = @($script:Cores | Where-Object { $_.Kind -eq "P" }); $ec = @($script:Cores | Where-Object { $_.Kind -eq "E" })
+    $lpTotal = 0; foreach ($c in $script:Cores) { $lpTotal += $c.Lps.Count }
     if ($script:Hybrid) {
-        $rows += ,@("P", "P コア (性能重視)")
-        $rows += ,@("E", "E コア (効率重視)")
+        $pl = @(); foreach ($c in $pc) { $pl += $c.Lps }
+        $el = @(); foreach ($c in $ec) { $el += $c.Lps }
+        $l3 = "コア構成: P コア {0} (CPU {1}) / E コア {2} (CPU {3})   合計 {4} コア / {5} スレッド" -f `
+              $pc.Count, (ConvertTo-LpRangeText $pl), $ec.Count, (ConvertTo-LpRangeText $el), $script:Cores.Count, $lpTotal
     } else {
-        $rows += ,@("C", "コア")
+        $l3 = "コア構成: {0} コア / {1} スレッド" -f $script:Cores.Count, $lpTotal
     }
-    $top = 48; $memH = 70
-    $avail = $H - $top - $memH - $pad
-    $rowH = [int]($avail / $rows.Count)
-    if ($rowH -lt 90) { $rowH = 90 }
-    $y = $top
-    foreach ($r in $rows) {
-        $cs = @($script:Cores | Where-Object { $_.Kind -eq $r[0] })
-        Draw-Row $g $pad $y ($W - 2 * $pad) $rowH $r[1] $cs
-        $y += $rowH
+    $g.DrawString($l3, $FontBody, $BrText, (PointF $pad 40))
+
+    # --- 分離の状態: 「EdgeBox が Windows 用コアで動いた割合」と「Windows が EdgeBox 用コアで動いた割合」 ---
+    $memH = 70
+    if ($hostLps.Count -gt 0 -and $guestLps.Count -gt 0) {
+        $leakVm  = Get-Avg $hostLps  "Vm"    # Windows 用コアに載った EdgeBox (物理固定が効いていれば 0)
+        $leakWin = Get-Avg $guestLps "Win"   # EdgeBox 用コアに載った Windows (runtime モードでは少し出ることがある)
+        $mixed = ($leakVm -gt 1.0 -or $leakWin -gt 1.0)
+        $l4 = "分離の状態: {0}   EdgeBox が Windows 用コアで動いた割合 {1:N1}%  /  Windows が EdgeBox 用コアで動いた割合 {2:N1}%" -f `
+              $(if ($mixed) { "△ 混ざっています" } else { "○ 混ざっていません" }), $leakVm, $leakWin
+        $g.DrawString($l4, $FontTitle, $(if ($mixed) { $BrBad } else { $BrGood }), (PointF $pad 58))
+
+        # --- 区画ごとに分けて、論理 CPU を番号順に (P/E は色付きの印で区別) ---
+        $top = 80
+        $avail = $H - $top - $memH - $pad
+        $allLpNums = @((Get-LpList) | ForEach-Object { $_.Lp })
+        $other = @($allLpNums | Where-Object { ($hostLps -notcontains $_) -and ($guestLps -notcontains $_) })
+        $secs = @()
+        $secs += ,@(("Windows 用  (CPU {0} / {1} 論理)" -f (ConvertTo-LpRangeText $hostLps), $hostLps.Count), $hostLps, "host")
+        $secs += ,@(("{0} 用  (CPU {1} / {2} 論理)" -f $VMName, (ConvertTo-LpRangeText $guestLps), $guestLps.Count), $guestLps, "guest")
+        if ($other.Count -gt 0) { $secs += ,@(("割り当て外  (CPU {0})" -f (ConvertTo-LpRangeText $other)), $other, "") }
+        # 区画の高さは論理 CPU の数に応じて配分 (最低 110 px)
+        $tot = 0; foreach ($sec in $secs) { $tot += [Math]::Max(4, $sec[1].Count) }
+        $y = $top
+        foreach ($sec in $secs) {
+            $hh = [int]($avail * [Math]::Max(4, $sec[1].Count) / $tot)
+            if ($hh -lt 110) { $hh = 110 }
+            Draw-LpGrid $g $pad $y ($W - 2 * $pad) $hh $sec[0] $sec[1] $sec[2]
+            $y += $hh
+        }
+    } else {
+        $g.DrawString("分離の状態: 割り当ての計画がありません (設定コンソールで CPU コアを分割すると、区画ごとに表示します)", $FontBody, $BrGray, (PointF $pad 58))
+        $top = 80
+        $avail = $H - $top - $memH - $pad
+        Draw-LpGrid $g $pad $top ($W - 2 * $pad) $avail "" $null ""
     }
 
     # --- メモリ ---
@@ -367,7 +479,7 @@ function Draw-All($g, [int]$W, [int]$H) {
 
 $form = New-Object System.Windows.Forms.Form
 $form.Text = "$VMName 監視 — 各コアの負荷とメモリ"
-$form.ClientSize = New-Object System.Drawing.Size(1000, 600)
+$form.ClientSize = New-Object System.Drawing.Size(1120, 620)
 $form.MinimumSize = New-Object System.Drawing.Size(640, 440)
 $form.StartPosition = "CenterScreen"
 $form.FormBorderStyle = "Sizable"      # 大きさは自由に変えられる
