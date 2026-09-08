@@ -9,17 +9,17 @@ LAN ポート5つ / 工作機械との接続は Ethernet。
 | ② | Hyper-V 有効化: `Enable-WindowsOptionalFeature -Online -FeatureName Microsoft-Hyper-V-All` → 再起動 | Hyper-V マネージャーが存在 |
 | ③ | リポジトリ ZIP を `C:\double-os-boot` に配置 | `windows-host\01-create-field-vm.ps1` がある |
 | ④ | ライン側 LAN ポートを決めてケーブル接続、`Get-NetAdapter` で **Name** をメモ (IP からも逆引き可: `Get-NetIPAddress -AddressFamily IPv4 \| Select IPAddress,InterfaceAlias`) | Status: Up の Name を控えた |
-| ⑤ | VM 作成: `.\01-create-field-vm.ps1 -DiskNumber 0 -NetAdapterName "<Name>"` (確認プロンプトで KIOXIA を確認して y)。**既に外部スイッチがある環境では `-SwitchName "<Get-VMSwitch の名前>"` を使う** | Hyper-V マネージャーに EdgeBox |
+| ⑤ | EdgeBox 作成: `.\01-create-field-vm.ps1 -DiskNumber 0 -NetAdapterName "<Name>"` (確認プロンプトで KIOXIA を確認して y)。**既に外部スイッチがある環境では `-SwitchName "<Get-VMSwitch の名前>"` を使う** | Hyper-V マネージャーに EdgeBox |
 | ⑥ | 初回起動: `.\02-start-field-vm.ps1`。起動中 **Ctrl 長押し厳禁** (工場出荷リセット) | コンソールに EdgeBox の画面 |
 | ⑦ | IP 確認: `Get-VMNetworkAdapter -VMName EdgeBox`。ブラウザで管理画面を開く | 管理画面が開き収集再開 |
 | ⑧ | Windows 側 EdgeBox アプリの接続先に ⑦ の IP を設定 | アプリからデータが見える |
-| ⑨ | 起動時の自動表示 + VM 自動起動: `.\03-field-display-kiosk.ps1 -Install` (VM の自動起動も一緒に設定される。VM 名が EdgeBox でなくても自動で見つける) | 電源ONだけで収集開始・左に EdgeBox・右に管理画面 |
+| ⑨ | 起動時の自動表示 + EdgeBox 自動起動: `.\03-field-display-kiosk.ps1 -Install` (EdgeBox の自動起動も一緒に設定される。登録名が EdgeBox でなくても自動で見つける) | 電源ONだけで収集開始・左に EdgeBox・右に管理画面 |
 | ⑩ | 予行: F8 からネイティブ起動できることを確認。撤退手順 (`Remove-VM` + `Set-Disk -IsOffline $false`) を把握 | ネイティブ起動を1回確認 |
 
 ## いちばん簡単な導入・起動 (①〜⑥をまとめて行う)
 
-`field-start.cmd` をダブルクリックするだけで (外部スイッチがまだ無い新規 PC の初回だけは上の `-NetAdapterName` 付きで)、既存 VM の検出 → 競合の片付け →
-(必要なら) VM 作成 → 起動 まで自動で進む。日常の起動もこれ 1 つで済む。
+`field-start.cmd` をダブルクリックするだけで (外部スイッチがまだ無い新規 PC の初回だけは上の `-NetAdapterName` 付きで)、既存 EdgeBox の検出 → 競合の片付け →
+(必要なら) EdgeBox 作成 → 起動 まで自動で進む。日常の起動もこれ 1 つで済む。
 
 ```powershell
 .\00-field-launcher.ps1 -NetAdapterName "<Get-NetAdapter の Name>"   # 新規 PC の初回 (外部スイッチがまだ無い)
@@ -30,7 +30,7 @@ LAN ポート5つ / 工作機械との接続は Ethernet。
 ## 運用ルール
 
 1. EdgeBox の起動画面で **Ctrl キーを押しっぱなしにしない** (Factory reset が選択される)
-2. VM 運用中にディスク0を手動でオンラインに戻さない (同時アクセスによる破損防止)
+2. EdgeBox 運用中にディスク0を手動でオンラインに戻さない (同時アクセスによる破損防止)
 
 ## 日常運用
 
@@ -38,18 +38,18 @@ LAN ポート5つ / 工作機械との接続は Ethernet。
 - 夕: `.\02-start-field-vm.ps1 -Stop` → Windows をシャットダウン
 - 切り分け: 問題発生時は F8 → KIOXIA を選択して EdgeBox をネイティブ起動し、再現比較
 
-## 不具合時の切り分けフロー (Windows か / EdgeBox か / VM か)
+## 不具合時の切り分けフロー (Windows か / EdgeBox か / EdgeBox か)
 
 3つの切替スイッチで層を確定する:
 
 | スイッチ | 操作 | 意味 |
 |---|---|---|
-| ① EdgeBox ネイティブ起動 | 再起動 → F8 → KIOXIA を選択 | VM 層を外した素の EdgeBox (ディスク同一・無改造のため完全比較) |
-| ② Hyper-V 一時停止 | `bcdedit /set hypervisorlaunchtype off` → 再起動 (復帰は `auto`) | 仮想化層ゼロの素の Windows |
+| ① EdgeBox ネイティブ起動 | 再起動 → F8 → KIOXIA を選択 | EdgeBox 層を外した素の EdgeBox (ディスク同一・無改造のため完全比較) |
+| ② Hyper-V 一時停止 | `bcdedit /set hypervisorlaunchtype off` → 再起動 (復帰は `auto`) | 分離層ゼロの素の Windows |
 | ③ 管理画面直接アクセス | ブラウザで EdgeBox の IP | アプリを介さない到達確認 |
 
-- 収集が止まった → ①で再現するなら EdgeBox 側 (メーカーに相談可)。再現しないなら VM 層
-- アプリが繋がらない → ③で開けるならアプリ/Windows 側。開けないなら EdgeBox/VM 側 → ①へ
+- 収集が止まった → ①で再現するなら EdgeBox 側 (メーカーに相談可)。再現しないなら EdgeBox 層
+- アプリが繋がらない → ③で開けるならアプリ/Windows 側。開けないなら EdgeBox/EdgeBox 側 → ①へ
 - Windows が不調 → ②で再現するなら Windows/アプリ自体。再現しないなら Hyper-V との干渉
 
 どの切替も可逆でデータには触れない。再起動 1〜2 回で必ずどれかの層に確定する。
@@ -79,19 +79,19 @@ cd ..\windows-cpu-partition
 
 ```powershell
 .\03-field-display-kiosk.ps1            # 動作確認 (今すぐ表示)
-.\03-field-display-kiosk.ps1 -Install   # ログオン時の自動表示を登録 (VM の自動起動も設定)
+.\03-field-display-kiosk.ps1 -Install   # ログオン時の自動表示を登録 (EdgeBox の自動起動も設定)
 ```
 
 既定は **左 = EdgeBox のコンソール (EdgeBox の起動画面) / 右 = 管理画面 `https://192.168.0.205/`**。
 右画面の URL は『EdgeBox設定』の[画面表示]タブで変更できる (再登録は不要)。
-VM 名が EdgeBox でなくても (旧名称のままでも)、EdgeBox のディスクを持つ VM を自動で見つける。
+登録名が EdgeBox でなくても (旧名称のままでも)、EdgeBox のディスクを持つ EdgeBox を自動で見つける。
 
-VM の起動と Web 画面の応答を待ってから、サブモニターに Edge キオスクモード (枠なし全画面) で表示する。
+EdgeBox の起動と Web 画面の応答を待ってから、サブモニターに Edge キオスクモード (枠なし全画面) で表示する。
 これと `Set-VM -AutomaticStartAction Start` の組み合わせで、電源 ON → ログオンだけで
 「モニター1 = Windows / モニター2 = EdgeBox 全画面」になる。終了は Alt+F4。
 
 コンソール表示 (console 指定) は **閉じずに残る** (既定)。閉じてほしい場合だけ『設定』の[画面表示]で
-「自動で閉じる」をオンにできる (閉じても VM は動き続ける)。
+「自動で閉じる」をオンにできる (閉じても EdgeBox は動き続ける)。
 全画面時に上部へ出る接続バー (「localhost 上の EdgeBox」の帯) は既定で非表示 (同じ画面で切り替え可)。
 左画面は**見張り役が固定**する: 左に出てきた他の窓は右画面へ移し、全画面が外れたら戻す。
 解除/再固定は **Alt+F11** のみ。Windows の「メイン ディスプレイ」は右のモニターにしておく。
@@ -102,7 +102,7 @@ VM の起動と Web 画面の応答を待ってから、サブモニターに Ed
 .\04-reboot-to-field-native.ps1 -Setup   # 初回のみ: UEFI 起動エントリを選択・デスクトップにショートカット作成
 ```
 
-以後はデスクトップの『EdgeBox 単独起動』をダブルクリック → VM を安全停止 →
+以後はデスクトップの『EdgeBox 単独起動』をダブルクリック → EdgeBox を安全停止 →
 再起動して EdgeBox がネイティブ単独起動する (F8 連打は不要)。
 UEFI の「次回のみ起動先指定 (bootsequence)」を使うため 1 回で消費され、
 **EdgeBox 利用後に次へ電源を入れると自動的に Windows に戻る** (戻し操作なし)。
@@ -115,7 +115,7 @@ UEFI の「次回のみ起動先指定 (bootsequence)」を使うため 1 回で
 ```
 
 ロック画面とパスワード入力を省略し、電源 ON から一気にデスクトップまで進む。
-これで「電源を入れるだけ」で **VM 自動起動 → 自動サインイン → 左右モニターへの自動表示 (03)**
+これで「電源を入れるだけ」で **EdgeBox 自動起動 → 自動サインイン → 左右モニターへの自動表示 (03)**
 まで人の操作なしにそろう。スリープ・スクリーンセーバー復帰時のパスワード要求も外れる。
 
 アカウント名とパスワードは、デスクトップの『自動サインイン設定』アイコンから
@@ -153,15 +153,15 @@ UEFI の「次回のみ起動先指定 (bootsequence)」を使うため 1 回で
 
 ### 起動時「別のプロセスが使用中」(0x80070020) で失敗するとき
 
-パススルー ディスクは「Windows からオフライン」かつ「1 つの VM だけが接続」でないと開けない。
+パススルー ディスクは「Windows からオフライン」かつ「1 つの EdgeBox だけが接続」でないと開けない。
 
 ```powershell
 .\02-start-field-vm.ps1 -Repair     # 二重接続の削除・オフライン化を自動で行い、原因を表示
 wsl --unmount \\.\PHYSICALDRIVE0    # WSL が掴んでいる場合 (その後 wsl --shutdown)
 ```
 
-他 VM が同じディスクを使っている場合は、その VM を停止・削除してから再実行する
-(旧構成の VM が残っていることが多い)。
+他 EdgeBox が同じディスクを使っている場合は、その EdgeBox を停止・削除してから再実行する
+(旧構成の EdgeBox が残っていることが多い)。
 
 ### ワンクリックで再起動 / 左画面に表示 (10-restart-edgebox.ps1)
 
@@ -171,7 +171,7 @@ wsl --unmount \\.\PHYSICALDRIVE0    # WSL が掴んでいる場合 (その後 ws
 
 『EdgeBox 再起動』は正常シャットダウン → 起動 → 画面表示 (強制電源断はしない)。
 『EdgeBox 画面』は左画面にコンソールを最大化で出し、自動では閉じない。
-コンソール窓は既定では閉じない (閉じる設定にした場合も VM は動き続ける)。
+コンソール窓は既定では閉じない (閉じる設定にした場合も EdgeBox は動き続ける)。
 
 ### 画面が黒いまま操作できないとき (99-fix-black-screen.ps1)
 
@@ -180,7 +180,7 @@ fix-black-screen.cmd をダブルクリック   ※管理者にしないこと
 ```
 
 起動中スプラッシュ・黒背景の残骸を閉じ、デスクトップ (explorer.exe) が止まっていれば
-起動し直す。EdgeBox VM や CPU 割り当てには触れないため、いつ実行しても安全。
+起動し直す。EdgeBox や CPU 割り当てには触れないため、いつ実行しても安全。
 
 ### BIOS の Fast Boot について
 

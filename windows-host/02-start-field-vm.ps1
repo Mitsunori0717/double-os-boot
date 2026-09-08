@@ -1,6 +1,6 @@
 ﻿<#
 .SYNOPSIS
-    EdgeBox VM を起動し、コンソール画面を開きます。
+    EdgeBox を起動し、コンソール画面を開きます。
 
 .EXAMPLE
     .\02-start-field-vm.ps1              # 起動 + コンソール表示
@@ -14,19 +14,19 @@ param(
     [switch]$Stop,
     [switch]$Status,
     # ディスクが「別のプロセスが使用中」で起動できないときの自動修復
-    # (重複した接続の削除 / ディスクのオフライン化。他 VM の設定には触れない)
+    # (重複した接続の削除 / ディスクのオフライン化。他 EdgeBox の設定には触れない)
     [switch]$Repair,
 
-    # -Repair と併用。同じディスクを掴んでいる他の VM から、その接続だけを外す
-    # (VM 自体もディスクの中身も消しません。対象 VM が停止中のときのみ実行)
+    # -Repair と併用。同じディスクを掴んでいる他の EdgeBox から、その接続だけを外す
+    # (EdgeBox 自体もディスクの中身も消しません。対象 が停止中のときのみ実行)
     [switch]$DetachOthers
 )
 
 $ErrorActionPreference = "Stop"
 
-# -VMName を明示していない場合、既定名の VM が無ければ、EdgeBox のディスク
-# (物理ディスクのパススルー) を持つ VM を探して使う。00-field-launcher.ps1 と
-# 同じ考え方で、VM 名が「EdgeBox」でなくても (旧名称のままでも) そのまま動くようにする
+# -VMName を明示していない場合、既定名の EdgeBox が無ければ、EdgeBox のディスク
+# (物理ディスクのパススルー) を持つ EdgeBox を探して使う。00-field-launcher.ps1 と
+# 同じ考え方で、登録名が「EdgeBox」でなくても (旧名称のままでも) そのまま動くようにする
 if (-not $PSBoundParameters.ContainsKey("VMName") -and
     -not (Get-VM -Name $VMName -ErrorAction SilentlyContinue)) {
     $foundVms = @()
@@ -57,7 +57,7 @@ try { $SysDisk = [int](Get-Partition -DriveLetter C -ErrorAction Stop).DiskNumbe
 
 $vm = Get-VM -Name $VMName -ErrorAction SilentlyContinue
 if (-not $vm) {
-    Write-Error "VM '$VMName' がありません。01-create-field-vm.ps1 で作成してください。"
+    Write-Error "登録 '$VMName' がありません。01-create-field-vm.ps1 で作成してください。"
     exit 1
 }
 
@@ -71,14 +71,14 @@ if ($Stop) {
         Stop-VM -Name $VMName   # ACPI シャットダウン要求 (EdgeBox 側が正常終了処理を行う)
         Write-Host "シャットダウンを要求しました。"
     } else {
-        Write-Host "VM は起動していません ($($vm.State))。"
+        Write-Host "EdgeBox は起動していません ($($vm.State))。"
     }
     exit 0
 }
 
 # ============================================================
 #  物理ディスクの取り合いを調べる
-#  (パススルー ディスクは「Windows からオフライン」かつ「1 つの VM だけが接続」
+#  (パススルー ディスクは「Windows からオフライン」かつ「1 つの EdgeBox だけが接続」
 #   でないと開けず、Start-VM が 0x80070020 で失敗する)
 # ============================================================
 function Get-PassthroughDisks([string]$Name) {
@@ -89,7 +89,7 @@ function Get-PassthroughDisks([string]$Name) {
 function Test-DiskReady([switch]$Fix) {
     $problems = @()
     $mine = Get-PassthroughDisks $VMName
-    if ($mine.Count -eq 0) { return $problems }   # 仮想ディスク運用なら対象外
+    if ($mine.Count -eq 0) { return $problems }   # ファイル形式のディスク運用なら対象外
 
     # 1) 同じディスクを二重に接続していないか (作成をやり直したときに起きやすい)
     foreach ($g in ($mine | Group-Object DiskNumber)) {
@@ -108,22 +108,22 @@ function Test-DiskReady([switch]$Fix) {
 
     $diskNums = @($mine | Select-Object -ExpandProperty DiskNumber -Unique)
 
-    # 2) 他の VM が同じ物理ディスクを掴んでいないか (旧構成の VM が残っている等)
+    # 2) 他の EdgeBox が同じ物理ディスクを掴んでいないか (旧構成の EdgeBox が残っている等)
     foreach ($other in @(Get-VM | Where-Object { $_.Name -ne $VMName })) {
         foreach ($d in (Get-PassthroughDisks $other.Name)) {
             if ($diskNums -notcontains $d.DiskNumber) { continue }
             if ($Fix -and $DetachOthers) {
                 if ($other.State -ne "Off") {
-                    $problems += "VM『$($other.Name)』が動作中のため接続を外せません (先に停止してください)"
+                    $problems += "登録『$($other.Name)』が動作中のため接続を外せません (先に停止してください)"
                     continue
                 }
                 Remove-VMHardDiskDrive -VMName $other.Name `
                     -ControllerType $d.ControllerType `
                     -ControllerNumber $d.ControllerNumber `
                     -ControllerLocation $d.ControllerLocation
-                Write-Host "  VM『$($other.Name)』からディスク $($d.DiskNumber) の接続を外しました (VM とデータは残ります)" -ForegroundColor Green
+                Write-Host "  登録『$($other.Name)』からディスク $($d.DiskNumber) の接続を外しました (EdgeBox とデータは残ります)" -ForegroundColor Green
             } else {
-                $problems += "VM『$($other.Name)』も同じディスク $($d.DiskNumber) を使っています (同時には使えません)"
+                $problems += "登録『$($other.Name)』も同じディスク $($d.DiskNumber) を使っています (同時には使えません)"
             }
         }
     }
@@ -134,10 +134,10 @@ function Test-DiskReady([switch]$Fix) {
         if ($d -and -not $d.IsOffline) {
             $problems += "ディスク $n が Windows でオンラインのままです"
             if ($Fix) {
-                # 万一 VM に誤ったディスクが接続されていても、Windows 自身の
+                # 万一 EdgeBox に誤ったディスクが接続されていても、Windows 自身の
                 # ディスクだけは絶対にオフラインにしない
                 if ($n -eq $SysDisk) {
-                    $problems += "ディスク $n は Windows のシステムディスクです。オフラインにしません (VM の設定を見直してください)"
+                    $problems += "ディスク $n は Windows のシステムディスクです。オフラインにしません (EdgeBox の設定を見直してください)"
                 } else {
                     Set-Disk -Number $n -IsOffline $true
                     Write-Host "  ディスク $n をオフラインにしました" -ForegroundColor Green
@@ -159,10 +159,10 @@ function Show-DiskHelp($Problems) {
     Write-Host ""
     Write-Host "対処:" -ForegroundColor Cyan
     Write-Host "  1. 自動で直せる分を直す : .\02-start-field-vm.ps1 -Repair"
-    Write-Host "     他 VM の接続も外す   : .\02-start-field-vm.ps1 -Repair -DetachOthers"
-    Write-Host "                            (その VM とディスクの中身は消えません)"
+    Write-Host "     他 EdgeBox の接続も外す   : .\02-start-field-vm.ps1 -Repair -DetachOthers"
+    Write-Host "                            (その EdgeBox とディスクの中身は消えません)"
     Write-Host "  2. WSL を切り離す       : wsl --unmount \\.\PHYSICALDRIVE0   (その後 wsl --shutdown)"
-    Write-Host "  3. 他 VM が使っている場合: その VM を停止し、Hyper-V マネージャーでディスク接続を外す"
+    Write-Host "  3. 他 EdgeBox が使っている場合: その EdgeBox を停止し、Hyper-V マネージャーでディスク接続を外す"
     Write-Host "  4. それでも駄目なら PC を再起動すると、掴んでいたプロセスごと解放されます"
 }
 
@@ -250,6 +250,6 @@ Write-Host ""
 Write-Host "起動しました。" -ForegroundColor Green
 Write-Host "  - コンソール窓が開きます。モニター2に移動して監視用にどうぞ"
 if ($autoCloseNote) { Write-Host $autoCloseNote }
-Write-Host "  - 管理画面 (Web UI) は、VM の IP アドレスにブラウザでアクセスしてください"
+Write-Host "  - 管理画面 (Web UI) は、EdgeBox の IP アドレスにブラウザでアクセスしてください"
 Write-Host "    IP の確認: Get-VMNetworkAdapter -VMName $VMName | Select -Expand IPAddresses"
 Write-Host "    (表示されるまで起動から数分かかることがあります)"

@@ -4,7 +4,7 @@
 
 .DESCRIPTION
     cpu-apps.json に登録したアプリを、起動のたびに指定コアへ固定し直します。
-    VM のコア分割 (cpu-partition.ps1) とは独立して動き、対象は Windows 側のアプリだけです。
+    EdgeBox のコア分割 (cpu-partition.ps1) とは独立して動き、対象は Windows 側のアプリだけです。
 
       - 割り当て: 選んだ論理 CPU にプロセスを固定 (プロセッサ アフィニティ)
       - 優先度  : 通常 / 高 / 低 を指定可能 (取り合いになったときの順番)

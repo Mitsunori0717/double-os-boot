@@ -1,14 +1,14 @@
 ﻿<#
 .SYNOPSIS
     EdgeBox (メーカー製の専用機 Linux) の物理ディスクを、
-    Windows ホスト上の Hyper-V VM としてそのまま起動する定義を作成します。
+    Windows 上の Hyper-V EdgeBox としてそのまま起動する定義を作成します。
 
 .DESCRIPTION
     - 対象ディスクを Windows からオフライン化し (誤操作・同時アクセス防止)、
-      無改造のまま VM に接続します (イメージのコピーや変換はしません)
+      無改造のまま EdgeBox に接続します (イメージのコピーや変換はしません)
     - セキュアブートを無効化します (EdgeBox は独自の署名チェーンを持つため)
     - メモリは固定割り当て、チェックポイントは無効 (物理ディスクのため)
-    - ネットワークは外部スイッチ推奨 (工作機械が VM に到達できる必要があるため)
+    - ネットワークは外部スイッチ推奨 (工作機械が EdgeBox に到達できる必要があるため)
 
 .EXAMPLE
     # まずディスク番号と NIC 名を確認
@@ -33,11 +33,11 @@ param(
     [int]$CpuCount    = 6,
 
     # 外部スイッチを作る物理 NIC 名 (Get-NetAdapter で確認)。IP アドレスでも指定できます。
-    # 省略時は Default Switch (NAT) になり、工作機械から VM に到達できないため
+    # 省略時は Default Switch (NAT) になり、工作機械から EdgeBox に到達できないため
     # 収集運用では必ず指定を推奨
     [string]$NetAdapterName = "",
 
-    # 既にある Hyper-V 仮想スイッチをそのまま使う場合はこちら (Get-VMSwitch で確認)
+    # 既にある Hyper-V 外部スイッチをそのまま使う場合はこちら (Get-VMSwitch で確認)
     [string]$SwitchName = "",
 
     # 確認プロンプトを出さずに実行する (00-field-launcher.ps1 から呼ぶとき用)
@@ -57,7 +57,7 @@ if (-not (Get-Command Get-VM -ErrorAction SilentlyContinue)) {
     exit 1
 }
 if (Get-VM -Name $VMName -ErrorAction SilentlyContinue) {
-    Write-Error "VM '$VMName' は既に存在します。削除するには: Remove-VM $VMName -Force"
+    Write-Error "登録 '$VMName' は既に存在します。削除するには: Remove-VM $VMName -Force"
     exit 1
 }
 
@@ -88,17 +88,17 @@ function Show-VMSwitches {
     $sws = @(Get-VMSwitch -ErrorAction SilentlyContinue)
     Write-Host ""
     if ($sws.Count -eq 0) {
-        Write-Host "この PC には Hyper-V 仮想スイッチがまだありません。" -ForegroundColor Cyan
+        Write-Host "この PC には Hyper-V 外部スイッチがまだありません。" -ForegroundColor Cyan
         return
     }
-    Write-Host "既にある Hyper-V 仮想スイッチ:" -ForegroundColor Cyan
+    Write-Host "既にある Hyper-V 外部スイッチ:" -ForegroundColor Cyan
     foreach ($sw in $sws) {
         Write-Host ("  名前: {0,-24} 種類: {1,-10} {2}" -f $sw.Name, $sw.SwitchType, $sw.NetAdapterInterfaceDescription)
     }
     Write-Host "  既存のものを使う場合: -SwitchName '<上の名前>'" -ForegroundColor Yellow
 }
 
-# ホスト側の仮想アダプター名 (vEthernet (X)) から、その仮想スイッチを探す
+# Windows 側のアダプター名 (vEthernet (X)) から、その外部スイッチを探す
 function Get-SwitchByHostAdapter([string]$AdapterName) {
     foreach ($sw in @(Get-VMSwitch -ErrorAction SilentlyContinue)) {
         if ($AdapterName -eq ("vEthernet (" + $sw.Name + ")")) { return $sw }
@@ -148,13 +148,13 @@ if ($SwitchName) {
     $sw = Get-VMSwitch -Name $SwitchName -ErrorAction SilentlyContinue
     if (-not $sw) {
         Write-Host ""
-        Write-Host "仮想スイッチ『$SwitchName』がありません。" -ForegroundColor Red
+        Write-Host "外部スイッチ『$SwitchName』がありません。" -ForegroundColor Red
         Show-VMSwitches
         Write-Host "ディスクには何も変更していません。" -ForegroundColor Green
         exit 1
     }
     $useSwitch = $sw.Name
-    Write-Host "既存の仮想スイッチ『$useSwitch』($($sw.SwitchType)) を使います。" -ForegroundColor Cyan
+    Write-Host "既存の外部スイッチ『$useSwitch』($($sw.SwitchType)) を使います。" -ForegroundColor Cyan
 
 } elseif ($NetAdapterName) {
     $resolvedNic = Resolve-NetAdapterName $NetAdapterName
@@ -171,7 +171,7 @@ if ($SwitchName) {
         exit 1
     }
 
-    # 指定されたのが仮想スイッチ側のアダプター (vEthernet (X)) なら、そのスイッチを使う
+    # 指定されたのが外部スイッチ側のアダプター (vEthernet (X)) なら、そのスイッチを使う
     $sw = Get-SwitchByHostAdapter $resolvedNic
     if (-not $sw) {
         # 物理 NIC が既に外部スイッチへ割り当て済みなら、それを再利用する
@@ -180,7 +180,7 @@ if ($SwitchName) {
     }
     if ($sw) {
         $useSwitch = $sw.Name
-        Write-Host "『$resolvedNic』は既存の仮想スイッチ『$useSwitch』のものでした。これをそのまま使います。" -ForegroundColor Cyan
+        Write-Host "『$resolvedNic』は既存の外部スイッチ『$useSwitch』のものでした。これをそのまま使います。" -ForegroundColor Cyan
         Write-Host "  (新しいスイッチは作らないため、ネットワークは切断されません)"
     } else {
         $useSwitch = "EdgeBox-External"
@@ -201,19 +201,19 @@ if ($SwitchName) {
         exit 1
     } else {
         $useSwitch = "Default Switch"
-        Write-Host "警告: Default Switch (NAT) を使用します。工作機械から VM に到達できません。" -ForegroundColor Yellow
+        Write-Host "警告: Default Switch (NAT) を使用します。工作機械から EdgeBox に到達できません。" -ForegroundColor Yellow
         Write-Host "      収集運用では -NetAdapterName または -SwitchName を指定してください。"
     }
 }
 
-# --- 同じ物理ディスクを既に他の VM が使っていないか (同時使用は不可) ---
+# --- 同じ物理ディスクを既に他の EdgeBox が使っていないか (同時使用は不可) ---
 foreach ($other in @(Get-VM -ErrorAction SilentlyContinue)) {
     foreach ($d in @(Get-VMHardDiskDrive -VMName $other.Name -ErrorAction SilentlyContinue)) {
         if ($d.DiskNumber -eq $DiskNumber) {
             Write-Host ""
-            Write-Host "ディスク $DiskNumber は既に VM『$($other.Name)』が使っています。" -ForegroundColor Red
-            Write-Host "  1 つの物理ディスクを 2 つの VM から同時に使うことはできません。" -ForegroundColor Yellow
-            Write-Host "  旧構成の VM が残っている場合は、先に削除してください: Remove-VM '$($other.Name)' -Force" -ForegroundColor Yellow
+            Write-Host "ディスク $DiskNumber は既に 登録『$($other.Name)』が使っています。" -ForegroundColor Red
+            Write-Host "  1 つの物理ディスクを 2 つの EdgeBox から同時に使うことはできません。" -ForegroundColor Yellow
+            Write-Host "  旧構成の EdgeBox が残っている場合は、先に削除してください: Remove-VM '$($other.Name)' -Force" -ForegroundColor Yellow
             Write-Host "ディスクには何も変更していません。" -ForegroundColor Green
             exit 1
         }
@@ -224,7 +224,7 @@ $disk = Get-Disk -Number $DiskNumber
 Write-Host "対象ディスク:" -ForegroundColor Cyan
 Write-Host ("  番号 {0}: {1} ({2:N0} GB)" -f $disk.Number, $disk.FriendlyName, ($disk.Size / 1GB))
 if (-not $NoConfirm) {
-    $ans = Read-Host "このディスクを VM として起動します。よろしいですか? (y/N)"
+    $ans = Read-Host "このディスクを EdgeBox として起動します。よろしいですか? (y/N)"
     if ($ans -ne "y") { exit 0 }
 }
 
@@ -245,7 +245,7 @@ try {
         $createdSwitch = $true
     }
 
-    Write-Host "VM '$VMName' を作成しています..." -ForegroundColor Cyan
+    Write-Host "登録 '$VMName' を作成しています..." -ForegroundColor Cyan
     New-VM -Name $VMName `
         -Generation 2 `
         -MemoryStartupBytes ($MemoryGB * 1GB) `
@@ -261,7 +261,7 @@ try {
     # 物理ディスクのためチェックポイントは使用不可。自動停止はシャットダウン要求に
     Set-VM -Name $VMName -CheckpointType Disabled -AutomaticStopAction ShutDown
 
-    # --- ディスクをオフライン化 (Windows 側から見えなくし、VM 専有にする) ---
+    # --- ディスクをオフライン化 (Windows 側から見えなくし、EdgeBox 専有にする) ---
     if (-not $disk.IsOffline) {
         Write-Host "ディスクをオフライン化しています (Windows からの誤アクセス防止)..." -ForegroundColor Cyan
         Set-Disk -Number $DiskNumber -IsOffline $true
@@ -274,11 +274,11 @@ try {
     Set-VMFirmware -VMName $VMName -FirstBootDevice $bootDisk
 } catch {
     Write-Host ""
-    Write-Host "VM の作成に失敗しました: $($_.Exception.Message)" -ForegroundColor Red
+    Write-Host "EdgeBox の作成に失敗しました: $($_.Exception.Message)" -ForegroundColor Red
     Write-Host "ここまでの変更を元に戻しています..." -ForegroundColor Yellow
     if ($createdVm) {
         Remove-VM -Name $VMName -Force -ErrorAction SilentlyContinue
-        Write-Host "  - 作成途中の VM '$VMName' を削除しました"
+        Write-Host "  - 作成途中の 登録 '$VMName' を削除しました"
     }
     if ($offlinedDisk) {
         Set-Disk -Number $DiskNumber -IsOffline $false -ErrorAction SilentlyContinue
@@ -294,15 +294,15 @@ try {
 
 Write-Host ""
 Write-Host "作成しました。" -ForegroundColor Green
-Write-Host "  VM 名      : $VMName"
+Write-Host "  登録名      : $VMName"
 Write-Host "  ディスク   : 物理ディスク $DiskNumber (無改造・専有)"
-Write-Host "  CPU        : ${CpuCount} 仮想プロセッサ / メモリ: ${MemoryGB}GB (固定)"
+Write-Host "  CPU        : ${CpuCount} プロセッサ / メモリ: ${MemoryGB}GB (固定)"
 Write-Host "  スイッチ   : $useSwitch"
 Write-Host ""
 Write-Host "起動するには: .\02-start-field-vm.ps1" -ForegroundColor Cyan
 Write-Host ""
 Write-Host "重要:" -ForegroundColor Yellow
 Write-Host "  - 初回起動でメーカーシステムが正常に立ち上がるか、ライセンス・機器認識に"
-Write-Host "    問題がないかを必ず確認してください (VM での動作はメーカーサポート外です)。"
-Write-Host "  - 問題があれば VM を削除し、README の手順でネイティブ起動に戻せます"
+Write-Host "    問題がないかを必ず確認してください (EdgeBox での動作はメーカーサポート外です)。"
+Write-Host "  - 問題があれば EdgeBox を削除し、README の手順でネイティブ起動に戻せます"
 Write-Host "    (ディスクは無改造なので、いつでも元の運用に戻れます)。"

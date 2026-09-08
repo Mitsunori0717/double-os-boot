@@ -1,6 +1,6 @@
 # 新規 PC への導入手順 — 何も入っていない PC から EdgeBox 同時起動まで
 
-このシステム一式 (EdgeBox の VM 同時起動・左右モニターの自動表示・CPU コア分割・
+このシステム一式 (EdgeBox 同時起動・左右モニターの自動表示・CPU コア分割・
 リアルタイム監視) を、**まっさらな PC に最初から入れる**ときの手順です。
 所要はおよそ 1 時間 (Windows のセットアップと Windows Update を除く)。
 
@@ -109,7 +109,7 @@ Get-NetAdapter | Format-Table Name, InterfaceDescription, Status, LinkSpeed
 **Status が Up** のうち、ライン側のものの **Name** (例: `イーサネット 2`) を控えます。
 もう一方 (事務所 LAN / インターネット側) と取り違えないこと。
 
-### ⑧ EdgeBox の VM を作って起動する
+### ⑧ EdgeBox を作って起動する
 
 ```powershell
 cd C:\double-os-boot\windows-host
@@ -119,7 +119,7 @@ cd C:\double-os-boot\windows-host
 自動で次が進みます。EdgeBox のディスクが 1 台だけなら候補として表示され、確認を求められます (`y`)。
 
 1. ⑦ の LAN ポートに外部スイッチ `EdgeBox-External` を作成
-2. VM『EdgeBox』を作成 (6 仮想プロセッサ / 8 GB / EdgeBox のディスクを無改造で接続)
+2. 登録『EdgeBox』を作成 (6 プロセッサ / 8 GB / EdgeBox のディスクを無改造で接続)
 3. 起動してコンソール窓を表示
 
 > ⚠️ 起動画面で **Ctrl キーを押しっぱなしにしない**こと (機種によってはファクトリーリセットが選ばれます)。
@@ -127,7 +127,7 @@ cd C:\double-os-boot\windows-host
 **確認**: コンソール窓に EdgeBox の起動画面が出て、数分で起動が完了する。
 
 > 「外部スイッチがありません」と出た場合は `-NetAdapterName` の指定漏れです。
-> 工作機械から到達できない VM を作らないよう、わざと止まるようにしてあります。
+> 工作機械から到達できない EdgeBox を作らないよう、わざと止まるようにしてあります。
 
 ### ⑨ EdgeBox の管理画面につなぐ
 
@@ -144,7 +144,7 @@ Windows 側の EdgeBox 専用アプリをインストールし、接続先にこ
 
 ```powershell
 cd C:\double-os-boot\windows-host
-.\03-field-display-kiosk.ps1 -Install   # ログオン時に 左=EdgeBox コンソール / 右=管理画面 を自動表示 + VM の自動起動
+.\03-field-display-kiosk.ps1 -Install   # ログオン時に 左=EdgeBox コンソール / 右=管理画面 を自動表示 + EdgeBox の自動起動
 .\00-field-launcher.ps1 -Setup           # 『EdgeBox 起動』アイコン
 .\08-settings-console.ps1 -Setup         # 『EdgeBox設定』アイコン (表示 URL・自動サインイン等)
 .\05-shutdown-all.ps1 -Setup             # 『全部シャットダウン』アイコン
@@ -171,7 +171,7 @@ powercfg /h off                          # 高速スタートアップ無効 (�
 
 『CPU割り当て』を開き:
 
-1. 対象の VM が **EdgeBox** になっていることを確認
+1. 対象の EdgeBox が **EdgeBox** になっていることを確認
 2. かんたん設定の **「P コア = Windows / E コア = EdgeBox (推奨)」** を押す
    (P/E の無い CPU では「EdgeBox は最低数だけ」)
 3. 検査結果が「適用できます」であることを確認して **[この内容で適用]**
@@ -195,7 +195,7 @@ PC を再起動し、サインイン後 5 分待ってから確認します。
 
 | 確認 | 期待 |
 |---|---|
-| VM が勝手に起動し、左に EdgeBox のコンソール、右に管理画面 | 出ている |
+| EdgeBox が勝手に起動し、左に EdgeBox のコンソール、右に管理画面 | 出ている |
 | `.\cpu-partition.ps1 -Verify -Seconds 30` | 「自動タスク: Ready / 前回実行 〈再起動後の時刻〉 (成功)」、割合 95% 以上 |
 | 『EdgeBox 監視』 | 緑の棒が EdgeBox 用コア (緑枠) だけに出る |
 
@@ -209,9 +209,9 @@ PC を再起動し、サインイン後 5 分待ってから確認します。
 | 状況 | 操作 |
 |---|---|
 | CPU 分割を全部やめる | `.\cpu-partition.ps1 -Undo` (即時・再起動不要) |
-| VM が「別のプロセスが使用中」(0x80070020) で起動しない | `.\02-start-field-vm.ps1 -Repair` |
+| EdgeBox が「別のプロセスが使用中」(0x80070020) で起動しない | `.\02-start-field-vm.ps1 -Repair` |
 | 画面が黒いまま操作できない | `fix-black-screen.cmd` をダブルクリック (管理者にしない) |
-| EdgeBox を素の装置として起動して切り分けたい | 再起動 → F8 → EdgeBox のディスクを選択 (VM は残したままで可。**両方から同時に起動しない**) |
+| EdgeBox を素の装置として起動して切り分けたい | 再起動 → F8 → EdgeBox のディスクを選択 (EdgeBox は残したままで可。**両方から同時に起動しない**) |
 | 完全に導入前へ戻す | `Remove-VM EdgeBox -Force` → `Set-Disk -Number <番号> -IsOffline $false`。ディスクは無改造なので、これだけで元に戻る |
 
 詳しい検証の考え方は [VERIFICATION.md](VERIFICATION.md)、各機能の説明は

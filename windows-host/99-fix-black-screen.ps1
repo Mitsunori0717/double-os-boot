@@ -12,7 +12,7 @@
       3. デスクトップ本体 (explorer.exe) が動いていない
          … アイコンもタスクバーも無く、右クリックも効かない状態
 
-    1・2 は閉じ、3 は起動し直します。EdgeBox VM や CPU の割り当てには触れません。
+    1・2 は閉じ、3 は起動し直します。EdgeBox や CPU の割り当てには触れません。
 
 .EXAMPLE
     .\99-fix-black-screen.ps1                # 確認して直す
@@ -97,11 +97,11 @@ if ($vc.Count -gt 0) {
         foreach ($p in $vc) { [void]$p.CloseMainWindow() }
         Start-Sleep -Seconds 2
         Get-Process vmconnect -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-        Write-Host "  EdgeBox のコンソール窓を閉じました (VM は動いたままです)。" -ForegroundColor Green
+        Write-Host "  EdgeBox のコンソール窓を閉じました (EdgeBox は動いたままです)。" -ForegroundColor Green
     } else {
         Write-Host "  EdgeBox のコンソール窓が開いています (画面が真っ黒に見える原因になります)。"
         Write-Host "    閉じる場合: .\99-fix-black-screen.ps1 -CloseConsole" -ForegroundColor Cyan
-        Write-Host "    (VM は動いたままです。再表示は .\02-start-field-vm.ps1)"
+        Write-Host "    (EdgeBox は動いたままです。再表示は .\02-start-field-vm.ps1)"
     }
 } else {
     Write-Host "  EdgeBox のコンソール窓は開いていません。"
