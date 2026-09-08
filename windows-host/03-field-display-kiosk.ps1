@@ -211,6 +211,14 @@ function Test-ConsoleFramelessOn($b) {
     }
     return $false
 }
+# コンソールの映像を受け持つ RDP 部品の入力窓 (IHWindowClass = Input Capture Window)。
+# Ctrl+Alt+Break はこの窓にキーボードフォーカスがあるときに効くため、キー送信の前にここへフォーカスを移す
+function Get-ConsoleInputWindow {
+    foreach ($w in Get-ConsoleWindows) {
+        if ($w.Parent -ne [IntPtr]::Zero -and $w.Class -eq 'IHWindowClass' -and $w.Visible) { return [IntPtr]$w.Hwnd }
+    }
+    return [IntPtr]::Zero
+}
 # 全画面かどうかの判定の手掛かり (記録用): vmconnect のトップレベルの窓を「枠あり/なし」付きで列挙
 function Get-ConsoleTopWindowDiag {
     $list = @(Get-ConsoleWindows | Where-Object { $_.Parent -eq [IntPtr]::Zero -and $_.Visible })
@@ -611,6 +619,10 @@ public class GuardApi {
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern IntPtr FindWindowEx(IntPtr parent, IntPtr after, string className, string windowName);
     [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint pid);
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetClassName(IntPtr hWnd, StringBuilder s, int n);
+    [DllImport("user32.dll")] public static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool fAttach);
+    [DllImport("kernel32.dll")] public static extern uint GetCurrentThreadId();
+    [DllImport("user32.dll")] public static extern IntPtr SetFocus(IntPtr hWnd);
+    [DllImport("user32.dll")] public static extern IntPtr GetFocus();
 }
 "@
     # "Alt+F11" のような指定をキーコードの一覧にする
@@ -665,6 +677,16 @@ public class GuardApi {
         [GuardApi]::SetForegroundWindow($h) | Out-Null
         [GuardApi]::keybd_event(0x12, 0, 2, 0)
         Start-Sleep -Milliseconds 300
+        # キーボードフォーカスを映像の入力窓へ (Ctrl+Alt+Break はそこで受け付けられる)
+        try {
+            $ih = Get-ConsoleInputWindow; if ($ih -eq [IntPtr]::Zero) { $ih = $h }
+            $procId = [uint32]0
+            $t = [GuardApi]::GetWindowThreadProcessId($ih, [ref]$procId); $my = [GuardApi]::GetCurrentThreadId()
+            [GuardApi]::AttachThreadInput($my, $t, $true) | Out-Null
+            [GuardApi]::SetFocus($ih) | Out-Null
+            [GuardApi]::AttachThreadInput($my, $t, $false) | Out-Null
+            Start-Sleep -Milliseconds 100
+        } catch { }
         # Ctrl+Alt+Break。Break は実際のキーと同じ「VK_CANCEL (0x03) + 拡張スキャンコード 0x46」で送る
         [GuardApi]::keybd_event(0x11, 0, 0, 0); [GuardApi]::keybd_event(0x12, 0, 0, 0)
         [GuardApi]::keybd_event(0x03, 0x46, 1, 0)
@@ -1334,6 +1356,8 @@ public class FieldWin {
     [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hWnd);
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetClassName(IntPtr hWnd, StringBuilder s, int n);
     [DllImport("user32.dll")] public static extern bool SetCursorPos(int X, int Y);
+    [DllImport("user32.dll")] public static extern IntPtr SetFocus(IntPtr hWnd);
+    [DllImport("user32.dll")] public static extern IntPtr GetFocus();
     [DllImport("user32.dll")] public static extern void mouse_event(uint dwFlags, int dx, int dy, uint dwData, UIntPtr dwExtraInfo);
 }
 "@
@@ -1560,10 +1584,40 @@ function Send-ConsoleFullScreenToggle([IntPtr]$hwnd) {
     Send-CtrlAltBreak
 }
 
+# 窓のクラス名 (記録用)
+function Get-WindowClassName([IntPtr]$h) {
+    if ($h -eq [IntPtr]::Zero) { return "(なし)" }
+    $sb = New-Object System.Text.StringBuilder 256
+    [FieldWin]::GetClassName($h, $sb, 256) | Out-Null
+    return $sb.ToString()
+}
+
+# キーボードフォーカスをコンソールの映像の入力窓 (IHWindowClass) へ移す。
+# Ctrl+Alt+Break は RDP 部品がフォーカスを持っているときに効く。EdgeBox を起動した直後は
+# フォーカスがツールバーなど別の場所にあることがあり、キーを送っても効かなかった。
+# 他プロセスの窓にフォーカスを置くため、そのスレッドの入力に相乗り (AttachThreadInput) する。
+# 移す前後のフォーカス先 (クラス名) を返す (記録用)
+function Set-ConsoleInputFocus([IntPtr]$main) {
+    try {
+        $ih = Get-ConsoleInputWindow
+        if ($ih -eq [IntPtr]::Zero) { $ih = $main }
+        $procId = [uint32]0
+        $t = [FieldWin]::GetWindowThreadProcessId($ih, [ref]$procId)
+        $my = [FieldWin]::GetCurrentThreadId()
+        [FieldWin]::AttachThreadInput($my, $t, $true) | Out-Null
+        $before = [FieldWin]::GetFocus()
+        [FieldWin]::SetFocus($ih) | Out-Null
+        Start-Sleep -Milliseconds 80
+        $after = [FieldWin]::GetFocus()
+        [FieldWin]::AttachThreadInput($my, $t, $false) | Out-Null
+        return ("フォーカス " + (Get-WindowClassName $before) + " → " + (Get-WindowClassName $after))
+    } catch { return ("フォーカス移動でエラー: " + $_.Exception.Message) }
+}
+
 # コンソールを全画面モードにする (成功したら $true)。
 #   方法1: Win32 メニューの『全画面』を WM_COMMAND で実行 (フォーカス不要。vmconnect の版によっては無い)
-#   方法2: メニュー『表示 → 全画面モード』の UI 操作
-#   方法3: Ctrl+Alt+Break のキー送信
+#   方法2: Ctrl+Alt+Break のキー送信 (映像の入力窓にフォーカスを移してから。約 30 秒かけて繰り返す)
+#   方法3: メニュー『表示 → 全画面モード』の UI 操作 (環境によっては項目が見えない)
 # 成否は「枠なしの窓がモニターを覆っているか」(Test-ConsoleFullScreenOn) で確かめる。
 # 最大化しただけの窓を全画面と誤判定していたため、大きさだけの判定はやめた
 function Enter-ConsoleFullScreen($screen) {
@@ -1580,28 +1634,28 @@ function Enter-ConsoleFullScreen($screen) {
         Log ("コンソール: メニューコマンド『$hit』を実行しましたが全画面になりませんでした。窓: " + (Get-ConsoleTopWindowDiag)); $diagDone = $true
     }
 
-    # 方法2
-    for ($try = 1; $try -le 2; $try++) {
-        $h2 = Get-ConsoleHwnd; if ($h2 -ne [IntPtr]::Zero) { $hwnd = $h2 }
-        Force-Foreground $hwnd | Out-Null
-        if (Invoke-ConsoleFullScreenMenu $hwnd) {
-            Start-Sleep -Milliseconds 700
-            if (Test-ConsoleFullScreenOn $b) { Log "コンソール: 全画面モードになりました (メニュー操作: $script:MenuDiag)"; return $true }
-            $msg = "コンソール: メニューを操作しましたが全画面になりませんでした (試行 ${try}: $script:MenuDiag)"
-            if (-not $diagDone) { $msg += "。窓: " + (Get-ConsoleTopWindowDiag); $diagDone = $true }
-            Log $msg
-        } else {
-            Log "コンソール: メニュー操作に失敗 (試行 ${try}): $script:MenuDiag"
-        }
-    }
-
-    # 方法3
-    for ($try = 1; $try -le 4; $try++) {
+    # 方法2 (実機ではこの方法で成功した実績あり。起動直後は効かないことがあるため長めに繰り返す)
+    for ($try = 1; $try -le 10; $try++) {
         $h2 = Get-ConsoleHwnd; if ($h2 -ne [IntPtr]::Zero) { $hwnd = $h2 }
         if (-not (Force-Foreground $hwnd)) { Log "コンソール: 前面化に失敗 (キー送信 試行 $try)" }
+        $focus = Set-ConsoleInputFocus $hwnd
+        if ($try -eq 1 -or $try -eq 5) { Log "コンソール: キー送信の準備 (試行 ${try}): $focus" }
         if ($try % 2 -eq 1) { Send-CtrlAltBreak } else { [System.Windows.Forms.SendKeys]::SendWait("^%{BREAK}") }
         Start-Sleep -Milliseconds 1500
         if (Test-ConsoleFullScreenOn $b) { Log "コンソール: 全画面モードになりました (キー送信 試行 $try)"; return $true }
+        if ($try -eq 4 -and -not $diagDone) { Log ("コンソール: キー送信 4 回で全画面になりません。窓: " + (Get-ConsoleTopWindowDiag)); $diagDone = $true }
+        Start-Sleep -Milliseconds 1500
+    }
+
+    # 方法3
+    $h2 = Get-ConsoleHwnd; if ($h2 -ne [IntPtr]::Zero) { $hwnd = $h2 }
+    Force-Foreground $hwnd | Out-Null
+    if (Invoke-ConsoleFullScreenMenu $hwnd) {
+        Start-Sleep -Milliseconds 700
+        if (Test-ConsoleFullScreenOn $b) { Log "コンソール: 全画面モードになりました (メニュー操作: $script:MenuDiag)"; return $true }
+        Log "コンソール: メニューを操作しましたが全画面になりませんでした ($script:MenuDiag)"
+    } else {
+        Log "コンソール: メニュー操作に失敗: $script:MenuDiag"
     }
     Log ("コンソール: 全画面モードにできませんでした。窓: " + (Get-ConsoleTopWindowDiag))
     return $false
@@ -1867,6 +1921,10 @@ function Open-Console($screen, [bool]$fullScreen) {
     if (-not $fullScreen) { Log "コンソール: 最大化ウィンドウで表示します (全画面の指定なし)。"; return }
 
     # 全画面モード (メニューバーなし・余白は黒)。解除/再開は Ctrl+Alt+Break
+    # 起動中画面 (黒い覆い) が左画面に重なったままだと切り替えが効かなかったため、先に左の覆いを外す
+    # (『EdgeBox 画面』のように覆いが無い起動では、同じ操作で全画面になった実績あり)
+    try { Set-Content -Path $SplashLeftOffFile -Value "1" -Encoding ASCII } catch { }
+    Start-Sleep -Milliseconds 1200
     $done = Enter-ConsoleFullScreen $screen
 
     if ($done) { Start-Sleep -Milliseconds 800; Hide-ConsoleBar $screen | Out-Null }
@@ -1927,9 +1985,30 @@ function Open-Console($screen, [bool]$fullScreen) {
                 if ($child -ne [IntPtr]::Zero) { [FieldWin]::ShowWindow($child, 0) | Out-Null }
             }
             if ([FieldWin]::GetMenu($hwnd) -ne [IntPtr]::Zero) { [FieldWin]::SetMenu($hwnd, [IntPtr]::Zero) | Out-Null }
-            [FieldWin]::SetWindowPos($hwnd, [IntPtr]::Zero, $cx, $cy, $vw, $vh, 0x0060) | Out-Null
+            # vmconnect のメニューバー・ツールバー・ステータスバーは WinForms の子窓 (Win32 メニューではない) なので、
+            # 「横長で背の低い子窓」を隠す。そのうえで映像の窓 (IHWindowClass) の位置から余白を測り、
+            # 映像がちょうどモニター中央に収まるように窓を置き直す (以前はメニューが残り、映像の下が切れていた)
+            $offX = 0; $offY = 0; $hiddenStrips = 0
+            for ($k = 1; $k -le 2; $k++) {
+                foreach ($w in Get-ConsoleWindows) {
+                    if ($w.Parent -ne $hwnd -or -not $w.Visible -or $w.Class -notlike 'WindowsForms10*') { continue }
+                    if ($w.Height -gt 0 -and $w.Height -le 40 -and $w.Width -ge 100) { [FieldWin]::ShowWindow($w.Hwnd, 0) | Out-Null; $hiddenStrips++ }
+                }
+                Start-Sleep -Milliseconds 300
+                $mainInfo = $null; $ihInfo = $null
+                foreach ($w in Get-ConsoleWindows) {
+                    if ($w.Hwnd -eq $hwnd) { $mainInfo = $w }
+                    elseif ($w.Parent -eq $hwnd -and $w.Class -eq 'IHWindowClass' -and $w.Visible) { $ihInfo = $w }
+                }
+                if ($mainInfo -and $ihInfo) {
+                    $offX = [Math]::Max(0, $ihInfo.Left - $mainInfo.Left)
+                    $offY = [Math]::Max(0, $ihInfo.Top - $mainInfo.Top)
+                }
+                [FieldWin]::SetWindowPos($hwnd, [IntPtr]::Zero, ($cx - $offX), ($cy - $offY), ($vw + $offX), ($vh + $offY), 0x0060) | Out-Null
+                Start-Sleep -Milliseconds 300
+            }
             [FieldWin]::BringWindowToTop($hwnd) | Out-Null
-            Log "コンソール: 黒背景の上に実映像サイズ ${vw}x${vh} で表示しました (枠除去=$stripped)。"
+            Log "コンソール: 黒背景の上に実映像サイズ ${vw}x${vh} で表示しました (枠除去=$stripped / 隠したバー=$hiddenStrips / 余白=$offX,$offY)。"
         }
     }
 }
