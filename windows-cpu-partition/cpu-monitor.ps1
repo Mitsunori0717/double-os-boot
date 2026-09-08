@@ -4,8 +4,8 @@
 
 .DESCRIPTION
     ハイパーバイザーの性能カウンターを毎秒読み、論理 CPU ごとに
-        VM の実行 (緑) / Windows 自身の実行 (青) / ハイパーバイザー内部 (灰)
-    を積み上げ棒で描きます。タスクマネージャーでは VM の分が「vmmem」という
+        EdgeBox の実行 (緑) / Windows 自身の実行 (青) / ハイパーバイザー内部 (灰)
+    を積み上げ棒で描きます。タスクマネージャーでは EdgeBox の分が「vmmem」という
     1 つのプロセスにしか見えませんが、ここではコア単位で分かります。
     枠の色は CPU 割り当ての計画 (青 = Windows 用 / 緑 = EdgeBox 用) です。
 
@@ -20,7 +20,7 @@
     .\cpu-monitor.ps1 -TopMost           # 常に手前に表示
 
 .NOTES
-    CPU の表示は管理者でなくてもできます。VM の状態とメモリ割り当ての取得には
+    CPU の表示は管理者でなくてもできます。EdgeBox の状態とメモリ割り当ての取得には
     Hyper-V の管理権限が要ります (無い場合はその部分だけ「取得不可」になります)。
 #>
 [CmdletBinding()]
@@ -37,7 +37,7 @@ Add-Type -AssemblyName System.Drawing
 $ConfigFile   = Join-Path $PSScriptRoot "cpu-partition.json"
 $SnapshotFile = Join-Path $PSScriptRoot "cpu-topology.json"
 
-# -VMName を明示していない場合は、保存済み計画の VM 名を使う
+# -VMName を明示していない場合は、保存済み計画の 登録名を使う
 if (-not $PSBoundParameters.ContainsKey("VMName") -and (Test-Path $ConfigFile)) {
     try {
         $c0 = Get-Content $ConfigFile -Raw -Encoding UTF8 | ConvertFrom-Json
@@ -116,7 +116,7 @@ function Get-Plan {
 }
 
 # ハイパーバイザーの性能カウンター (-Verify と同じ考え方)
-#   LP の Guest = ルート VP (Windows 自身) + VM の VP なので、同番号のルート VP を引いて VM 分を出す
+#   LP の Guest = ルート VP (Windows 自身) + EdgeBox の VP なので、同番号のルート VP を引いて EdgeBox 分を出す
 $script:lpName = $null; $script:rvName = $null
 $lpCls = Get-CimClass -ClassName "Win32_PerfRawData_*HyperVHypervisorLogicalProcessor" -ErrorAction SilentlyContinue | Select-Object -First 1
 $rvCls = Get-CimClass -ClassName "Win32_PerfRawData_*HyperVHypervisorRootVirtualProcessor" -ErrorAction SilentlyContinue | Select-Object -First 1
@@ -173,7 +173,7 @@ function Sample {
         $script:prevLp = $lp
         $script:prevRv = $rv
     }
-    # メモリ: PC 全体 = Windows 使用中 + VM 使用中 (vmmem の実メモリ) + 空き
+    # メモリ: PC 全体 = Windows 使用中 + EdgeBox 使用中 (vmmem の実メモリ) + 空き
     try {
         $os = Get-CimInstance Win32_OperatingSystem
         $totGB  = [double]$os.TotalVisibleMemorySize / 1MB      # KB → GB
@@ -188,7 +188,7 @@ function Sample {
         $script:Mem.VmGB    = $vmGB
         $script:Mem.WinGB   = [Math]::Max(0.0, ($totGB - $freeGB) - $vmGB)
     } catch { }
-    # VM の状態と割り当て (重いので 3 回に 1 回)
+    # EdgeBox の状態と割り当て (重いので 3 回に 1 回)
     if (($script:TickNo % 3) -eq 1) {
         try {
             $vm = Get-VM -Name $VMName -ErrorAction Stop

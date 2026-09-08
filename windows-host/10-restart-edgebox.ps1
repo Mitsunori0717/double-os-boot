@@ -7,7 +7,7 @@
                         (設定どおり: 左 = コンソール / 右 = 管理画面)。
                         強制電源断は行いません (収集中のデータやファイルシステムを壊しうるため)。
     『EdgeBox 画面』   : 左画面にコンソールを最大化 (設定が全画面なら全画面) で表示します。
-                        自動では閉じません。VM が止まっていれば起動してから表示します。
+                        自動では閉じません。EdgeBox が止まっていれば起動してから表示します。
 
 .EXAMPLE
     .\10-restart-edgebox.ps1            # 再起動 (確認あり)
@@ -27,9 +27,9 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-# -VMName を明示していない場合、既定名の VM が無ければ、EdgeBox のディスク
-# (物理ディスクのパススルー) を持つ VM を探して使う。00-field-launcher.ps1 と
-# 同じ考え方で、VM 名が「EdgeBox」でなくても (旧名称のままでも) そのまま動くようにする
+# -VMName を明示していない場合、既定名の EdgeBox が無ければ、EdgeBox のディスク
+# (物理ディスクのパススルー) を持つ EdgeBox を探して使う。00-field-launcher.ps1 と
+# 同じ考え方で、登録名が「EdgeBox」でなくても (旧名称のままでも) そのまま動くようにする
 if (-not $PSBoundParameters.ContainsKey("VMName") -and
     -not (Get-VM -Name $VMName -ErrorAction SilentlyContinue)) {
     $foundVms = @()
@@ -104,7 +104,7 @@ if (-not (Test-Admin)) {
     exit 1
 }
 $vm = Get-VM -Name $VMName -ErrorAction SilentlyContinue
-if (-not $vm) { Show-Msg "VM '$VMName' が見つかりません。" "EdgeBox" "Warning"; exit 1 }
+if (-not $vm) { Show-Msg "登録 '$VMName' が見つかりません。" "EdgeBox" "Warning"; exit 1 }
 if (-not (Test-Path $Script03)) { Show-Msg "03-field-display-kiosk.ps1 が見つかりません。update.cmd で更新してください。" "EdgeBox" "Warning"; exit 1 }
 
 # --- 『EdgeBox 画面』: 左画面にコンソールを表示するだけ ---

@@ -26,9 +26,9 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-# -VMName を明示していない場合、既定名の VM が無ければ、EdgeBox のディスク
-# (物理ディスクのパススルー) を持つ VM を探して使う。00-field-launcher.ps1 と
-# 同じ考え方で、VM 名が「EdgeBox」でなくても (旧名称のままでも) そのまま動くようにする
+# -VMName を明示していない場合、既定名の EdgeBox が無ければ、EdgeBox のディスク
+# (物理ディスクのパススルー) を持つ EdgeBox を探して使う。00-field-launcher.ps1 と
+# 同じ考え方で、登録名が「EdgeBox」でなくても (旧名称のままでも) そのまま動くようにする
 if (-not $PSBoundParameters.ContainsKey("VMName") -and
     -not (Get-VM -Name $VMName -ErrorAction SilentlyContinue)) {
     $foundVms = @()
@@ -267,7 +267,7 @@ function Resolve-ResolutionText([string]$text) {
 
 function Set-ConsoleResolution([int]$w, [int]$h) {
     $vm = Get-VM -Name $VMName -ErrorAction SilentlyContinue
-    if (-not $vm) { return "VM '$VMName' が見つからないため、解像度は反映していません。" }
+    if (-not $vm) { return "登録 '$VMName' が見つからないため、解像度は反映していません。" }
     if ($vm.State -eq "Off") {
         Set-VMVideo -VMName $VMName -ResolutionType Single -HorizontalResolution $w -VerticalResolution $h
         return "コンソールの解像度を ${w}x${h} にしました。"
@@ -360,7 +360,7 @@ $cbEsc = New-Check "ESC キーでブラウザの全画面/最大化を解除す�
 $tp1.Controls.Add($cbEsc)
 $cbSF = New-Check "コンソールの全画面が効かないときは、黒背景の上に中央表示する (代替の全画面)" 15 170 580 ($cfg.ConsoleStripFrame -ne $false)
 $tp1.Controls.Add($cbSF)
-$cbAC = New-Check "EdgeBox の起動を確認したら、コンソール画面を自動で閉じる (通常はオフ。閉じても VM は動き続ける)" 15 200 580 ($cfg.ConsoleAutoClose -eq $true)
+$cbAC = New-Check "EdgeBox の起動を確認したら、コンソール画面を自動で閉じる (通常はオフ。閉じても EdgeBox は動き続ける)" 15 200 580 ($cfg.ConsoleAutoClose -eq $true)
 $tp1.Controls.Add($cbAC)
 $cbBar = New-Check "コンソールが全画面のとき、上の接続バー (「localhost 上の EdgeBox」の帯) を表示しない" 15 230 580 ($cfg.ConsoleHideBar -ne $false)
 $tp1.Controls.Add($cbBar)

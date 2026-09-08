@@ -3,7 +3,7 @@
     終業用ワンクリック: EdgeBox を正しく終了してから、Windows もシャットダウンします。
 
 .DESCRIPTION
-    1. EdgeBox VM に ACPI シャットダウン要求を送る (物理機の電源ボタン短押しと同じ)
+    1. EdgeBox に ACPI シャットダウン要求を送る (物理機の電源ボタン短押しと同じ)
        → EdgeBox 自身が正規の終了処理を実行する
     2. 完全に停止するのを待つ (最大3分)
     3. Windows をシャットダウンする
@@ -22,9 +22,9 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-# -VMName を明示していない場合、既定名の VM が無ければ、EdgeBox のディスク
-# (物理ディスクのパススルー) を持つ VM を探して使う。00-field-launcher.ps1 と
-# 同じ考え方で、VM 名が「EdgeBox」でなくても (旧名称のままでも) そのまま動くようにする
+# -VMName を明示していない場合、既定名の EdgeBox が無ければ、EdgeBox のディスク
+# (物理ディスクのパススルー) を持つ EdgeBox を探して使う。00-field-launcher.ps1 と
+# 同じ考え方で、登録名が「EdgeBox」でなくても (旧名称のままでも) そのまま動くようにする
 if (-not $PSBoundParameters.ContainsKey("VMName") -and
     -not (Get-VM -Name $VMName -ErrorAction SilentlyContinue)) {
     $foundVms = @()
@@ -80,7 +80,7 @@ if (-not $NoConfirm) {
 }
 
 # 先にコンソール画面 (vmconnect) を閉じる。
-# 開いたままだと、停止後に画面側から VM が自動で再起動されることがあるため
+# 開いたままだと、停止後に画面側から EdgeBox が自動で再起動されることがあるため
 Get-Process vmconnect -ErrorAction SilentlyContinue | ForEach-Object { [void]$_.CloseMainWindow() }
 Start-Sleep -Seconds 2
 Get-Process vmconnect -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
@@ -108,7 +108,7 @@ if ($vm -and $vm.State -eq "Running") {
 }
 
 # --- 停止中のいまのうちに、『EdgeBox表示設定』のコンソール解像度を反映しておく ---
-# (VM は Windows 起動時に自動起動するため、解像度変更はここが唯一の機会)
+# (EdgeBox は Windows 起動時に自動起動するため、解像度変更はここが唯一の機会)
 try {
     $cfgFile = Join-Path $PSScriptRoot "display-config.json"
     if ((Test-Path $cfgFile) -and ((Get-VM -Name $VMName -ErrorAction SilentlyContinue).State -eq "Off")) {

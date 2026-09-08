@@ -5,7 +5,7 @@
 
 .DESCRIPTION
     UEFI の「次回起動のみの起動先指定 (bootsequence)」を使います:
-      1. EdgeBox VM を安全に停止
+      1. EdgeBox を安全に停止
       2. 次回起動先を EdgeBox のディスクに設定 (1回だけ有効)
       3. PC を再起動 → EdgeBox がネイティブ (単独) 起動
       4. その利用を終えて次に電源を入れると、既定の Windows が起動 (戻し操作不要)
@@ -26,9 +26,9 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-# -VMName を明示していない場合、既定名の VM が無ければ、EdgeBox のディスク
-# (物理ディスクのパススルー) を持つ VM を探して使う。00-field-launcher.ps1 と
-# 同じ考え方で、VM 名が「EdgeBox」でなくても (旧名称のままでも) そのまま動くようにする
+# -VMName を明示していない場合、既定名の EdgeBox が無ければ、EdgeBox のディスク
+# (物理ディスクのパススルー) を持つ EdgeBox を探して使う。00-field-launcher.ps1 と
+# 同じ考え方で、登録名が「EdgeBox」でなくても (旧名称のままでも) そのまま動くようにする
 if (-not $PSBoundParameters.ContainsKey("VMName") -and
     -not (Get-VM -Name $VMName -ErrorAction SilentlyContinue)) {
     $foundVms = @()
@@ -149,7 +149,7 @@ if (-not $NoConfirm) {
     if ($r -ne [System.Windows.Forms.DialogResult]::Yes) { exit 0 }
 }
 
-# --- VM を安全に停止 (実行中なら) ---
+# --- EdgeBox を安全に停止 (実行中なら) ---
 # コンソール画面 (vmconnect) を先に閉じる (停止後の自動再起動を防ぐ)
 Get-Process vmconnect -ErrorAction SilentlyContinue | ForEach-Object { [void]$_.CloseMainWindow() }
 Start-Sleep -Seconds 2
@@ -157,7 +157,7 @@ Get-Process vmconnect -ErrorAction SilentlyContinue | Stop-Process -Force -Error
 
 $vm = Get-VM -Name $VMName -ErrorAction SilentlyContinue
 if ($vm -and $vm.State -eq "Running") {
-    Write-Host "EdgeBox VM をシャットダウンしています..."
+    Write-Host "EdgeBox をシャットダウンしています..."
     Stop-VM -Name $VMName
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
     while ($sw.Elapsed.TotalSeconds -lt 180) {

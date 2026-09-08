@@ -5,7 +5,7 @@
 .DESCRIPTION
     電源 ON → ロック画面 → パスワード入力 …を省略して、そのままデスクトップまで自動で進みます。
     これにより「電源を入れるだけ」で以下が全部そろいます:
-        EdgeBox VM 自動起動 → 自動サインイン → 左右モニターへの自動表示 (03) が起動
+        EdgeBox 自動起動 → 自動サインイン → 左右モニターへの自動表示 (03) が起動
 
     アカウント名とパスワードは後からいつでも変更できます:
         デスクトップの『自動サインイン設定』アイコン (-Setup で作成) からウィンドウで変更します。
@@ -585,4 +585,4 @@ Write-Host "  .\06-auto-logon.ps1 -Settings   # 設定ウィンドウを直接�
 Write-Host "  .\06-auto-logon.ps1 -Status     # 設定状態の確認"
 Write-Host "  .\06-auto-logon.ps1 -Disable    # 元に戻す"
 Write-Host ""
-Write-Host "あわせて: powercfg /h off  (高速スタートアップ無効。VM 自動起動を確実にする)" -ForegroundColor Yellow
+Write-Host "あわせて: powercfg /h off  (高速スタートアップ無効。EdgeBox 自動起動を確実にする)" -ForegroundColor Yellow

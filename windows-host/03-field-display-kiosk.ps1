@@ -9,7 +9,7 @@
     .\03-field-display-kiosk.ps1 -Setup       # デスクトップに『EdgeBox表示設定』アイコンを作成
     .\03-field-display-kiosk.ps1 -Install     # ログオン時の自動表示を登録
     .\03-field-display-kiosk.ps1 -Uninstall   # 自動表示を解除
-    .\03-field-display-kiosk.ps1 -ConsoleResolution auto   # コンソールの解像度をモニターに合わせる (VM 停止中)
+    .\03-field-display-kiosk.ps1 -ConsoleResolution auto   # コンソールの解像度をモニターに合わせる (EdgeBox 停止中)
 
 .NOTES
     動作の記録は display-log.txt に残ります (うまく表示されないときはこれを確認)。
@@ -39,9 +39,9 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-# -VMName を明示していない場合、既定名の VM が無ければ、EdgeBox のディスク
-# (物理ディスクのパススルー) を持つ VM を探して使う。00-field-launcher.ps1 と
-# 同じ考え方で、VM 名が「EdgeBox」でなくても (旧名称のままでも) そのまま動くようにする
+# -VMName を明示していない場合、既定名の EdgeBox が無ければ、EdgeBox のディスク
+# (物理ディスクのパススルー) を持つ EdgeBox を探して使う。00-field-launcher.ps1 と
+# 同じ考え方で、登録名が「EdgeBox」でなくても (旧名称のままでも) そのまま動くようにする
 if (-not $PSBoundParameters.ContainsKey("VMName") -and -not ($Splash -or $Backdrop -or $EscWatcher -or $ConsoleCloser -or $LeftGuard) -and
     -not (Get-VM -Name $VMName -ErrorAction SilentlyContinue)) {
     $foundVms = @()
@@ -93,9 +93,19 @@ if ($Splash) {
         } catch { Start-Sleep -Seconds 2 }
     }
     if (-not $loaded) { exit 1 }
-    $script:SplashDeadline = (Get-Date).AddSeconds($TimeoutSec + 120)   # 万一のときは自動で閉じる
+    $script:SplashDeadline = (Get-Date).AddSeconds($TimeoutSec + 30)    # 万一のときは自動で閉じる
+    $script:SplashStart = Get-Date
     $script:SplashForms = @()
     $script:SplashDots = 0
+    $script:SplashCheck = 0
+    # 表示処理の本体 (このスクリプトを補助モードなしで実行しているプロセス) が動いているか。
+    # 本体が起動しなかった / 途中で止まった場合に、黒い画面だけが残らないようにするための確認
+    function Test-MainRunning {
+        $procs = @(Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" -ErrorAction SilentlyContinue |
+            Where-Object { $_.CommandLine -match '03-field-display-kiosk' -and
+                           $_.CommandLine -notmatch '-(Splash|Backdrop|EscWatcher|ConsoleCloser|LeftGuard)' })
+        return ($procs.Count -gt 0)
+    }
 
     function New-SplashForm($bounds) {
         $f = New-Object System.Windows.Forms.Form
@@ -137,6 +147,15 @@ if ($Splash) {
     $timer.Interval = 1000
     $timer.Add_Tick({
         if ((Get-Date) -gt $script:SplashDeadline) { [System.Windows.Forms.Application]::Exit(); return }
+        # 開始から 60 秒たっても本体が動いていない (起動しなかった / 途中で止まった) なら、
+        # 黒い画面を残さず普通の Windows の画面に戻す。10 秒ごとに確認
+        $script:SplashCheck++
+        if (($script:SplashCheck % 20) -eq 0 -and ((Get-Date) - $script:SplashStart).TotalSeconds -gt 60) {
+            if (-not (Test-MainRunning)) {
+                try { Add-Content -Path $LogFile -Encoding UTF8 -Value ((Get-Date -Format "yyyy-MM-dd HH:mm:ss") + "  起動中画面: 表示処理の本体が動いていないため、画面を閉じて Windows に戻します。") } catch { }
+                [System.Windows.Forms.Application]::Exit(); return
+            }
+        }
         $script:SplashDots = ($script:SplashDots + 1) % 4
         foreach ($f in $script:SplashForms) {
             if ($f.IsDisposed) { continue }
@@ -304,7 +323,7 @@ if ($ConsoleCloser) {
     Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" -ErrorAction SilentlyContinue |
         Where-Object { $_.CommandLine -match '-Backdrop' -and $_.ProcessId -ne $PID } |
         ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
-    Log "コンソール自動クローズ: EdgeBox は起動済みのため、コンソール画面を閉じました (VM は動いています。見たいときはデスクトップの『EdgeBox 画面』)。"
+    Log "コンソール自動クローズ: EdgeBox は起動済みのため、コンソール画面を閉じました (EdgeBox は動いています。見たいときはデスクトップの『EdgeBox 画面』)。"
     exit 0
 }
 
@@ -400,7 +419,7 @@ public class GuardApi {
     [DllImport("user32.dll")] public static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, uint dwExtraInfo);
 }
 "@
-    # "Alt+F11" のような指定を仮想キーの一覧にする
+    # "Alt+F11" のような指定をキーコードの一覧にする
     function ConvertTo-VKeys([string]$spec) {
         $keys = @()
         foreach ($part in ($spec -split '\+')) {
@@ -565,7 +584,7 @@ public class GuardApi {
 }
 
 # ============================================================
-#  コンソール (仮想マシン) の画面解像度
+#  コンソール (EdgeBox) の画面解像度
 # ============================================================
 $ResolutionChoices = @(
     "自動 (モニターに合わせる)",
@@ -588,11 +607,11 @@ function Resolve-ResolutionText([string]$text) {
     return $null
 }
 
-# 解像度を VM に適用する。実行中なら再起動が要るので、その扱いを $OnRunning で決める
+# 解像度を EdgeBox に適用する。実行中なら再起動が要るので、その扱いを $OnRunning で決める
 #   "ask" = 確認ダイアログ / "skip" = 何もしない
 function Set-ConsoleResolution([int]$w, [int]$h, [string]$OnRunning = "skip") {
     $vm = Get-VM -Name $VMName -ErrorAction SilentlyContinue
-    if (-not $vm) { return "VM '$VMName' が見つからないため、解像度は反映していません。" }
+    if (-not $vm) { return "登録 '$VMName' が見つからないため、解像度は反映していません。" }
     if ($vm.State -eq "Off") {
         Set-VMVideo -VMName $VMName -ResolutionType Single -HorizontalResolution $w -VerticalResolution $h
         return "コンソールの解像度を ${w}x${h} にしました。"
@@ -703,7 +722,7 @@ if ($Settings) {
     $grpOp.Controls.Add($cbSF)
 
     $cbAC = New-Object System.Windows.Forms.CheckBox
-    $cbAC.Text = "EdgeBox の起動を確認したら、コンソール画面を自動で閉じる (通常はオフ。閉じても VM は動き続ける)"
+    $cbAC.Text = "EdgeBox の起動を確認したら、コンソール画面を自動で閉じる (通常はオフ。閉じても EdgeBox は動き続ける)"
     $cbAC.Location = New-Object System.Drawing.Point(15, 85)
     $cbAC.Size = New-Object System.Drawing.Size(530, 24)
     $cbAC.Checked = ($cfg.ConsoleAutoClose -eq $true)
@@ -841,7 +860,7 @@ if ($Setup) {
 }
 
 # ============================================================
-#  コンソール解像度をモニターに合わせる (VM 停止中のみ)
+#  コンソール解像度をモニターに合わせる (EdgeBox 停止中のみ)
 # ============================================================
 if ($ConsoleResolution) {
     $res = Resolve-ResolutionText $ConsoleResolution
@@ -850,9 +869,9 @@ if ($ConsoleResolution) {
         exit 1
     }
     $vm = Get-VM -Name $VMName -ErrorAction SilentlyContinue
-    if (-not $vm) { Write-Error "VM '$VMName' がありません。"; exit 1 }
+    if (-not $vm) { Write-Error "登録 '$VMName' がありません。"; exit 1 }
     if ($vm.State -ne "Off") {
-        Write-Error "VM を停止してから実行してください (.\05-shutdown-all.ps1 で EdgeBox だけ終了 → もう一度実行)。"
+        Write-Error "EdgeBox を停止してから実行してください (.\05-shutdown-all.ps1 で EdgeBox だけ終了 → もう一度実行)。"
         exit 1
     }
     Set-VMVideo -VMName $VMName -ResolutionType Single `
@@ -861,7 +880,7 @@ if ($ConsoleResolution) {
     $cfg | Add-Member -NotePropertyName ConsoleResolution -NotePropertyValue $ConsoleResolution -Force
     $cfg | ConvertTo-Json | Set-Content -Path $ConfigFile -Encoding UTF8
     Write-Host "コンソールの解像度を $($res.W)x$($res.H) に設定しました。" -ForegroundColor Green
-    Write-Host "次に VM を起動すると、この解像度で表示されます (.\02-start-field-vm.ps1)。"
+    Write-Host "次に EdgeBox を起動すると、この解像度で表示されます (.\02-start-field-vm.ps1)。"
     exit 0
 }
 
@@ -892,23 +911,23 @@ if ($Install) {
     try { $trigger.Delay = "PT15S" } catch { }
     Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger `
         -Settings $taskSettings -RunLevel Highest -Force | Out-Null
-    # 「電源 ON → VM が自動起動 → サインイン → 画面表示」を成立させるには
-    # VM 側の自動起動も必要。未設定なら、ここで一緒に入れておく (実行中の VM にも設定できる)
+    # 「電源 ON → EdgeBox が自動起動 → サインイン → 画面表示」を成立させるには
+    # EdgeBox 側の自動起動も必要。未設定なら、ここで一緒に入れておく (実行中の EdgeBox にも設定できる)
     $vmAuto = Get-VM -Name $VMName -ErrorAction SilentlyContinue
     if ($vmAuto) {
         if ($vmAuto.AutomaticStartAction -ne "Start") {
             try {
                 Set-VM -Name $VMName -AutomaticStartAction Start -AutomaticStartDelay 30
-                Write-Host "VM '$VMName' を PC 起動時に自動で起動するよう設定しました (30 秒後)。" -ForegroundColor Green
+                Write-Host "登録 '$VMName' を PC 起動時に自動で起動するよう設定しました (30 秒後)。" -ForegroundColor Green
             } catch {
-                Write-Host "VM の自動起動を設定できませんでした: $($_.Exception.Message)" -ForegroundColor Yellow
+                Write-Host "EdgeBox の自動起動を設定できませんでした: $($_.Exception.Message)" -ForegroundColor Yellow
                 Write-Host "  手動で: Set-VM -Name $VMName -AutomaticStartAction Start -AutomaticStartDelay 30" -ForegroundColor Yellow
             }
         } else {
-            Write-Host "VM '$VMName' の自動起動は設定済みです。" -ForegroundColor Gray
+            Write-Host "登録 '$VMName' の自動起動は設定済みです。" -ForegroundColor Gray
         }
     } else {
-        Write-Host "VM '$VMName' が見つからないため、VM の自動起動は設定していません。" -ForegroundColor Yellow
+        Write-Host "登録 '$VMName' が見つからないため、EdgeBox の自動起動は設定していません。" -ForegroundColor Yellow
     }
     Write-Host "登録しました。次回ログオンから自動で表示されます (起動中は黒い画面で覆います)。" -ForegroundColor Green
     Write-Host "  表示内容の変更: 『EdgeBox表示設定』アイコン (再登録不要)"
@@ -960,14 +979,19 @@ Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" -ErrorAction Silen
 Stop-LeftGuard
 try {
 
-# --- VM の起動を待つ ---
+# --- EdgeBox の起動を待つ (止まっていれば起動する: 自動起動が働かなかった場合の保険) ---
+$vm = Get-VM -Name $VMName -ErrorAction SilentlyContinue
+if ($vm -and $vm.State -eq "Off") {
+    Log "EdgeBox が起動していないため、ここで起動します。"
+    try { Start-VM -Name $VMName -ErrorAction Stop } catch { Log "警告: EdgeBox を起動できませんでした: $($_.Exception.Message)" }
+}
 $sw = [System.Diagnostics.Stopwatch]::StartNew()
 while ($sw.Elapsed.TotalSeconds -lt $TimeoutSec) {
     $vm = Get-VM -Name $VMName -ErrorAction SilentlyContinue
     if ($vm -and $vm.State -eq "Running") { break }
     Start-Sleep -Seconds 5
 }
-Log ("VM の状態: " + $(if ($vm) { $vm.State } else { "見つかりません" }))
+Log ("EdgeBox の状態: " + $(if ($vm) { $vm.State } else { "見つかりません" }))
 
 # --- モニターの位置 (X座標で左右を判定) ---
 # サインイン直後はまだ 2 枚目が認識されていないことがあるため、そろうまで待つ
@@ -1284,7 +1308,7 @@ function Close-ConsoleGracefully {
 }
 
 # vmconnect が保存している表示設定ファイルを探す
-# (VM ごとの vmconnect.rdp.<VMID>.config、無ければ共通の vmconnect.config)
+# (EdgeBox ごとの vmconnect.rdp.<VMID>.config、無ければ共通の vmconnect.config)
 function Get-ConsoleConfigFile {
     try {
         $vm = Get-VM -Name $VMName -ErrorAction SilentlyContinue
@@ -1489,7 +1513,7 @@ function Open-Console($screen, [bool]$fullScreen) {
     if (-not $done) {
         Log "コンソール: 全画面モードの切り替えが効きませんでした。代替表示に切り替えます。"
         if ($cfg.ConsoleStripFrame -ne $false) {
-            # VM がいま実際に出している映像の解像度を調べる (設定値ではなく実測)
+            # EdgeBox がいま実際に出している映像の解像度を調べる (設定値ではなく実測)
             $vw = 0; $vh = 0
             try {
                 $vm2 = Get-VM -Name $VMName -ErrorAction SilentlyContinue
