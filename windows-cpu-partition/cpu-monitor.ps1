@@ -246,8 +246,21 @@ function Get-ContainState {
 $script:lpName = $null; $script:rvName = $null
 $lpCls = Get-CimClass -ClassName "Win32_PerfRawData_*HyperVHypervisorLogicalProcessor" -ErrorAction SilentlyContinue | Select-Object -First 1
 $rvCls = Get-CimClass -ClassName "Win32_PerfRawData_*HyperVHypervisorRootVirtualProcessor" -ErrorAction SilentlyContinue | Select-Object -First 1
+$vpCls = Get-CimClass -ClassName "Win32_PerfRawData_*HyperVHypervisorVirtualProcessor" -ErrorAction SilentlyContinue | Select-Object -First 1
 if ($lpCls) { $script:lpName = $lpCls.CimClassName }
 if ($rvCls) { $script:rvName = $rvCls.CimClassName }
+$script:vpName = $null
+if ($vpCls) { $script:vpName = $vpCls.CimClassName }
+
+# 仮想プロセッサ (VP) のカウンター: インスタンス名 "EdgeBox:Hv VP 0" のように登録名が付く
+function Get-VpCounterMap([string]$ClassName, [string]$Name) {
+    $map = @{}
+    if (-not $ClassName) { return $map }
+    foreach ($x in @(Get-CimInstance -ClassName $ClassName -ErrorAction SilentlyContinue)) {
+        if ([string]$x.Name -like ($Name + ":*")) { $map[[string]$x.Name] = $x }
+    }
+    return $map
+}
 
 function Get-CounterMap($ClassName) {
     $map = @{}
@@ -270,9 +283,14 @@ function Get-DeltaPct($A, $B, [string]$Prop) {
 $script:Cores  = @(Get-Cores)
 $script:Plan   = Get-Plan
 $script:Hybrid = (@($script:Cores | Where-Object { $_.Kind -eq "E" }).Count -gt 0)
-$script:Stat   = @{}            # 論理 CPU 番号 → @{ Vm; Win; Hv }
+$script:Stat   = @{}            # 論理 CPU 番号 → @{ Vm; Win; Hv; G (LP の guest 合計) }
 $script:prevLp = $null
 $script:prevRv = $null
+$script:prevVp = $null
+# 分離の判定 (VP 合計と LP 合計の突き合わせ)。直近 3 回の平均で出す
+$script:VmTotal = 0.0; $script:RootTotal = 0.0; $script:VpOk = $false
+$script:LeakVmHist = @(); $script:LeakWinHist = @()
+$script:LeakVm = 0.0; $script:LeakWin = 0.0
 $script:Mem    = @{ TotalGB = 0.0; WinGB = 0.0; VmGB = 0.0; FreeGB = 0.0; VmAssignedGB = 0.0; VmState = "?" }
 $script:LastErr = ""
 $script:TickNo  = 0
@@ -282,6 +300,7 @@ function Sample {
     if ($script:lpName) {
         $lp = Get-CounterMap $script:lpName
         $rv = Get-CounterMap $script:rvName
+        $vp = Get-VpCounterMap $script:vpName $VMName
         if ($script:prevLp) {
             $new = @{}
             foreach ($i in @($lp.Keys)) {
@@ -292,12 +311,66 @@ function Sample {
                 if ($rv.ContainsKey($i) -and $script:prevRv -and $script:prevRv.ContainsKey($i)) {
                     $win = Get-DeltaPct $script:prevRv[$i] $rv[$i] "PercentGuestRunTime"
                 }
-                $new[$i] = @{ Vm = [Math]::Max(0.0, $guest - $win); Win = $win; Hv = [Math]::Max(0.0, $total - $guest) }
+                $new[$i] = @{ Vm = [Math]::Max(0.0, $guest - $win); Win = [Math]::Min($guest, $win); Hv = [Math]::Max(0.0, $total - $guest); G = $guest }
+            }
+            # --- 分離の判定は「合計」で行う ---
+            # LP ごとの「guest − ルート VP」は、ルート VP がその番号の LP で動く前提 (root スケジューラ) でしか正しくない。
+            # minroot + classic/core では Windows のルート VP が Windows 用 LP の中を動き回るため、LP ごとの差し引きに
+            # 見かけ上の「EdgeBox 実行」が出る。そこで、EdgeBox の VP の合計実行時間と EdgeBox 用 LP の guest 合計を
+            # 突き合わせる: EdgeBox 用 LP には (minroot で) Windows は載れないので、
+            #   EdgeBox が EdgeBox 用コアの外で動いた量 = EdgeBox VP 合計 − EdgeBox 用 LP の guest 合計
+            #   Windows が EdgeBox 用コアで動いた量     = EdgeBox 用 LP の guest 合計 − EdgeBox VP 合計
+            $vmTot = 0.0; $rootTot = 0.0; $vpOk = $false
+            if ($script:prevVp -and $vp.Count -gt 0) {
+                foreach ($k in @($vp.Keys)) {
+                    if ($script:prevVp.ContainsKey($k)) { $vmTot += Get-DeltaPct $script:prevVp[$k] $vp[$k] "PercentGuestRunTime"; $vpOk = $true }
+                }
+            }
+            foreach ($i in @($rv.Keys)) {
+                if ($script:prevRv -and $script:prevRv.ContainsKey($i)) { $rootTot += Get-DeltaPct $script:prevRv[$i] $rv[$i] "PercentGuestRunTime" }
+            }
+            $script:VmTotal = $vmTot; $script:RootTotal = $rootTot; $script:VpOk = $vpOk
+            $hostLps = @($script:Plan.Host); $guestLps = @($script:Plan.Guest)
+            if ($hostLps.Count -gt 0 -and $guestLps.Count -gt 0) {
+                $gOnGuest = 0.0; foreach ($l in $guestLps) { if ($new.ContainsKey([int]$l)) { $gOnGuest += [double]$new[[int]$l].G } }
+                $gOnHost  = 0.0; foreach ($l in $hostLps)  { if ($new.ContainsKey([int]$l)) { $gOnHost  += [double]$new[[int]$l].G } }
+                if ($vpOk) {
+                    $leakVmTot  = [Math]::Max(0.0, $vmTot - $gOnGuest)      # EdgeBox が EdgeBox 用コアの外で動いた量 (LP% の合計)
+                    $leakWinTot = [Math]::Max(0.0, $gOnGuest - $vmTot)      # Windows (など EdgeBox 以外) が EdgeBox 用コアで動いた量
+                } else {
+                    # VP カウンターが無い環境は従来どおり LP ごとの差し引きを合計する
+                    $leakVmTot = 0.0;  foreach ($l in $hostLps)  { if ($new.ContainsKey([int]$l)) { $leakVmTot  += [double]$new[[int]$l].Vm } }
+                    $leakWinTot = 0.0; foreach ($l in $guestLps) { if ($new.ContainsKey([int]$l)) { $leakWinTot += [double]$new[[int]$l].Win } }
+                }
+                # 表示用: LP ごとの色分けは合計に合わせて按分する (合計が 0 なら Windows 用 LP の guest は全部 Windows の実行)
+                $rawVm = 0.0;  foreach ($l in $hostLps)  { if ($new.ContainsKey([int]$l)) { $rawVm  += [double]$new[[int]$l].Vm } }
+                $rawWin = 0.0; foreach ($l in $guestLps) { if ($new.ContainsKey([int]$l)) { $rawWin += [double]$new[[int]$l].Win } }
+                $fVm  = if ($rawVm  -gt 0) { [Math]::Min(1.0, $leakVmTot  / $rawVm) }  else { 0.0 }
+                $fWin = if ($rawWin -gt 0) { [Math]::Min(1.0, $leakWinTot / $rawWin) } else { 0.0 }
+                foreach ($l in $hostLps) {
+                    if (-not $new.ContainsKey([int]$l)) { continue }
+                    $e = $new[[int]$l]; $v = [double]$e.Vm * $fVm
+                    if ($rawVm -le 0 -and $leakVmTot -gt 0) { $v = $leakVmTot / $hostLps.Count }
+                    $e.Vm = $v; $e.Win = [Math]::Max(0.0, [double]$e.G - $v)
+                }
+                foreach ($l in $guestLps) {
+                    if (-not $new.ContainsKey([int]$l)) { continue }
+                    $e = $new[[int]$l]; $w = [double]$e.Win * $fWin
+                    if ($rawWin -le 0 -and $leakWinTot -gt 0) { $w = $leakWinTot / $guestLps.Count }
+                    $e.Win = $w; $e.Vm = [Math]::Max(0.0, [double]$e.G - $w)
+                }
+                # 直近 3 回の平均 (カウンターの読み取り時刻のずれによる ±0.1% 程度の揺れをならす)
+                # 注意: 配列に数値を足すときは両方を @() で包む (1 要素だとスカラーになり、数値の足し算になってしまう)
+                $script:LeakVmHist  = @(@($script:LeakVmHist)  + @([double]($leakVmTot  / $hostLps.Count))  | Select-Object -Last 3)
+                $script:LeakWinHist = @(@($script:LeakWinHist) + @([double]($leakWinTot / $guestLps.Count)) | Select-Object -Last 3)
+                $script:LeakVm  = [double](($script:LeakVmHist  | Measure-Object -Average).Average)
+                $script:LeakWin = [double](($script:LeakWinHist | Measure-Object -Average).Average)
             }
             $script:Stat = $new
         }
         $script:prevLp = $lp
         $script:prevRv = $rv
+        $script:prevVp = $vp
     }
     # メモリ: PC 全体 = Windows 使用中 + EdgeBox 使用中 (vmmem の実メモリ) + 空き
     try {
@@ -463,15 +536,17 @@ function Draw-All($g, [int]$W, [int]$H) {
     # --- 見出し: 平均 ---
     $hostLps = @($script:Plan.Host); $guestLps = @($script:Plan.Guest)
     $allLps = @($script:Stat.Keys)
+    $winAvg = if ($hostLps.Count -gt 0) { $script:RootTotal / $hostLps.Count } else { Get-Avg $allLps "Win" }
+    $vmAvg  = if ($script:VpOk -and $guestLps.Count -gt 0) { $script:VmTotal / $guestLps.Count } elseif ($guestLps.Count -gt 0) { Get-Avg $guestLps "Vm" } else { Get-Avg $allLps "Vm" }
     if ($hostLps.Count -gt 0) {
-        $l1 = "Windows : 平均 {0:N0}%   (割り当て CPU {1} / {2} 論理)" -f (Get-Avg $hostLps "Win"), (ConvertTo-LpRangeText $hostLps), $hostLps.Count
+        $l1 = "Windows : 平均 {0:N0}%   (割り当て CPU {1} / {2} 論理)" -f $winAvg, (ConvertTo-LpRangeText $hostLps), $hostLps.Count
     } else {
-        $l1 = "Windows : 平均 {0:N0}%   (割り当てなし = 全コア)" -f (Get-Avg $allLps "Win")
+        $l1 = "Windows : 平均 {0:N0}%   (割り当てなし = 全コア)" -f $winAvg
     }
     if ($guestLps.Count -gt 0) {
-        $l2 = "{0} : 平均 {1:N0}%   (割り当て CPU {2} / {3} 論理)   状態: {4}" -f $VMName, (Get-Avg $guestLps "Vm"), (ConvertTo-LpRangeText $guestLps), $guestLps.Count, $script:Mem.VmState
+        $l2 = "{0} : 平均 {1:N0}%   (割り当て CPU {2} / {3} 論理)   状態: {4}" -f $VMName, $vmAvg, (ConvertTo-LpRangeText $guestLps), $guestLps.Count, $script:Mem.VmState
     } else {
-        $l2 = "{0} : 平均 {1:N0}%   状態: {2}" -f $VMName, (Get-Avg $allLps "Vm"), $script:Mem.VmState
+        $l2 = "{0} : 平均 {1:N0}%   状態: {2}" -f $VMName, $vmAvg, $script:Mem.VmState
     }
     $g.DrawString($l1, $FontBody, $BrWin, (PointF $pad 4))
     $g.DrawString($l2, $FontBody, $BrVm,  (PointF $pad 22))
@@ -496,11 +571,12 @@ function Draw-All($g, [int]$W, [int]$H) {
     # --- 分離の状態: 「EdgeBox が Windows 用コアで動いた割合」と「Windows が EdgeBox 用コアで動いた割合」 ---
     $memH = 70
     if ($hostLps.Count -gt 0 -and $guestLps.Count -gt 0) {
-        $leakVm  = Get-Avg $hostLps  "Vm"    # Windows 用コアに載った EdgeBox (物理固定が効いていれば 0)
-        $leakWin = Get-Avg $guestLps "Win"   # EdgeBox 用コアに載った Windows (runtime モードでは少し出ることがある)
-        $mixed = ($leakVm -gt 1.0 -or $leakWin -gt 1.0)
-        $l4 = "分離の状態: {0}   EdgeBox が Windows 用コアで動いた割合 {1:N1}%  /  Windows が EdgeBox 用コアで動いた割合 {2:N1}%" -f `
-              $(if ($mixed) { "△ 混ざっています" } else { "○ 混ざっていません" }), $leakVm, $leakWin
+        $leakVm  = $script:LeakVm    # EdgeBox が EdgeBox 用コアの外で動いた量 (VP 合計と LP 合計の突き合わせ。固定が効いていれば 0)
+        $leakWin = $script:LeakWin   # EdgeBox 用コアで動いた EdgeBox 以外 (minroot が効いていれば 0)
+        $mixed = ($leakVm -gt 0.5 -or $leakWin -gt 0.5)
+        $how = if ($script:VpOk) { "VP 合計で判定" } else { "LP ごとの差し引きで判定" }
+        $l4 = "分離の状態: {0}   EdgeBox が Windows 用コアで動いた割合 {1:N1}%  /  Windows が EdgeBox 用コアで動いた割合 {2:N1}%   ({3})" -f `
+              $(if ($mixed) { "△ 混ざっています" } else { "○ 混ざっていません" }), $leakVm, $leakWin, $how
         $g.DrawString($l4, $FontTitle, $(if ($mixed) { $BrBad } else { $BrGood }), (PointF $pad 58))
         $cs = Get-ContainState
         $g.DrawString($cs.Text, $FontBody, $(if ($cs.Ok) { $BrGood } else { $BrBad }), (PointF $pad 76))
