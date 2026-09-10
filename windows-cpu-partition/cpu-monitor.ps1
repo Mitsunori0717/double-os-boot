@@ -287,9 +287,13 @@ $script:Stat   = @{}            # 論理 CPU 番号 → @{ Vm; Win; Hv; G (LP �
 $script:prevLp = $null
 $script:prevRv = $null
 $script:prevVp = $null
-# 分離の判定 (VP 合計と LP 合計の突き合わせ)。直近 3 回の平均で出す
+# 分離の判定 (VP 合計と LP 合計の突き合わせ)。
+# カウンターの種類ごとに読み取り時刻が数十 ms ずれるため、1 秒ごとの差には ± の揺れが出る。
+# 揺れは連続する区間で打ち消し合う (前の区間の端の分が次の区間で戻る) ので、符号付きのまま
+# 直近 60 秒分を足し合わせてから 0 で切る。真の漏れだけが残る
 $script:VmTotal = 0.0; $script:RootTotal = 0.0; $script:VpOk = $false
 $script:LeakVmHist = @(); $script:LeakWinHist = @()
+$script:LeakWindow = 60
 $script:LeakVm = 0.0; $script:LeakWin = 0.0
 $script:Mem    = @{ TotalGB = 0.0; WinGB = 0.0; VmGB = 0.0; FreeGB = 0.0; VmAssignedGB = 0.0; VmState = "?" }
 $script:LastErr = ""
@@ -335,8 +339,8 @@ function Sample {
                 $gOnGuest = 0.0; foreach ($l in $guestLps) { if ($new.ContainsKey([int]$l)) { $gOnGuest += [double]$new[[int]$l].G } }
                 $gOnHost  = 0.0; foreach ($l in $hostLps)  { if ($new.ContainsKey([int]$l)) { $gOnHost  += [double]$new[[int]$l].G } }
                 if ($vpOk) {
-                    $leakVmTot  = [Math]::Max(0.0, $vmTot - $gOnGuest)      # EdgeBox が EdgeBox 用コアの外で動いた量 (LP% の合計)
-                    $leakWinTot = [Math]::Max(0.0, $gOnGuest - $vmTot)      # Windows (など EdgeBox 以外) が EdgeBox 用コアで動いた量
+                    $leakVmTot  = $vmTot - $gOnGuest      # EdgeBox が EdgeBox 用コアの外で動いた量 (LP% の合計。符号付き)
+                    $leakWinTot = $gOnGuest - $vmTot      # Windows (など EdgeBox 以外) が EdgeBox 用コアで動いた量 (符号付き)
                 } else {
                     # VP カウンターが無い環境は従来どおり LP ごとの差し引きを合計する
                     $leakVmTot = 0.0;  foreach ($l in $hostLps)  { if ($new.ContainsKey([int]$l)) { $leakVmTot  += [double]$new[[int]$l].Vm } }
@@ -345,26 +349,30 @@ function Sample {
                 # 表示用: LP ごとの色分けは合計に合わせて按分する (合計が 0 なら Windows 用 LP の guest は全部 Windows の実行)
                 $rawVm = 0.0;  foreach ($l in $hostLps)  { if ($new.ContainsKey([int]$l)) { $rawVm  += [double]$new[[int]$l].Vm } }
                 $rawWin = 0.0; foreach ($l in $guestLps) { if ($new.ContainsKey([int]$l)) { $rawWin += [double]$new[[int]$l].Win } }
-                $fVm  = if ($rawVm  -gt 0) { [Math]::Min(1.0, $leakVmTot  / $rawVm) }  else { 0.0 }
-                $fWin = if ($rawWin -gt 0) { [Math]::Min(1.0, $leakWinTot / $rawWin) } else { 0.0 }
+                # 直近 60 秒分を符号付きで足してから 0 で切る (読み取り時刻のずれによる揺れは打ち消し合う)
+                # 注意: 配列に数値を足すときは両方を @() で包む (1 要素だとスカラーになり、数値の足し算になってしまう)
+                $script:LeakVmHist  = @(@($script:LeakVmHist)  + @([double]$leakVmTot)  | Select-Object -Last $script:LeakWindow)
+                $script:LeakWinHist = @(@($script:LeakWinHist) + @([double]$leakWinTot) | Select-Object -Last $script:LeakWindow)
+                $n = [Math]::Max(1, $script:LeakVmHist.Count)
+                $script:LeakVm  = [Math]::Max(0.0, [double](($script:LeakVmHist  | Measure-Object -Sum).Sum) / $n / $hostLps.Count)
+                $script:LeakWin = [Math]::Max(0.0, [double](($script:LeakWinHist | Measure-Object -Sum).Sum) / $n / $guestLps.Count)
+                # 表示用: LP ごとの色分けは、この 60 秒平均の漏れ量に合わせて按分する (漏れ 0 なら Windows 用 LP の guest は全部 Windows)
+                $leakVmNow  = $script:LeakVm  * $hostLps.Count
+                $leakWinNow = $script:LeakWin * $guestLps.Count
+                $fVm  = if ($rawVm  -gt 0) { [Math]::Min(1.0, $leakVmNow  / $rawVm) }  else { 0.0 }
+                $fWin = if ($rawWin -gt 0) { [Math]::Min(1.0, $leakWinNow / $rawWin) } else { 0.0 }
                 foreach ($l in $hostLps) {
                     if (-not $new.ContainsKey([int]$l)) { continue }
                     $e = $new[[int]$l]; $v = [double]$e.Vm * $fVm
-                    if ($rawVm -le 0 -and $leakVmTot -gt 0) { $v = $leakVmTot / $hostLps.Count }
+                    if ($rawVm -le 0 -and $leakVmNow -gt 0) { $v = $leakVmNow / $hostLps.Count }
                     $e.Vm = $v; $e.Win = [Math]::Max(0.0, [double]$e.G - $v)
                 }
                 foreach ($l in $guestLps) {
                     if (-not $new.ContainsKey([int]$l)) { continue }
                     $e = $new[[int]$l]; $w = [double]$e.Win * $fWin
-                    if ($rawWin -le 0 -and $leakWinTot -gt 0) { $w = $leakWinTot / $guestLps.Count }
+                    if ($rawWin -le 0 -and $leakWinNow -gt 0) { $w = $leakWinNow / $guestLps.Count }
                     $e.Win = $w; $e.Vm = [Math]::Max(0.0, [double]$e.G - $w)
                 }
-                # 直近 3 回の平均 (カウンターの読み取り時刻のずれによる ±0.1% 程度の揺れをならす)
-                # 注意: 配列に数値を足すときは両方を @() で包む (1 要素だとスカラーになり、数値の足し算になってしまう)
-                $script:LeakVmHist  = @(@($script:LeakVmHist)  + @([double]($leakVmTot  / $hostLps.Count))  | Select-Object -Last 3)
-                $script:LeakWinHist = @(@($script:LeakWinHist) + @([double]($leakWinTot / $guestLps.Count)) | Select-Object -Last 3)
-                $script:LeakVm  = [double](($script:LeakVmHist  | Measure-Object -Average).Average)
-                $script:LeakWin = [double](($script:LeakWinHist | Measure-Object -Average).Average)
             }
             $script:Stat = $new
         }
@@ -574,7 +582,7 @@ function Draw-All($g, [int]$W, [int]$H) {
         $leakVm  = $script:LeakVm    # EdgeBox が EdgeBox 用コアの外で動いた量 (VP 合計と LP 合計の突き合わせ。固定が効いていれば 0)
         $leakWin = $script:LeakWin   # EdgeBox 用コアで動いた EdgeBox 以外 (minroot が効いていれば 0)
         $mixed = ($leakVm -gt 0.5 -or $leakWin -gt 0.5)
-        $how = if ($script:VpOk) { "VP 合計で判定" } else { "LP ごとの差し引きで判定" }
+        $how = if ($script:VpOk) { "VP 合計で判定・直近 {0} 秒" -f [Math]::Min($script:LeakWindow, [Math]::Max(1, $script:LeakVmHist.Count)) } else { "LP ごとの差し引きで判定" }
         $l4 = "分離の状態: {0}   EdgeBox が Windows 用コアで動いた割合 {1:N1}%  /  Windows が EdgeBox 用コアで動いた割合 {2:N1}%   ({3})" -f `
               $(if ($mixed) { "△ 混ざっています" } else { "○ 混ざっていません" }), $leakVm, $leakWin, $how
         $g.DrawString($l4, $FontTitle, $(if ($mixed) { $BrBad } else { $BrGood }), (PointF $pad 58))

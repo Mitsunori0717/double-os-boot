@@ -387,19 +387,32 @@ function Get-GuidsInText([string]$Text) {
 }
 
 # --- EdgeBox がいまどの CPU グループに属しているか (GUID 小文字。無し/不明は "") ---
+# 実機の出力: "VmName VmId CpuGroupId / EdgeBox CB46099F-... B0EDB0ED-..." のように
+# EdgeBox 自身の ID (VmId) も GUID で出るため、それを除いた最後の GUID をグループ ID とみなす
 function Get-VmGroupId([string]$Exe, [string]$Name) {
     $r = Invoke-CpuGroups $Exe @("GetVmGroup", "/VmName:$Name")
     if (-not $r.Ok) { return "" }
+    $vmid = ""
+    try { $vmid = ([string](Get-VM -Name $Name -ErrorAction Stop).Id).ToLower() } catch { }
     $g = @(Get-GuidsInText $r.Output)
-    if ($g.Count -gt 0) { return $g[0] }
-    return ""
+    if ($g.Count -eq 0) { return "" }
+    $last = $g[-1]                                          # 表の最後の列 = CpuGroupId
+    if ($last -eq $NullGroupId) { return "none" }           # 照会できて「未所属」
+    if ($last -eq $vmid) { return "" }                      # 列が読めない (不明)
+    return $last
 }
 
 # --- 本ツールの CPU グループが存在するか ---
+$script:GroupsLogged = $false
 function Test-OurGroupExists([string]$Exe) {
     $r = Invoke-CpuGroups $Exe @("GetGroups")
     if (-not $r.Ok) { return $false }
-    return ((@(Get-GuidsInText $r.Output)) -contains $GroupId.ToLower())
+    $found = ((@(Get-GuidsInText $r.Output)) -contains $GroupId.ToLower())
+    if (-not $found -and -not $script:GroupsLogged) {
+        $script:GroupsLogged = $true
+        Write-PinLog ("CpuGroups GetGroups (本ツールのグループが見当たらない): 出力=" + (([string]$r.Output) -replace '\s+', ' ').Trim())
+    }
+    return $found
 }
 
 # --- CPU グループを作り直して EdgeBox を固定する (何度呼んでも同じ結果になる) ---
@@ -416,26 +429,29 @@ function Invoke-FullBind([string]$Exe, [int[]]$GuestArr, $VmObj) {
     }
     $running = ([string]$VmObj.State -ne "Off")
     $lpText = ConvertTo-LpRangeText $GuestArr
-    $cur = Get-VmGroupId $Exe $VMName
+    $cur = Get-VmGroupId $Exe $VMName      # "" = 不明 / "none" = 未所属 / GUID = 所属グループ
     if ($cur -eq $GroupId.ToLower()) {
         return [pscustomobject]@{ Bound = $true; Message = "EdgeBox は CPU グループ (CPU $lpText) に固定済み" }
     }
     $exists = Test-OurGroupExists $Exe
-    if ($exists -and -not $cur -and $running) {
+    if ($cur -eq "" -and $exists -and $running) {
         return [pscustomobject]@{ Bound = $true; Message = "CPU グループ (CPU $lpText) は作成済み (所属の照会は不可。実行中のため付け直しはしない)" }
     }
-    if ($exists -and $cur -and $running) {
+    if ($cur -ne "" -and $cur -ne "none" -and $running) {
         # 別のグループに属している (通常は起きない)。実行中は付け替えられないので次の停止時に直す
         return [pscustomobject]@{ Bound = $false; Message = "EdgeBox が別の CPU グループ ($cur) に属しています。EdgeBox の停止時に付け直します" }
     }
-    # ここからは (グループが無い) か (停止中で付け直す) のどちらか
-    if (-not $running -or $cur) {
+    # ここからは (未所属) か (グループが無い) か (停止中で付け直す)。
+    # 実行中の EdgeBox の所属は決してほどかない (ほどいた瞬間に Windows 用コアへ載る)
+    if (-not $running -and $cur -ne "" -and $cur -ne "none") {
         Invoke-CpuGroups $Exe @("SetVmGroup", "/VmName:$VMName", "/GroupId:$NullGroupId") | Out-Null
     }
-    if ($exists) { Invoke-CpuGroups $Exe @("DeleteGroup", "/GroupId:$GroupId") | Out-Null }
-    $rCreate = Invoke-CpuGroups $Exe @("CreateGroup", "/GroupId:$GroupId", "/GroupAffinity:$($GuestArr -join ',')")
-    if (-not $rCreate.Ok) {
-        return [pscustomobject]@{ Bound = $false; Message = "CPU グループを作成できません: $($rCreate.Output)" }
+    if ($exists -and -not $running) { Invoke-CpuGroups $Exe @("DeleteGroup", "/GroupId:$GroupId") | Out-Null; $exists = $false }
+    if (-not $exists) {
+        $rCreate = Invoke-CpuGroups $Exe @("CreateGroup", "/GroupId:$GroupId", "/GroupAffinity:$($GuestArr -join ',')")
+        if (-not $rCreate.Ok) {
+            return [pscustomobject]@{ Bound = $false; Message = "CPU グループを作成できません: $($rCreate.Output)" }
+        }
     }
     $rBind = Invoke-CpuGroups $Exe @("SetVmGroup", "/VmName:$VMName", "/GroupId:$GroupId")
     if (-not $rBind.Ok) {
