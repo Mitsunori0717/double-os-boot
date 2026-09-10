@@ -43,6 +43,23 @@ if (-not $PSBoundParameters.ContainsKey("VMName") -and
 
 $Script03 = Join-Path $PSScriptRoot "03-field-display-kiosk.ps1"
 
+# CPU コア分割ツール (別フォルダ windows-cpu-partition) が full モードなら、EdgeBox を起動する前に
+# 起動タスクと同じ処理を呼び、CPU グループに固定してから起動する (固定は EdgeBox 停止中に確実に効く)。
+# ツールが無ければ何もしない (互いに独立。あるときだけ順番を譲る)。戻り値: 呼んだか
+function Invoke-CpuPartitionBoot {
+    try {
+        $cpuDir = Join-Path (Split-Path $PSScriptRoot -Parent) "windows-cpu-partition"
+        $cfgF = Join-Path $cpuDir "cpu-partition.json"; $ps1 = Join-Path $cpuDir "cpu-partition.ps1"
+        if (-not (Test-Path $cfgF) -or -not (Test-Path $ps1)) { return $false }
+        $c = Get-Content $cfgF -Raw -Encoding UTF8 | ConvertFrom-Json
+        if ($c.Mode -ne "full") { return $false }
+        $p = Start-Process powershell.exe -WindowStyle Hidden -PassThru `
+            -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$ps1`" -BootApply -Quiet"
+        if (-not $p.WaitForExit(240000)) { try { $p.Kill() } catch { } }
+        return $true
+    } catch { return $false }
+}
+
 function Test-Admin {
     ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
         ).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
@@ -110,6 +127,7 @@ if (-not (Test-Path $Script03)) { Show-Msg "03-field-display-kiosk.ps1 が見つ
 # --- 『EdgeBox 画面』: 左画面にコンソールを表示するだけ ---
 if ($ShowOnly) {
     if ([string]$vm.State -ne "Running") {
+        Invoke-CpuPartitionBoot | Out-Null   # full モードなら CPU グループに固定してから起動
         try { Start-VM -Name $VMName -ErrorAction Stop } catch {
             Show-Msg "EdgeBox を起動できませんでした:`n$($_.Exception.Message)" "EdgeBox 画面" "Warning"; exit 1
         }
@@ -140,6 +158,7 @@ if ([string]$vm.State -ne "Off") {
         Start-Sleep -Seconds 3
     }
 }
+Invoke-CpuPartitionBoot | Out-Null   # full モードなら、停止中のいまのうちに CPU グループへ固定してから起動
 try { Start-VM -Name $VMName -ErrorAction Stop } catch {
     Show-Msg "EdgeBox を起動できませんでした:`n$($_.Exception.Message)`n`n.\02-start-field-vm.ps1 -Repair で原因を確認できます。" "EdgeBox 再起動" "Warning"
     exit 1

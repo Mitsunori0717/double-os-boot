@@ -391,7 +391,10 @@ function Get-VmGroupId([string]$Exe, [string]$Name) {
 # 戻り値: @{ Bound = 成立したか; Message = 説明 }
 function Invoke-FullBind([string]$Exe, [int[]]$GuestArr, $VmObj) {
     if (-not $Exe) { return [pscustomobject]@{ Bound = $false; Message = "CpuGroups.exe がありません" } }
-    if (-not $VmObj) { return [pscustomobject]@{ Bound = $false; Message = "登録 '$VMName' が未作成です" } }
+    if (-not $VmObj) {
+        $names = @(Get-VM -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Name)
+        return [pscustomobject]@{ Bound = $false; Message = ("登録 '$VMName' が見つかりません (ある登録: " + $(if ($names.Count -gt 0) { $names -join ", " } else { "なし" }) + ")") }
+    }
     $cur = Get-VmGroupId $Exe $VMName
     if ($cur -eq $GroupId.ToLower()) {
         return [pscustomobject]@{ Bound = $true; Message = "EdgeBox は CPU グループ (CPU $(ConvertTo-LpRangeText $GuestArr)) に固定済み" }
@@ -852,6 +855,31 @@ if (-not $PSBoundParameters.ContainsKey("VMName")) {
     if ($cfgVm -and $cfgVm.VMName) { $VMName = [string]$cfgVm.VMName }
 }
 
+# 登録名が実在しない場合 (名前を変えた・旧名のまま保存されていた等) は、EdgeBox の物理ディスクを持つ
+# 登録か、1 つしかない登録を対象にする (windows-host 側と同じ考え方)。見つけたら設定ファイルも直す
+function Resolve-VMName([string]$Name) {
+    if (-not (Get-Command Get-VM -ErrorAction SilentlyContinue)) { return $Name }
+    if ($Name -and (Get-VM -Name $Name -ErrorAction SilentlyContinue)) { return $Name }
+    $all = @(Get-VM -ErrorAction SilentlyContinue)
+    $found = @()
+    foreach ($v in $all) {
+        $pt = @(Get-VMHardDiskDrive -VMName $v.Name -ErrorAction SilentlyContinue | Where-Object { $null -ne $_.DiskNumber })
+        if ($pt.Count -gt 0) { $found += $v }
+    }
+    $pick = $null
+    if ($found.Count -eq 1) { $pick = $found[0].Name } elseif ($all.Count -eq 1) { $pick = $all[0].Name }
+    if ($pick -and $pick -ne $Name) {
+        Write-PinLog "登録名 '$Name' が見つからないため、'$pick' を対象にします (設定ファイルも書き換え)"
+        try {
+            $c = Get-SavedConfig
+            if ($c -and [string]$c.VMName -eq $Name) { $c.VMName = $pick; Save-Config $c }
+        } catch { }
+        return $pick
+    }
+    return $Name
+}
+if (-not $PSBoundParameters.ContainsKey("VMName")) { $VMName = Resolve-VMName $VMName }
+
 # ============================================================ -MemoryGB (EdgeBox のメモリ)
 #
 # メモリは EdgeBox の停止中にしか変更できない (固定メモリ)。実行中に指定された場合は
@@ -949,6 +977,7 @@ if ($BootApply) {
         Start-Sleep -Seconds 5
     }
     Start-Sleep -Seconds 3
+    $VMName = Resolve-VMName $VMName
     try {
         Invoke-FullStage2 @([int[]]$cfgB.HostLps) @([int[]]$cfgB.GuestLps) $false | Out-Null
     } catch {
@@ -980,7 +1009,7 @@ if ($Watch) {
                     Remove-Item $ContainStatusFile -Force -ErrorAction SilentlyContinue
                     exit 0
                 }
-                if ($cfgW.VMName) { $VMName = [string]$cfgW.VMName }
+                if ($cfgW.VMName) { $VMName = Resolve-VMName ([string]$cfgW.VMName) }
                 $hostArr = @([int[]]$cfgW.HostLps); $guestArr = @([int[]]$cfgW.GuestLps)
                 $hostMask = Get-LpMask $hostArr; $guestMask = Get-LpMask $guestArr
                 $except = Get-AppExceptionPids
@@ -1025,7 +1054,7 @@ if ($ApplyRuntime) {
     $cfg = Get-SavedConfig
     if (-not $cfg) { Write-PinLog "ApplyRuntime: 設定ファイルなし。何もしません"; exit 0 }
     if ($cfg.Mode -ne "runtime") { exit 0 }   # full モード時はハイパーバイザー側で固定済み
-    if ($cfg.VMName) { $VMName = [string]$cfg.VMName }
+    if ($cfg.VMName) { $VMName = Resolve-VMName ([string]$cfg.VMName) }
 
     # EdgeBox 起動直後は vmmem が出そろうまで少し待つ (最大 60 秒)
     $msg = ""

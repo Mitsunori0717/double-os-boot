@@ -46,6 +46,17 @@ if (-not $PSBoundParameters.ContainsKey("VMName") -and (Test-Path $ConfigFile)) 
         if ($c0.VMName) { $VMName = [string]$c0.VMName }
     } catch { }
 }
+# その名前の登録が無ければ (名前を変えた等)、EdgeBox の物理ディスクを持つ登録か 1 つしかない登録を使う
+$script:VmLookupError = ""
+try {
+    if (Get-Command Get-VM -ErrorAction SilentlyContinue) {
+        if (-not (Get-VM -Name $VMName -ErrorAction SilentlyContinue)) {
+            $all = @(Get-VM -ErrorAction SilentlyContinue)
+            $found = @($all | Where-Object { @(Get-VMHardDiskDrive -VMName $_.Name -ErrorAction SilentlyContinue | Where-Object { $null -ne $_.DiskNumber }).Count -gt 0 })
+            if ($found.Count -eq 1) { $VMName = $found[0].Name } elseif ($all.Count -eq 1) { $VMName = $all[0].Name }
+        }
+    } else { $script:VmLookupError = "Hyper-V のコマンドが使えません" }
+} catch { $script:VmLookupError = $_.Exception.Message }
 
 # ============================================================ 情報源
 
@@ -134,7 +145,11 @@ function Get-Cores {
             if ($lps.Count -gt 0) { $raw += [pscustomobject]@{ Eff = [int]$parts[0]; Lps = $lps; Kind = "C"; Label = "" } }
         }
     } catch { $raw = @() }
-    if ($raw.Count -eq 0 -and (Test-Path $SnapshotFile)) {
+    # minroot 適用中は Windows から EdgeBox 用の CPU が見えないため、設定コンソールが保存した
+    # 構成 (cpu-topology.json) の方が多ければそちらを使う
+    $liveLps = 0; foreach ($r in $raw) { $liveLps += $r.Lps.Count }
+    $snapRaw = @()
+    if (Test-Path $SnapshotFile) {
         try {
             $json = Get-Content $SnapshotFile -Raw -Encoding UTF8 | ConvertFrom-Json
             $items = @()
@@ -151,15 +166,28 @@ function Get-Cores {
             }
             foreach ($r in $items) {
                 $lps = @([int[]]$r.Lps)
-                if ($lps.Count -gt 0) { $raw += [pscustomobject]@{ Eff = [int]$r.Eff; Lps = $lps; Kind = "C"; Label = "" } }
+                if ($lps.Count -gt 0) { $snapRaw += [pscustomobject]@{ Eff = [int]$r.Eff; Lps = $lps; Kind = "C"; Label = "" } }
             }
-        } catch { $raw = @() }
+        } catch { $snapRaw = @() }
     }
+    $snapLps = 0; foreach ($r in $snapRaw) { $snapLps += $r.Lps.Count }
+    if ($snapLps -gt $liveLps) { $raw = $snapRaw }
     if ($raw.Count -eq 0) {
         foreach ($i in 0..([Environment]::ProcessorCount - 1)) {
             $raw += [pscustomobject]@{ Eff = 0; Lps = @($i); Kind = "C"; Label = "" }
         }
     }
+    # それでも割り当ての計画にある CPU 番号が足りなければ (保存した構成が無いまま minroot になった)、
+    # 隠れている CPU を 1 つずつ E コア相当として補う
+    try {
+        $plan0 = $null
+        if (Test-Path $ConfigFile) { $plan0 = Get-Content $ConfigFile -Raw -Encoding UTF8 | ConvertFrom-Json }
+        $have = @{}; foreach ($r in $raw) { foreach ($l in $r.Lps) { $have[[int]$l] = $true } }
+        $minEff = ($raw | ForEach-Object { $_.Eff } | Measure-Object -Minimum).Minimum
+        foreach ($l in @([int[]]$plan0.HostLps) + @([int[]]$plan0.GuestLps)) {
+            if (-not $have.ContainsKey([int]$l)) { $raw += [pscustomobject]@{ Eff = [int]$minEff; Lps = @([int]$l); Kind = "C"; Label = "" }; $have[[int]$l] = $true }
+        }
+    } catch { }
     $raw = @($raw | Sort-Object { $_.Lps[0] })
     $effs = @($raw | ForEach-Object { $_.Eff } | Sort-Object -Unique)
     $maxEff = $effs[-1]
@@ -294,7 +322,7 @@ function Sample {
             $asg = [double]$vm.MemoryAssigned / 1GB
             if ($asg -le 0) { try { $asg = [double](Get-VMMemory -VMName $VMName -ErrorAction Stop).Startup / 1GB } catch { } }
             $script:Mem.VmAssignedGB = $asg
-        } catch { $script:Mem.VmState = "取得不可" }
+        } catch { $script:Mem.VmState = "取得不可 (" + $(if ($script:VmLookupError) { $script:VmLookupError } else { $_.Exception.Message }) + ")" }
     }
 }
 

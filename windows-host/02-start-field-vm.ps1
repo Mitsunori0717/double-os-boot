@@ -55,6 +55,24 @@ if (-not (Test-Admin)) {
 $SysDisk = -1
 try { $SysDisk = [int](Get-Partition -DriveLetter C -ErrorAction Stop).DiskNumber } catch { $SysDisk = -1 }
 
+
+# CPU コア分割ツール (別フォルダ windows-cpu-partition) が full モードなら、EdgeBox を起動する前に
+# 起動タスクと同じ処理を呼び、CPU グループに固定してから起動する (固定は EdgeBox 停止中に確実に効く)。
+# ツールが無ければ何もしない (互いに独立。あるときだけ順番を譲る)。戻り値: 呼んだか
+function Invoke-CpuPartitionBoot {
+    try {
+        $cpuDir = Join-Path (Split-Path $PSScriptRoot -Parent) "windows-cpu-partition"
+        $cfgF = Join-Path $cpuDir "cpu-partition.json"; $ps1 = Join-Path $cpuDir "cpu-partition.ps1"
+        if (-not (Test-Path $cfgF) -or -not (Test-Path $ps1)) { return $false }
+        $c = Get-Content $cfgF -Raw -Encoding UTF8 | ConvertFrom-Json
+        if ($c.Mode -ne "full") { return $false }
+        $p = Start-Process powershell.exe -WindowStyle Hidden -PassThru `
+            -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$ps1`" -BootApply -Quiet"
+        if (-not $p.WaitForExit(240000)) { try { $p.Kill() } catch { } }
+        return $true
+    } catch { return $false }
+}
+
 $vm = Get-VM -Name $VMName -ErrorAction SilentlyContinue
 if (-not $vm) {
     Write-Error "登録 '$VMName' がありません。01-create-field-vm.ps1 で作成してください。"
@@ -207,6 +225,7 @@ if ($vm.State -ne "Running") {
         } catch { }
     }
     Write-Host "EdgeBox を起動しています..." -ForegroundColor Cyan
+    if (Invoke-CpuPartitionBoot) { Write-Host "  CPU コア分割 (full): CPU グループに固定してから起動します" -ForegroundColor Cyan }
     try {
         Start-VM -Name $VMName -ErrorAction Stop
     } catch {
