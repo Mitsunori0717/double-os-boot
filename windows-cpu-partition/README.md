@@ -169,7 +169,6 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\cpu-console.ps1
 - **P コア / E コアを直接選べます**。区別は CPU 自身が申告する効率クラスから取得するため、
   型番の決め打ちではなく実機の構成そのものです (混成でない CPU なら 1 つの一覧で表示)
 - **タイルをクリック**するたびに Windows 用 → EdgeBox 用 → 未割当 と切り替わります
-- **かんたん設定**: 「P コア = Windows / E コア = EdgeBox (推奨)」「最低数だけ」「半分ずつ」「分割なし」
 - 適用・解除・実測はすべてこの画面から実行できます (中身は `cpu-partition.ps1` が担当)
 
 ### EdgeBox がまだ無くても設定できます
