@@ -221,24 +221,25 @@ function Get-ContainState {
         if ($plan -and $plan.Mode -eq "full") {
             $fs = $null
             try { if (Test-Path $FullFile) { $fs = Get-Content $FullFile -Raw -Encoding UTF8 | ConvertFrom-Json } } catch { }
-            if (-not $fs) { return @{ Text = "完全分割 (full): 起動タスクの記録がまだありません (再起動待ち)"; Ok = $false } }
-            if ($fs.Bound) { return @{ Text = ("完全分割 (full): 成立 — Windows は CPU {0} に封じ込め (minroot) / EdgeBox は CPU {1} に固定 (CPU グループ)" -f $fs.HostLps, $fs.GuestLps); Ok = $true } }
-            if (-not $fs.MinrootOk) { return @{ Text = ("完全分割 (full): 未反映 — " + $fs.Message); Ok = $false } }
-            return @{ Text = ("完全分割 (full): 準分割 — EdgeBox の固定が効いていません (" + $fs.Message + ")"); Ok = $false }
+            # 仕組みの名前 (方式・固定の手段など) は画面に出さない。状態だけを出す
+            if (-not $fs) { return @{ Text = "完全分離: 準備中 (再起動待ち)"; Ok = $false } }
+            if ($fs.Bound) { return @{ Text = "完全分離: ○ 成立"; Ok = $true } }
+            if (-not $fs.MinrootOk) { return @{ Text = "完全分離: △ 未成立 (再起動待ち)"; Ok = $false } }
+            return @{ Text = "完全分離: △ 未成立 (『EdgeBox 再起動』で直ることがあります)"; Ok = $false }
         }
-        return @{ Text = "Windows の締め出し: 未設定 (設定コンソールで割り当てを適用すると始まります)"; Ok = $false }
+        return @{ Text = "分離: 設定なし (設定コンソールで割り当てを適用すると始まります)"; Ok = $false }
     }
     $st = $null
     try { if (Test-Path $ContainFile) { $st = Get-Content $ContainFile -Raw -Encoding UTF8 | ConvertFrom-Json } } catch { }
-    if (-not $st) { return @{ Text = "Windows の締め出し: 常駐の記録がありません (設定コンソールで runtime を適用し直してください)"; Ok = $false } }
+    if (-not $st) { return @{ Text = "Windows 側の固定: 記録がありません (設定コンソールで適用し直してください)"; Ok = $false } }
     $age = 9999
     try { $age = ((Get-Date) - [datetime]$st.At).TotalSeconds } catch { }
     $unp = @($st.Unpinnable)
     if ($age -gt 30) {
-        return @{ Text = ("Windows の締め出し: 停止中? (最終確認 {0} / {1} 秒前)。2 分以内に自動で再開します" -f $st.At, [int]$age); Ok = $false }
+        return @{ Text = ("Windows 側の固定: 停止中? (最終確認 {0} / {1} 秒前)。2 分以内に自動で再開します" -f $st.At, [int]$age); Ok = $false }
     }
-    return @{ Text = ("Windows の締め出し: 動作中 — Windows のプロセス {0} 個を CPU {1} に固定 (固定不可: {2})" -f
-        $st.Contained, $st.HostLps, $(if ($unp.Count -gt 0) { $unp -join ", " } else { "なし" })); Ok = $true }
+    return @{ Text = ("Windows 側の固定: ○ 動作中   Windows のプロセス {0} 個を CPU {1} に固定 (固定できないもの {2} 個)" -f
+        $st.Contained, $st.HostLps, $unp.Count); Ok = $true }
 }
 
 # ハイパーバイザーの性能カウンター (-Verify と同じ考え方)
@@ -627,7 +628,7 @@ function Draw-All($g, [int]$W, [int]$H) {
         $leakVm  = $script:LeakVm    # EdgeBox が EdgeBox 用コアの外で動いた量 (VP 合計と LP 合計の突き合わせ。固定が効いていれば 0)
         $leakWin = $script:LeakWin   # EdgeBox 用コアで動いた EdgeBox 以外 (minroot が効いていれば 0)
         $mixed = ($leakVm -gt 0.5 -or $leakWin -gt 0.5)
-        $how = if ($script:VpOk) { "VP 合計で判定・直近 {0} 秒" -f [Math]::Min($script:LeakWindow, [Math]::Max(1, $script:LeakVmHist.Count)) } else { "LP ごとの差し引きで判定" }
+        $how = if ($script:VpOk) { "直近 {0} 秒" -f [Math]::Min($script:LeakWindow, [Math]::Max(1, $script:LeakVmHist.Count)) } else { "概算" }
         $l4 = "分離の状態: {0}   EdgeBox が Windows 用コアで動いた割合 {1:N1}%  /  Windows が EdgeBox 用コアで動いた割合 {2:N1}%   ({3})" -f `
               $(if ($mixed) { "△ 混ざっています" } else { "○ 混ざっていません" }), $leakVm, $leakWin, $how
         $g.DrawString($l4, $FontTitle, $(if ($mixed) { $BrBad } else { $BrGood }), (PointF $pad 58))
