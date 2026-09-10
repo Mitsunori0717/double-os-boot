@@ -532,14 +532,15 @@ function New-Lbl([string]$Text, [int]$X, [int]$Y, [int]$W = 0) {
 $grpPc = New-Object System.Windows.Forms.GroupBox
 $grpPc.Text = "この PC の CPU"
 $grpPc.Location = New-Object System.Drawing.Point(12, 8)
-$grpPc.Size = New-Object System.Drawing.Size(940, 76)
+$grpPc.Size = New-Object System.Drawing.Size(940, 98)
 $script:lblCpu1 = New-Lbl "" 14 22 770
 $script:lblCpu2 = New-Lbl "" 14 44 770
+$script:lblCpu3 = New-Lbl "" 14 66 910
 $script:btnMon = New-Object System.Windows.Forms.Button
 $script:btnMon.Text = "リアルタイム監視"
 $script:btnMon.Location = New-Object System.Drawing.Point(792, 24)
 $script:btnMon.Size = New-Object System.Drawing.Size(134, 28)
-$grpPc.Controls.AddRange(@($script:lblCpu1, $script:lblCpu2, $script:btnMon))
+$grpPc.Controls.AddRange(@($script:lblCpu1, $script:lblCpu2, $script:lblCpu3, $script:btnMon))
 $form.Controls.Add($grpPc)
 
 # --- 対象と方式 ---
@@ -566,7 +567,7 @@ $grpMode.Controls.Add($script:lblVm)
 
 $grpMode.Controls.Add((New-Lbl "方式:" 14 58))
 $script:rbRuntime = New-Object System.Windows.Forms.RadioButton
-$script:rbRuntime.Text = "runtime (再起動なし・Windows 側も締め出し)"
+$script:rbRuntime.Text = "runtime"
 $script:rbRuntime.Location = New-Object System.Drawing.Point(96, 55)
 $script:rbRuntime.Size = New-Object System.Drawing.Size(250, 24)
 $script:rbFull = New-Object System.Windows.Forms.RadioButton
@@ -587,46 +588,6 @@ $script:numMin.Value = [Math]::Max([int]$script:numMin.Minimum, [Math]::Min(32, 
 $grpMode.Controls.Add($script:numMin)
 $grpMode.Controls.Add((New-Lbl "コア" 852 58))
 $form.Controls.Add($grpMode)
-
-# --- かんたん設定 (プリセット) ---
-$form.Controls.Add((New-Lbl "かんたん設定:" 16 194))
-function New-Preset([string]$Text, [int]$X, [int]$W, $OnClick) {
-    $b = New-Object System.Windows.Forms.Button
-    $b.Text = $Text
-    $b.Location = New-Object System.Drawing.Point($X, 190)
-    $b.Size = New-Object System.Drawing.Size($W, 27)
-    $b.Add_Click($OnClick)
-    return $b
-}
-function Set-AllStates([string]$State) {
-    foreach ($c in $script:Cores) { $c.State = $State }
-}
-$presetX = 112
-if ($script:Hybrid) {
-    $form.Controls.Add((New-Preset ("末尾の E コア {0} 個 = EdgeBox / 残り = Windows (推奨)" -f $MinGuestCores) $presetX 300 {
-        Set-DefaultHybridPlan
-        Sync-AllTiles; Update-Validation
-    }))
-    $presetX += 308
-}
-$form.Controls.Add((New-Preset "EdgeBox は最低数だけ" $presetX 160 {
-    $need = [int]$script:numMin.Value
-    Set-AllStates "Host"
-    # 後ろのコアから必要数だけEdgeBox へ (混成 CPU なら E コアが後ろに並ぶ)
-    $tail = @($script:Cores | Sort-Object Id -Descending | Select-Object -First $need)
-    foreach ($c in $tail) { $c.State = "Guest" }
-    Sync-AllTiles; Update-Validation
-}))
-$presetX += 168
-$form.Controls.Add((New-Preset "半分ずつ" $presetX 100 {
-    $half = [Math]::Max(1, [int]($script:Cores.Count / 2))
-    foreach ($c in $script:Cores) { $c.State = $(if ($c.Id -lt $half) { "Host" } else { "Guest" }) }
-    Sync-AllTiles; Update-Validation
-}))
-$presetX += 108
-$form.Controls.Add((New-Preset "全部 Windows (分割なし)" $presetX 180 {
-    Set-AllStates "Host"; Sync-AllTiles; Update-Validation
-}))
 
 # --- コアのタイル ---
 function New-Tile($Core) {
@@ -866,12 +827,15 @@ function Update-Header {
     if ($script:SavedCfg -and $script:SavedCfg.Mode -eq "full") {
         $st = $null
         try { $f = Join-Path $PSScriptRoot "cpu-full-status.json"; if (Test-Path $f) { $st = Get-Content $f -Raw -Encoding UTF8 | ConvertFrom-Json } } catch { }
-        if (-not $st) { $fs = "    完全分割: 再起動待ち" }
-        elseif ($st.Bound) { $fs = "    完全分割: 成立 (EdgeBox = CPU $($st.GuestLps))" }
-        elseif (-not $st.MinrootOk) { $fs = "    完全分割: 再起動待ち" }
-        else { $fs = "    完全分割: 準分割 (EdgeBox の固定が効いていません。『EdgeBox 監視』で確認)" }
+        if (-not $st) { $fs = "完全分割: 再起動待ち" }
+        elseif ($st.Bound) { $fs = "完全分割: 成立 — Windows は CPU $($st.HostLps) に封じ込め (minroot) / EdgeBox は CPU $($st.GuestLps) に固定 (CPU グループ)" }
+        elseif (-not $st.MinrootOk) { $fs = "完全分割: 再起動待ち" }
+        else { $fs = "完全分割: 準分割 (EdgeBox の固定が効いていません。『EdgeBox 監視』で確認)" }
+    } elseif ($script:SavedCfg -and $script:SavedCfg.Mode -eq "runtime") {
+        $fs = "方式: runtime (EdgeBox を E コアに物理固定 + Windows 側のプロセスを締め出し)"
     }
-    $script:lblCpu2.Text = ("ハイパーバイザーのスケジューラ: {0}    minroot: {1}" -f $script:Scheduler, $mr) + $fs
+    $script:lblCpu2.Text = ("ハイパーバイザーのスケジューラ: {0}    minroot: {1}" -f $script:Scheduler, $mr)
+    $script:lblCpu3.Text = $fs
     if ($script:Vm) {
         $script:lblVm.Text = "状態: {0}    プロセッサ: {1}    メモリ: {2} GB{3}" -f $script:Vm.State, $script:Vcpu,
             $script:MemVmGB, $(if ($script:MemDynamic) { " (動的)" } else { "" })
@@ -1758,4 +1722,11 @@ Sync-AllTiles
 Update-Header
 Sync-MemoryControl
 $form.Add_Shown({ Update-Validation })
+# 画面の並べ直し: 「この PC の CPU」を 1 行増やし (+22)、かんたん設定の行を無くした (-34) 分を詰める
+foreach ($ctl in @($form.Controls)) {
+    if ($ctl -eq $grpMode) { $ctl.Top += 22 }
+    elseif ($ctl.Top -ge 224) { $ctl.Top -= 12 }
+}
+$form.ClientSize = New-Object System.Drawing.Size($form.ClientSize.Width, ($form.ClientSize.Height - 12))
+
 [void]$form.ShowDialog()
