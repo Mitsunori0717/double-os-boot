@@ -567,11 +567,11 @@ $grpMode.Controls.Add($script:lblVm)
 
 $grpMode.Controls.Add((New-Lbl "方式:" 14 58))
 $script:rbRuntime = New-Object System.Windows.Forms.RadioButton
-$script:rbRuntime.Text = "runtime"
+$script:rbRuntime.Text = "簡易分離 (再起動なし)"
 $script:rbRuntime.Location = New-Object System.Drawing.Point(96, 55)
 $script:rbRuntime.Size = New-Object System.Drawing.Size(250, 24)
 $script:rbFull = New-Object System.Windows.Forms.RadioButton
-$script:rbFull.Text = "full (完全分割・再起動 1 回。推奨)"
+$script:rbFull.Text = "完全分離 (再起動 1 回。推奨)"
 $script:rbFull.Location = New-Object System.Drawing.Point(356, 55)
 $script:rbFull.Size = New-Object System.Drawing.Size(240, 24)
 # 既定は full (完全分割)。保存済みの計画があればその方式に従う
@@ -750,7 +750,7 @@ $script:btnVerify.Location = New-Object System.Drawing.Point(160, 834)
 $script:btnVerify.Size = New-Object System.Drawing.Size(140, 32)
 
 $script:btnFix = New-Object System.Windows.Forms.Button
-$script:btnFix.Text = "full 用に並べ直す"
+$script:btnFix.Text = "完全分離用に並べ直す"
 $script:btnFix.Location = New-Object System.Drawing.Point(308, 834)
 $script:btnFix.Size = New-Object System.Drawing.Size(160, 32)
 $script:btnFix.Visible = $false
@@ -760,7 +760,7 @@ $script:chkTools.Text = "CpuGroups.exe を自動取得"
 $script:chkTools.Location = New-Object System.Drawing.Point(476, 839)
 $script:chkTools.Size = New-Object System.Drawing.Size(180, 24)
 $script:chkTools.Checked = $true
-$script:chkTools.Visible = $false
+$script:chkTools.Visible = $false   # 常に自動取得する (仕組みの名前は画面に出さない)
 
 $script:btnApply = New-Object System.Windows.Forms.Button
 $script:btnApply.Text = "この内容で適用"
@@ -822,19 +822,20 @@ function Update-Header {
         $t += "  (P コア {0} + E コア {1})" -f $pC, $eC
     }
     $script:lblCpu1.Text = $t
-    $mr = if ($script:UnderMinroot) { "有効 — Windows は $($script:VisibleLps) 論理 CPU に封じ込め中" } else { "未使用" }
+    # 仕組みの名前 (方式・固定の手段など) は画面に出さない。状態だけを出す
+    $mr = if ($script:UnderMinroot) { "Windows が使う CPU: $($script:VisibleLps) 論理 (分離が有効)" } else { "Windows が使う CPU: $($script:VisibleLps) 論理 (全部)" }
     $fs = ""
     if ($script:SavedCfg -and $script:SavedCfg.Mode -eq "full") {
         $st = $null
         try { $f = Join-Path $PSScriptRoot "cpu-full-status.json"; if (Test-Path $f) { $st = Get-Content $f -Raw -Encoding UTF8 | ConvertFrom-Json } } catch { }
-        if (-not $st) { $fs = "完全分割: 再起動待ち" }
-        elseif ($st.Bound) { $fs = "完全分割: 成立 — Windows は CPU $($st.HostLps) に封じ込め (minroot) / EdgeBox は CPU $($st.GuestLps) に固定 (CPU グループ)" }
-        elseif (-not $st.MinrootOk) { $fs = "完全分割: 再起動待ち" }
-        else { $fs = "完全分割: 準分割 (EdgeBox の固定が効いていません。『EdgeBox 監視』で確認)" }
+        if (-not $st) { $fs = "完全分離: 準備中 (再起動待ち)" }
+        elseif ($st.Bound) { $fs = "完全分離: ○ 成立   Windows は CPU $($st.HostLps) に固定 / $($script:VmNameSel) は CPU $($st.GuestLps) に固定" }
+        elseif (-not $st.MinrootOk) { $fs = "完全分離: △ 未成立 (再起動待ち)" }
+        else { $fs = "完全分離: △ 未成立 (『EdgeBox 再起動』で直ることがあります。『EdgeBox 監視』で確認)" }
     } elseif ($script:SavedCfg -and $script:SavedCfg.Mode -eq "runtime") {
-        $fs = "方式: runtime (EdgeBox を E コアに物理固定 + Windows 側のプロセスを締め出し)"
+        $fs = "簡易分離: 適用済み (Windows と $($script:VmNameSel) のプロセスをそれぞれのコアに固定)"
     }
-    $script:lblCpu2.Text = ("ハイパーバイザーのスケジューラ: {0}    minroot: {1}" -f $script:Scheduler, $mr)
+    $script:lblCpu2.Text = $mr
     $script:lblCpu3.Text = $fs
     if ($script:Vm) {
         $script:lblVm.Text = "状態: {0}    プロセッサ: {1}    メモリ: {2} GB{3}" -f $script:Vm.State, $script:Vcpu,
@@ -909,20 +910,19 @@ function Update-Validation {
 
     # --- 方式ごとの成立条件 ---
     $script:btnFix.Visible = $false
-    $script:chkTools.Visible = ($mode -eq "full")
     if ($mode -eq "runtime") {
         if ($script:Scheduler -ne "root") {
-            $errors += "runtime は Windows 標準の root スケジューラ専用ですが、現在は『$($script:Scheduler)』です。full を選ぶか、[分割を解除] 後に再起動してください。"
+            $errors += "完全分離の設定が有効になっている PC では簡易分離は使えません。完全分離を選ぶか、[分割を解除] 後に再起動してください。"
         }
         if ($script:Bcd -and ($script:Bcd.SchedulerType -or $script:Bcd.RootProc)) {
-            $errors += "full モード用の設定が書き込み済みです (次の再起動で有効になり runtime と矛盾します)。full を続けるか、[分割を解除] してください。"
+            $errors += "完全分離の設定が書き込み済みです (次の再起動で有効になり、簡易分離と矛盾します)。完全分離を続けるか、[分割を解除] してください。"
         }
         if ($script:UnderMinroot) {
-            $errors += "minroot が有効なため、隠れているコアには runtime 方式の固定ができません。[分割を解除] して再起動してから使ってください。"
+            $errors += "完全分離が有効なため、Windows から見えないコアには簡易分離の固定ができません。[分割を解除] して再起動してから使ってください。"
         }
         $over = @($sel.HostLps + $sel.GuestLps | Where-Object { $_ -ge 63 })
         if ($over.Count -gt 0) {
-            $errors += "論理 CPU 63 以上は runtime 方式では扱えません。full を使ってください。"
+            $errors += "論理 CPU 63 以上は簡易分離では扱えません。完全分離を使ってください。"
         }
     } else {
         # minroot は「先頭から N 個」の論理 CPU をWindows に割り当てる方式
@@ -931,10 +931,10 @@ function Update-Validation {
             if ($sel.HostLps[$i] -ne $i) { $ok = $false; break }
         }
         if (-not $ok -or $sel.HostLps.Count -eq 0) {
-            $errors += "full では Windows 側が CPU 0 から続き番号である必要があります (minroot の仕様)。現在: CPU $(ConvertTo-LpRangeText $sel.HostLps)"
+            $errors += "完全分離では Windows 側が CPU 0 から続き番号である必要があります。現在: CPU $(ConvertTo-LpRangeText $sel.HostLps)"
             $script:btnFix.Visible = $true
         }
-        $warnings += "full は再起動が 1 回必要です (適用 → 再起動。再起動後は起動タスクが自動で完了します)。"
+        $warnings += "完全分離は再起動が 1 回必要です (適用 → 再起動。再起動後は自動で完了します)。"
     }
 
     # --- 分割の質 ---
@@ -1139,7 +1139,7 @@ $script:btnApply.Add_Click({
     $confirm = "次の内容で${verb}。`n`n" +
         "  Windows            : CPU $hostText  ($($sel.HostCores) コア)`n" +
         "  $($script:VmNameSel) : CPU $guestText  ($($sel.GuestCores) コア)`n" +
-        "  方式               : $mode`n`n" +
+        "  方式               : $(if ($mode -eq "full") { "完全分離" } else { "簡易分離" })`n`n" +
         $(if ($mode -eq "full") { "この後 PC の再起動が 1 回必要です (再起動後は自動で完了します)。`n`n" } else { "" }) +
         "よろしいですか? (いつでも [分割を解除] で元に戻せます)"
     $r = [System.Windows.Forms.MessageBox]::Show($confirm, "CPU コア割り当て",
@@ -1174,7 +1174,7 @@ $script:btnApply.Add_Click({
     if ($mode -eq "full" -and $pending) {
         $r2 = [System.Windows.Forms.MessageBox]::Show(
             "設定を書き込みました。`n`n" +
-            "PC を再起動すると、起動タスクが CPU グループを作成して EdgeBox を E コアに固定し、EdgeBox を起動します (以後、起動のたびに自動)。`n" +
+            "PC を再起動すると、EdgeBox を割り当てたコアに固定してから起動します (以後、起動のたびに自動)。`n" +
             "成立したかは、この画面の上部か『EdgeBox 監視』の「分離の状態」で確認できます。`n`n" +
             "今すぐ再起動しますか?", "CPU コア割り当て",
             [System.Windows.Forms.MessageBoxButtons]::YesNo, [System.Windows.Forms.MessageBoxIcon]::Question)
@@ -1184,10 +1184,10 @@ $script:btnApply.Add_Click({
     if ($script:VmMissing) {
         Show-Info ("保存しました。`n`n  Windows            : CPU $hostText`n  $($script:VmNameSel) : CPU $guestText`n`n" +
             "登録『$($script:VmNameSel)』を作成して起動すると、この割り当てが自動で適用されます。`n" +
-            "(常駐タスク CpuPartition-Pin が EdgeBox の起動を検出して適用します)")
+            "(EdgeBox の起動を検出して自動で適用します)")
     } else {
     Show-Info ("適用しました。`n`n  Windows            : CPU $hostText`n  $($script:VmNameSel) : CPU $guestText`n`n" +
-        $(if ($mode -eq "runtime") { "常駐 'CpuPartition-Watch' が Windows 側のプロセスを CPU $hostText へ固定し続けます (EdgeBox 用コアに Windows のプロセスは載りません)。`n`n" } else { "" }) +
+        $(if ($mode -eq "runtime") { "Windows 側のプロセスを CPU $hostText へ固定し続けます ($($script:VmNameSel) 用コアに Windows のプロセスは載りません)。`n`n" } else { "" }) +
         "[効き具合を実測] または『EdgeBox 監視』の「分離の状態」で、実際にどのコアで動いているか確認できます。")
     }
 })
@@ -1201,7 +1201,7 @@ $script:btnUndo.Add_Click({
     try { $code = Invoke-Engine @("-Undo", "-VMName", "`"$($script:VmNameSel)`"", "-NoConfirm") } finally { $form.Enabled = $true }
     Refresh-All
     if ($code -eq 0) {
-        Show-Info "解除しました。`n(minroot やスケジューラを使っていた場合は、PC の再起動で完全に元へ戻ります)"
+        Show-Info "解除しました。`n(完全分離を使っていた場合は、PC の再起動で完全に元へ戻ります)"
     } else {
         Show-Info "解除の途中で問題が起きました (終了コード $code)。表示されたウィンドウの内容をご確認ください。" "Warning"
     }
@@ -1727,6 +1727,8 @@ foreach ($ctl in @($form.Controls)) {
     if ($ctl -eq $grpMode) { $ctl.Top += 22 }
     elseif ($ctl.Top -ge 224) { $ctl.Top -= 12 }
 }
-$form.ClientSize = New-Object System.Drawing.Size($form.ClientSize.Width, ($form.ClientSize.Height - 12))
+$maxBottom = 0
+foreach ($ctl in @($form.Controls)) { if ($ctl.Bottom -gt $maxBottom) { $maxBottom = $ctl.Bottom } }
+$form.ClientSize = New-Object System.Drawing.Size($form.ClientSize.Width, ($maxBottom + 16))
 
 [void]$form.ShowDialog()
