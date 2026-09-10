@@ -291,16 +291,8 @@ if ($Splash) {
         $main.ForeColor = [System.Drawing.Color]::White
         $main.Font = New-Object System.Drawing.Font("Meiryo UI", 26)
         $main.Text = "EdgeBox 起動中"
-        $sub = New-Object System.Windows.Forms.Label
-        $sub.Name = "sub"
-        $sub.Dock = "Bottom"
-        $sub.Height = 110
-        $sub.TextAlign = "MiddleCenter"
-        $sub.BackColor = [System.Drawing.Color]::Black
-        $sub.ForeColor = [System.Drawing.Color]::LightGray
-        $sub.Font = New-Object System.Drawing.Font("Meiryo UI", 14)
+        # 下の説明文 (進み具合) は出さない。「EdgeBox 起動中」だけ
         $f.Controls.Add($main)
-        $f.Controls.Add($sub)
         return $f
     }
 
@@ -346,13 +338,10 @@ if ($Splash) {
             $script:LeftOff = $true
             [System.Windows.Forms.Application]::Exit(); return
         }
-        $status = ""
-        try { if (Test-Path $StatusFile) { $status = ([string](Get-Content $StatusFile -Raw -Encoding UTF8)).Trim() } } catch { }
         foreach ($f in $script:SplashForms) {
             if ($f.IsDisposed) { continue }
             foreach ($c in $f.Controls) {
                 if ($c.Name -eq "main") { $c.Text = "EdgeBox 起動中" + ("." * $script:SplashDots) }
-                if ($c.Name -eq "sub")  { $c.Text = $status }
             }
         }
         Sync-SplashScreens
@@ -727,7 +716,7 @@ public class GuardApi {
     }
     $script:notice = $null; $script:noticeUntil = [datetime]::MinValue
     function Show-Notice([string]$text) {
-        # 右画面の右上に 3 秒だけ出す小さな案内
+        # 右画面の右上に約 10 秒だけ出す小さな案内
         try {
             if ($script:notice) { $script:notice.Close(); $script:notice.Dispose(); $script:notice = $null }
             $f = New-Object System.Windows.Forms.Form
@@ -742,7 +731,7 @@ public class GuardApi {
             $f.ClientSize = New-Object System.Drawing.Size(($l.PreferredWidth + 32), ($l.PreferredHeight + 24))
             $f.Location = New-Object System.Drawing.Point(($right.X + $right.Width - $f.Width - 20), ($right.Y + 20))
             $f.Show()
-            $script:notice = $f; $script:noticeUntil = (Get-Date).AddSeconds(3)
+            $script:notice = $f; $script:noticeUntil = (Get-Date).AddSeconds(10)   # 約 10 秒で閉じる
         } catch { }
     }
 
