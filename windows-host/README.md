@@ -1,150 +1,138 @@
 # 構成B: Windows + EdgeBox の同時起動
 
-Linux 側が **EdgeBox**(メーカー製の専用機システム。原型は FANUC の FsBP で、署名検証付きの
-改造不可イメージ)である構成です。EdgeBox はWindows(土台)役にできないため、
-主構成(`baremetal/`)とはWindows とEdgeBox を反転させます。
+Linux 側が **EdgeBox** (メーカー製の専用機システム。原型は FANUC の FsBP で、署名検証付きの
+改造不可イメージ) である構成です。EdgeBox は土台 (ホスト) 役にできないため、
+主構成 (`baremetal/`) とは役割を反転し、**Windows を土台にして EdgeBox を Hyper-V で同時起動**します。
 
 ```
-Windows 11(Windows・ネイティブ動作 = メイン業務はフルスピード)
- ├─ モニター1: Windows のメイン業務・EdgeBox 専用アプリ
- ├─ モニター2: 通常の Windows デスクトップ (起動中だけ「EdgeBox 起動中」を表示。設定で管理画面のブラウザにもできる)
+Windows 11 Pro (ネイティブ動作 = メイン業務はフルスピード)
+ ├─ 左モニター : EdgeBox のコンソールを全画面で固定表示 (見張り役が常に維持)
+ ├─ 右モニター : 通常の Windows デスクトップ (メイン業務・EdgeBox 専用アプリ)
+ ├─ CPU        : P コア 8 + E コア 4 = Windows / E コア 8 = EdgeBox に完全分離 (windows-cpu-partition)
  └─ Hyper-V
       └─ EdgeBox
-           ├─ EdgeBox の物理ディスクを無改造のまま起動(コピー・変換なし)
+           ├─ EdgeBox の物理ディスクを無改造のまま起動 (コピー・変換なし)
            └─ 外部スイッチ経由で工場ラインの機械と通信
 ```
+
+## 完成形 (電源 ON からの流れ)
+
+1. 電源 ON → 自動サインイン (省略可)
+2. CPU 分割の起動タスクが EdgeBox を E コアに固定してから EdgeBox を起動
+3. 右画面に「EdgeBox 起動中」の黒い画面 (左画面は覆わない)
+4. 左画面に EdgeBox のコンソールが全画面で表示され、右画面は通常のデスクトップに戻る
+5. 以後、左の全画面が外れても約 1 秒で戻る。解除できるのは **Alt+F11** だけ
+
+人の操作はどこにも要りません。
 
 ## 主構成との違い
 
 | 観点 | 主構成 (baremetal/) | この構成 (windows-host/) |
 |---|---|---|
-| Windows | Linux (Ubuntu) | Windows 11 Pro |
-| ネイティブ側 | Linux | **Windows(重い業務側が素で動く)** |
-| CPU 分割 | コア単位の厳密な固定 | 標準ではプロセッサ数の割り当てのみ。**別口ツール ([../windows-cpu-partition/](../windows-cpu-partition/README.md)) でコア単位の固定割り当てが可能** (本構成とは独立・入れなくても本構成は完結) |
-| GPU | 2系統必要 | **1系統でよい**(EdgeBox は画面をネットワーク経由で提供するため) |
-| 切り分け | GRUB でネイティブ比較 | UEFI 起動メニュー(F8)で EdgeBox をネイティブ起動して比較 |
+| 土台 | Linux (Ubuntu) | Windows 11 Pro |
+| ネイティブ側 | Linux | **Windows (重い業務側が素で動く)** |
+| CPU 分割 | isolcpus + vcpupin | **[../windows-cpu-partition/](../windows-cpu-partition/README.md)** の full モード (minroot + CPU グループ)。同格の完全分離 |
+| GPU | 2 系統必要 | **1 系統でよい** (EdgeBox は画面をネットワーク経由で提供するため) |
+| 切り分け | GRUB でネイティブ比較 | UEFI 起動メニュー (F8) で EdgeBox をネイティブ起動して比較 |
 
 ## 前提
 
-- Windows 11 **Pro**(Hyper-V が必要。Home の場合は VMware Workstation 等で同様の構成が可能)
-- EdgeBox と工作機械の接続が **Ethernet(LAN)** であること
-  (Hyper-V は USB 機器を EdgeBox に渡せません。USB ドングル等が必須なら VMware を使用)
-- ⚠️ **EdgeBox イメージの EdgeBox 動作はメーカーサポート外です。** ライセンスや機器認証が
+- Windows 11 **Pro** (Hyper-V が必要)
+- EdgeBox と工作機械の接続が **Ethernet (LAN)** であること (Hyper-V は USB 機器を EdgeBox に渡せません)
+- モニター 2 枚。Windows の「メイン ディスプレイ」は右のモニターにしておく
+- ⚠️ **EdgeBox イメージの仮想環境での動作はメーカーサポート外です。** ライセンスや機器認証が
   ハードウェアに紐付いている場合、起動しても機能しない可能性があります。
-  ディスクは無改造なので、その場合はネイティブ起動運用に戻してください(下記)
+  ディスクは無改造なので、その場合はネイティブ起動運用に戻せます (下記)
 
-## いちばん簡単な使い方: おまかせ起動 (00-field-launcher.ps1)
+## 導入
 
-**`field-start.cmd` をダブルクリック**するだけで、次を全部自動でやります。
-
-1. **既存 EdgeBox を探す** — 名前が違っても、EdgeBox のディスクを起動する EdgeBox があればそれを使う
-   (旧構成の EdgeBox がそのまま活きるので作り直し不要)
-2. **対象ディスクを決める** — 既存 EdgeBox / 前回の記録 / 自動検出 の順で判断
-3. **起動を妨げる状態を片付ける** — 二重接続の除去、他 EdgeBox が掴んでいる接続の解除
-   (停止中のみ・EdgeBox とデータは残す)、ディスクのオフライン化
-4. **EdgeBox が無ければ作成する**
-5. **起動してコンソールを表示する**
-
-```powershell
-.\00-field-launcher.ps1              # おまかせ起動 (field-start.cmd と同じ)
-.\00-field-launcher.ps1 -Status      # 何が使われるかだけ確認 (変更しない)
-.\00-field-launcher.ps1 -Setup       # デスクトップに『EdgeBox 起動』アイコンを作成
-```
-
-ディスクの中身には一切触れません。EdgeBox の作成は「EdgeBox がまったく無い場合」だけです。
-細かく手順を分けて実行したい場合は、以下の個別スクリプトを使ってください。
-
-## 手順 (個別に実行する場合)
+新規 PC への導入は **[../docs/FRESH-INSTALL.md](../docs/FRESH-INSTALL.md)** (①から順に) が最短です。
+要点だけ:
 
 ```powershell
 # 1. Hyper-V 有効化 (未実施の場合。要再起動)
-..\alternatives\hyperv\windows\01-enable-hyperv.ps1
+Enable-WindowsOptionalFeature -Online -FeatureName Microsoft-Hyper-V-All
 
-# 2. ディスク番号・NIC 名・既存スイッチを確認
-Get-Disk
-Get-NetAdapter
-Get-VMSwitch
+# 2. EdgeBox の作成と起動 (おまかせ。外部スイッチがまだ無い新規 PC の初回だけ -NetAdapterName を付ける)
+cd C:\double-os-boot\windows-host
+.\00-field-launcher.ps1 -NetAdapterName "<Get-NetAdapter の Name>"
 
-# 3-a. EdgeBox 作成 (既に外部スイッチがある場合はそれを指定するのが確実)
-.\01-create-field-vm.ps1 -DiskNumber 0 -SwitchName "EdgeBox-External"
+# 3. 自動化とアイコンの登録
+.\03-field-display-kiosk.ps1 -Install   # ログオン時の自動表示 + EdgeBox の自動起動
+.\08-settings-console.ps1 -Setup        # 『EdgeBox設定』
+.\10-restart-edgebox.ps1 -Setup         # 『EdgeBox 再起動』『EdgeBox 画面』
+.\00-field-launcher.ps1 -Setup          # 『EdgeBox 起動』
+.\05-shutdown-all.ps1 -Setup            # 『全部シャットダウン』
+.\06-auto-logon.ps1 -Setup              # 『自動サインイン設定』(任意)
+powercfg /h off                         # 高速スタートアップ無効
 
-# 3-b. スイッチをこれから作る場合 (-NetAdapterName は Get-NetAdapter の「Name」。IP でも可)
-.\01-create-field-vm.ps1 -DiskNumber 0 -NetAdapterName "イーサネット"
-
-# 4. 起動
-.\02-start-field-vm.ps1
+# 4. CPU の完全分離 (別フォルダ)
+..\windows-cpu-partition\setup.cmd      # ダブルクリック → 『CPU割り当て』で [この内容で適用] → 再起動
 ```
 
-> 1 枚の LAN ポートを 2 つの外部スイッチに割り当てることはできません。
-> 指定した NIC が既存スイッチに使われている場合は、**そのスイッチを自動で再利用**します
-> (新規作成しないため、ネットワークが切断されません)。
+`field-start.cmd` (= `00-field-launcher.ps1`) は、既存 EdgeBox の検出 → 競合の片付け →
+(無ければ) 作成 → 起動 → コンソール表示 まで自動で進みます。ディスクの中身には一切触れません。
+登録名が EdgeBox でなくても、EdgeBox のディスクを持つ登録を自動で見つけます。
 
-起動後、`Get-VMNetworkAdapter -VMName EdgeBox` で IP を確認し、
-ブラウザでその IP を開けば EdgeBox の管理画面が使えます。
+## 画面表示 (03-field-display-kiosk.ps1)
 
-Windows 側の EdgeBox 専用アプリの接続先にも、この IP を設定します。
+| 画面 | 既定の動き |
+|---|---|
+| 左 | EdgeBox のコンソール (vmconnect) を**全画面**で表示。上部の接続バー (「localhost 上の EdgeBox」の帯) は消す |
+| 右 | **通常の Windows デスクトップ**。起動中だけ「EdgeBox 起動中」の黒い画面を出し、左の表示が仕上がると消える |
 
-## 自動起動 (PC 起動時に EdgeBox も自動で立ち上げる)
+右画面に管理画面のブラウザを出したい場合だけ、『EdgeBox設定』の [画面表示] タブで URL を入れます (空欄 = デスクトップ)。
 
-```powershell
-.\03-field-display-kiosk.ps1 -Install   # ログオン時の自動表示 + EdgeBox の自動起動 (30 秒後) を設定
-powercfg /h off                  # 高速スタートアップ無効 (自動起動を確実にする)
-.\06-auto-logon.ps1 -Setup       # サインイン画面を省略し、電源 ON で直接デスクトップへ
-```
+**左画面の見張り役** (左がコンソールのとき常に動作):
 
-EdgeBox の自動起動だけを手で入れる場合: `Set-VM -Name <登録名> -AutomaticStartAction Start -AutomaticStartDelay 30`
+1. コンソールの全画面が外れたら (最小化も含む) 約 1 秒で左画面の全画面に戻す
+   (判定は「枠なしの窓がモニターを覆っているか」。最大化しただけの窓は全画面とみなさない)
+2. 上部の接続バーが出てきたら消す
+3. 左画面に出てきた他の窓は右画面へ移す (アプリは必ず右画面から起動する)
+4. コンソール窓そのものが閉じられたら、EdgeBox が動いていれば左画面の表示を立ち上げ直す
 
-`06-auto-logon.ps1` でロック画面とパスワード入力を省略すると、電源 ON だけで
-EdgeBox 起動 → サインイン → 左右モニターへの自動表示 (`03-field-display-kiosk.ps1`) まで
-人の操作なしにそろいます。アカウント名とパスワードはデスクトップの
-『自動サインイン設定』アイコンからいつでも変更できます (`-Disable` で元に戻せます)。
+全画面を解除して自動で戻さないようにできるのは **Alt+F11** だけです (もう一度押すと再固定。
+キーは設定ファイルの `LeftGuardHotkey` で変更可)。
 
-## CPU コアの分割割り当て (任意・別口ツール)
+全画面への切り替えは Ctrl+Alt+Break の送信で行い、送る前に映像の入力窓へキーボードフォーカスを
+移します (EdgeBox の起動直後はフォーカスが別の場所にあり、効かないことがあったため)。
+記録は `display-log.txt`、設定は `display-config.json` (『EdgeBox設定』で編集)。
 
-主構成の isolcpus + vcpupin に相当するコア分割は、**独立ツール
-[../windows-cpu-partition/](../windows-cpu-partition/README.md)** で行えます
-(本構成のスクリプト・設定とは切り離されており、互いに干渉しません)。
-EdgeBox に使う場合は 登録名が既定値のため、追加の指定は不要です。
+## CPU の完全分離 (windows-cpu-partition)
 
-導入は **`..\windows-cpu-partition\setup.cmd` をダブルクリックするだけ** で、
-デスクトップに『CPU割り当て』アイコンが作られます
-(管理者への昇格とファイルのブロック解除も自動。PowerShell の実行ポリシーの影響を受けません)。
+CPU の分割は独立フォルダ **[../windows-cpu-partition/](../windows-cpu-partition/README.md)** が担当します
+(ファイルも設定も共有しませんが、EdgeBox を起動するときだけ順番を譲ります: 下記)。
 
-P コア / E コアをタイルで選んで割り当てられ、動かない設定・矛盾した設定は
-理由を表示して適用できないようになっています。コマンドで操作することもできます:
+- 既定は **full モード**: minroot で Windows を CPU 0-19 (P コア 8 + E コア 4) に封じ込め、
+  CPU グループで EdgeBox を CPU 20-27 (E コア 8) に固定。**両方向とも構造的に混ざりません**
+- EdgeBox は E コア専用で最低 8 個。P コアは Windows 専用。Windows 側のアプリは 12 コアの中で個別指定可
+- CPU グループは再起動で消えるため、起動タスクが起動のたびに作り直し、5 分ごとに確かめます
+- **EdgeBox を起動する経路 (電源 ON・『EdgeBox 再起動』・『EdgeBox 画面』・手動起動) はすべて、
+  起動前に CPU グループへの固定を先に行います** (実行中は固定できないため)
+- 成立したかは『EdgeBox 監視』の「分離の状態」で確認できます (両方 0.0% が正常)
 
-```powershell
-.\cpu-partition.ps1 -Apply -Mode runtime -HostCores 4   # 再起動不要で適用
-.\cpu-partition.ps1 -Verify                             # 実測 (各コアで誰が動いたか)
-```
-
-## ワンクリックで再起動 / 左画面に表示 (10-restart-edgebox.ps1)
-
-```powershell
-.\10-restart-edgebox.ps1 -Setup   # 『EdgeBox 再起動』『EdgeBox 画面』をデスクトップとスタートメニューに登録
-```
+## ワンクリック操作 (デスクトップのアイコン)
 
 | アイコン | 動き |
 |---|---|
-| **EdgeBox 再起動** | 正常シャットダウン → 起動 → 電源 ON と同じ画面表示 (左 = コンソール全画面 / 右 = 通常のデスクトップ)。強制電源断はしない |
-| **EdgeBox 画面** | 左画面にコンソールを最大化 (設定が全画面なら全画面) で表示。**自動では閉じない**。EdgeBox が止まっていれば起動してから表示 |
+| **EdgeBox 起動** | おまかせ起動 (field-start.cmd と同じ) |
+| **EdgeBox 再起動** | 正常シャットダウン → CPU グループに固定 → 起動 → 電源 ON と同じ画面表示。強制電源断はしない |
+| **EdgeBox 画面** | 左画面にコンソールを全画面で表示 (止まっていれば固定してから起動)。自動では閉じない |
+| **EdgeBox設定** | 全設定を 1 画面で: [画面表示] [自動サインイン] [起動と見た目] |
+| **全部シャットダウン** | EdgeBox を正常停止してから Windows をシャットダウン |
+| **自動サインイン設定** | サインイン画面の省略の設定/解除 |
+| **EdgeBox 単独起動** | EdgeBox を安全停止 → 再起動して EdgeBox をネイティブ単独起動 (切り分け用。次回は自動で Windows に戻る) |
+| **CPU割り当て** / **EdgeBox 監視** | windows-cpu-partition の設定コンソール / リアルタイム監視 |
 
-> 左のコンソール窓は**既定では閉じません**。旧版では起動確認の約 30 秒後に自動で閉じる設定が
-> 既定でしたが、閉じないでほしいという要望により変更しました (旧版で作られた設定ファイルも
-> 更新後の初回表示で自動的に「閉じない」へ切り替わります)。閉じてほしい場合だけ『EdgeBox設定』の
-> [画面表示]でオンにできます (閉じても EdgeBox は動き続けます)。
-> 全画面時に上部へ出る接続バー (「localhost 上の EdgeBox」の帯) も既定で非表示です (同じ画面で切り替え可)。
+> 左のコンソール窓は**既定では閉じません**。閉じてほしい場合だけ『EdgeBox設定』の [画面表示] で
+> オンにできます (閉じても EdgeBox は動き続けます)。
 > 万一コンソール窓が消えても EdgeBox は別物です: `Get-VM EdgeBox` が Running なら動いています。
 
-**左画面の固定** — 左がコンソールのときは「見張り役」が動き、(1) 左画面に出てきた他の窓を
-右画面へ移す (アプリは必ず右画面から起動する)、(2) コンソールの全画面が外れたら (最小化も含む)
-約 1 秒で左画面の全画面に戻す、(3) 上部の接続バーが出てきたら消す、(4) コンソール窓そのものが
-閉じられたら (EdgeBox が動いていれば) 左画面の表示を立ち上げ直す。
-全画面を解除して自動で戻さないようにできるのは **Alt+F11** だけ (もう一度押すと再固定。
-キーは設定ファイルの `LeftGuardHotkey` で変更可。『EdgeBox設定』の[画面表示]でオン/オフ)。
-あわせて Windows の「メイン ディスプレイ」を右のモニターにしておくと、新しい窓の既定の出現先が
-右になり、見張り役の出番が減る (設定 → システム → ディスプレイ → 右のモニターを選び
-「これをメイン ディスプレイにする」)。
+## 更新のしかた
+
+リポジトリ直下の **`update.cmd` をダブルクリック** (ZIP の取得・展開・上書き・ブロック解除まで自動。
+Git は不要)。端末ごとの設定ファイル (display-config.json / cpu-partition.json など) は残ります。
+詳しくはリポジトリ直下の README を参照。
 
 ## 画面が黒いまま操作できないとき (復旧ツール)
 
@@ -161,25 +149,44 @@ P コア / E コアをタイルで選んで割り当てられ、動かない設�
 | 黒いがアイコンだけ消えている・窓は前面に出る | コンソール表示用の黒背景の残骸 |
 | アイコンもタスクバーも無い | explorer.exe が動いていない |
 
-## ネイティブ起動に戻す(切り分け・撤退手順)
+## ネイティブ起動に戻す (切り分け・撤退手順)
 
 1. EdgeBox を停止: `.\02-start-field-vm.ps1 -Stop`
 2. 一時的にネイティブ起動したいだけの場合: PC を再起動し **F8** で EdgeBox のディスクを選択
-   (EdgeBox 定義は残したままで共存できます。**同時に両方から起動しないこと**)
+   (『EdgeBox 単独起動』アイコンなら F8 連打は不要。EdgeBox の定義は残したままで共存できます。**同時に両方から起動しないこと**)
 3. 完全に元へ戻す場合:
    ```powershell
+   ..\windows-cpu-partition\cpu-partition.ps1 -Undo   # CPU 分割を解除 (その後 1 回再起動)
    Remove-VM EdgeBox -Force
    Set-Disk -Number <番号> -IsOffline $false
    ```
    ディスクは無改造のため、これだけで導入前の状態に戻ります。
 
+## スクリプト一覧
+
+| ファイル | 役割 |
+|---|---|
+| `field-start.cmd` / `00-field-launcher.ps1` | おまかせ起動 (検出 → 片付け → 作成 → 起動 → 表示) |
+| `01-create-field-vm.ps1` | EdgeBox の作成 (物理ディスク直結・外部スイッチ) |
+| `02-start-field-vm.ps1` | 起動 / 停止 / 状態 / 修復 (`-Repair`: 0x80070020 の解消) |
+| `03-field-display-kiosk.ps1` | 画面表示の本体 (左の全画面・見張り役・起動中画面・ログオン時の自動表示 `-Install`) |
+| `04-reboot-to-field-native.ps1` | 『EdgeBox 単独起動』(UEFI の次回のみ起動先指定) |
+| `05-shutdown-all.ps1` | 『全部シャットダウン』 |
+| `06-auto-logon.ps1` | サインイン画面の省略 (LSA 秘密領域に保存。平文保存はしない) |
+| `07-boot-appearance.ps1` | 起動時の見た目を黒でそろえる |
+| `08-settings-console.ps1` | 『EdgeBox設定』(統合設定コンソール) |
+| `09-rename-to-edgebox.ps1` | 旧名称の登録を EdgeBox に改名 (CPU 分割の設定も追従) |
+| `10-restart-edgebox.ps1` | 『EdgeBox 再起動』『EdgeBox 画面』 |
+| `99-fix-black-screen.ps1` / `fix-black-screen.cmd` | 黒画面の復旧 |
+| `SETUP-STEPS.md` | 手順書 (①〜⑩・運用ルール・切り分けフロー) |
+
 ## 注意
 
-- EdgeBox 稼働中、EdgeBox のディスクは Windows からオフライン(不可視)です。オンラインに
-  戻すのは EdgeBox を削除・停止した後にしてください(同時アクセス防止)
-- チェックポイント(スナップショット)は物理ディスクのため使えません
-- EdgeBox の起動画面で **Ctrl キーを押しっぱなしにしない**こと(機種によっては
+- EdgeBox 稼働中、EdgeBox のディスクは Windows からオフライン (不可視) です。オンラインに
+  戻すのは EdgeBox を削除・停止した後にしてください (同時アクセス防止)
+- チェックポイント (スナップショット) は物理ディスクのため使えません
+- EdgeBox の起動画面で **Ctrl キーを押しっぱなしにしない**こと (機種によっては
   ファクトリーリセットが選択されます)
-- **GPU を増設しても EdgeBox には直結できません**(GPU 直結 = DDA は Windows Server
-  専用機能)。EdgeBox は画面をネットワーク越しに提供するため EdgeBox 側に GPU は不要です。
-  増設 GPU はWindows のメイン業務用に使うのが正解です
+- **GPU を増設しても EdgeBox には直結できません** (GPU 直結 = DDA は Windows Server
+  専用機能)。EdgeBox は画面をネットワーク越しに提供するため EdgeBox 側に GPU は不要です
+- BIOS の Fast Boot は有効にしないこと (F8 が使えなくなり、切り分けができなくなる)
