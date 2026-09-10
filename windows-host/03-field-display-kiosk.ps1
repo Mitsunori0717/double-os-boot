@@ -1756,7 +1756,11 @@ function Enter-ConsoleFullScreen($screen) {
         if ($try % 2 -eq 1) { Send-CtrlAltBreak } else { [System.Windows.Forms.SendKeys]::SendWait("^%{BREAK}") }
         Start-Sleep -Milliseconds 1500
         if (Test-ConsoleFullScreenOn $b) { Log "コンソール: 全画面モードになりました (キー送信 試行 $try)"; return $true }
-        if ($try -eq 4 -and -not $diagDone) { Log ("コンソール: キー送信 4 回で全画面になりません。窓: " + (Get-ConsoleTopWindowDiag)); $diagDone = $true }
+        if ($try -eq 4) {
+            if (-not $diagDone) { Log ("コンソール: キー送信 4 回で全画面になりません。窓: " + (Get-ConsoleTopWindowDiag)); $diagDone = $true }
+            try { Set-Content -Path $SplashLeftOffFile -Value "1" -Encoding ASCII } catch { }   # 覆いを外して続ける
+            Start-Sleep -Milliseconds 1000
+        }
         Start-Sleep -Milliseconds 1500
     }
 
@@ -1869,6 +1873,27 @@ function Set-ConsoleSavedFullScreen([bool]$on) {
         $val = if ($on) { "True" } else { "False" }
         foreach ($n in $nodes) {
             $valNode = $n.SelectSingleNode("value")
+            if ($valNode) { $valNode.InnerText = $val } else { $n.InnerText = $val }
+        }
+        $x.Save($file.FullName)
+        return $true
+    } catch { return $false }
+}
+
+# 窓が最初に出る位置 (StartingPosition) を左画面の座標に書き換える。
+# 書き換えないと窓はメイン ディスプレイ (右画面) に出てから左へ動くため、右画面が一瞬ちらつく
+function Set-ConsoleSavedPosition([int]$x0, [int]$y0) {
+    try {
+        $file = Get-ConsoleConfigFile
+        if (-not $file) { return $false }
+        [xml]$x = Get-Content $file.FullName -Raw -Encoding UTF8
+        $nodes = @($x.SelectNodes("//setting") | Where-Object { $_.GetAttribute("name") -eq 'StartingPosition' })
+        if ($nodes.Count -eq 0) { return $false }
+        $val = "{0}, {1}" -f $x0, $y0   # System.Drawing.Point の保存形式 ("X, Y")
+        foreach ($n in $nodes) {
+            $valNode = $n.SelectSingleNode("value")
+            $old = if ($valNode) { $valNode.InnerText } else { $n.InnerText }
+            if (-not $script:PosDiagDone) { $script:PosDiagDone = $true; Log "コンソール: [診断] 保存されていた窓の位置: '$old' → '$val' に書き換えます。" }
             if ($valNode) { $valNode.InnerText = $val } else { $n.InnerText = $val }
         }
         $x.Save($file.FullName)
@@ -1995,6 +2020,8 @@ function Open-Console($screen, [bool]$fullScreen) {
     } else {
         Set-ConsoleSavedFullScreen $false | Out-Null
     }
+    # 窓は最初から左画面に出す (右画面でちらつかせない)
+    Set-ConsoleSavedPosition $screen.Bounds.X $screen.Bounds.Y | Out-Null
 
     $hwnd = Start-ConsoleWindow
     if ($hwnd -eq [IntPtr]::Zero) { Log "警告: コンソール画面のウィンドウが見つかりませんでした。"; return }
@@ -2034,11 +2061,10 @@ function Open-Console($screen, [bool]$fullScreen) {
     if (-not $fullScreen) { Log "コンソール: 最大化ウィンドウで表示します (全画面の指定なし)。"; return }
 
     # 全画面モード (メニューバーなし・余白は黒)。解除/再開は Ctrl+Alt+Break
-    # 起動中画面 (黒い覆い) が左画面に重なったままだと切り替えが効かなかったため、先に左の覆いを外す
-    # (『EdgeBox 画面』のように覆いが無い起動では、同じ操作で全画面になった実績あり)
-    try { Set-Content -Path $SplashLeftOffFile -Value "1" -Encoding ASCII } catch { }
-    Start-Sleep -Milliseconds 1200
+    # 起動中画面 (左画面の黒い覆い) は、全画面になるまで掛けたままにする (最大化 → 全画面 の途中経過を見せない)。
+    # キー送信が 4 回効かなければ、覆いが邪魔をしている可能性に備えて途中で外す (Enter-ConsoleFullScreen 内)
     $done = Enter-ConsoleFullScreen $screen
+    try { Set-Content -Path $SplashLeftOffFile -Value "1" -Encoding ASCII } catch { }
 
     if ($done) { Start-Sleep -Milliseconds 800; Hide-ConsoleBar $screen | Out-Null }
 
