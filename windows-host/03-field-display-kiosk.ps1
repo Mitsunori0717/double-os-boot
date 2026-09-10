@@ -780,6 +780,7 @@ public class GuardApi {
     $fsFail = 0   # 全画面に戻せなかった回数 (3 回続いたら 30 秒に 1 回に広げる。あきらめはしない)
     $missingSince = $null; $lastRelaunch = [datetime]::MinValue   # コンソール窓が閉じられたときの立て直し用
     $lastCtrlAlt = [datetime]::MinValue   # Ctrl+Alt を押していた時刻 (自分で Ctrl+Alt+Break を押した解除を見分ける)
+    $escSince = $null                     # ESC を押し始めた時刻 (長押しの判定)
     $tick = 0
     function Test-ConsoleForeground {
         # 前面の窓が vmconnect のものか
@@ -798,17 +799,24 @@ public class GuardApi {
             # --- 自分で解除する操作を見分ける ---
             # (a) Ctrl+Alt を押している間 (Ctrl+Alt+Break を自分で押した) の解除は自動で戻さない
             if ((([GuardApi]::GetAsyncKeyState(0x11) -band 0x8000) -ne 0) -and (([GuardApi]::GetAsyncKeyState(0x12) -band 0x8000) -ne 0)) { $lastCtrlAlt = Get-Date }
-            # (b) 全画面中に ESC (コンソールが前面のとき) → 解除して、自動では戻さない。再固定は $hotkey
-            if (-not $released -and (([GuardApi]::GetAsyncKeyState(0x1B) -band 0x8000) -ne 0) -and (Test-ConsoleForeground)) {
-                $h = Get-ConsoleMain
-                if ($h -ne [IntPtr]::Zero -and (Test-ConsoleFullScreenOn $left)) {
-                    $released = $true
-                    Invoke-FullScreenToggle $h
-                    Show-Notice "ESC で左画面の固定を解除しました ($hotkey でもう一度固定)"
-                    Log "左画面の見張り役: ESC により固定を解除しました (自動では戻しません。再固定は $hotkey)。"
+            # (b) 全画面中に ESC を 1 秒長押し → 解除して、自動では戻さない。再固定は $hotkey
+            #     Windows 側 (右画面のアプリなど) を操作しているときに効く。コンソールの中にキー入力が
+            #     入っている間は vmconnect がキーを EdgeBox へ渡して横取りするため、見張り役からは見えない。
+            #     普通の ESC (短押し) は Windows のアプリでよく使うので、長押しだけを合図にする
+            if (([GuardApi]::GetAsyncKeyState(0x1B) -band 0x8000) -ne 0) {
+                if (-not $escSince) { $escSince = Get-Date }
+                elseif (-not $released -and ((Get-Date) - $escSince).TotalMilliseconds -ge 1000) {
+                    $h = Get-ConsoleMain
+                    if ($h -ne [IntPtr]::Zero -and (Test-ConsoleFullScreenOn $left)) {
+                        $released = $true
+                        Invoke-FullScreenToggle $h
+                        Show-Notice "ESC 長押しで左画面の固定を解除しました ($hotkey でもう一度固定)"
+                        Log "左画面の見張り役: ESC 長押しにより固定を解除しました (自動では戻しません。再固定は $hotkey)。"
+                    }
                     while (([GuardApi]::GetAsyncKeyState(0x1B) -band 0x8000) -ne 0) { Start-Sleep -Milliseconds 50 }
+                    $escSince = $null
                 }
-            }
+            } else { $escSince = $null }
             # --- ホットキー: 固定の解除 ⇔ 再固定 ---
             $allDown = $true
             foreach ($vk in $vkeys) { if (([GuardApi]::GetAsyncKeyState($vk) -band 0x8000) -eq 0) { $allDown = $false; break } }
