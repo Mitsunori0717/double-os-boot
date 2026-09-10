@@ -28,6 +28,10 @@ param(
     [switch]$NoSplash,
     [switch]$Backdrop,
     [string]$BackdropBounds,
+    [switch]$Notice,          # 内部用: 右画面の右上に数秒だけ出す小さな案内 (別プロセスで自分で閉じる)
+    [string]$NoticeText = "",
+    [int]$NoticeSec = 5,
+    [string]$NoticeBounds = "",   # 右画面の範囲 "X,Y,W,H"
     [switch]$ConsoleCloser,
     [switch]$KeepConsole,     # コンソールを自動で閉じない (『EdgeBox 画面』アイコン用)
     [switch]$LeftGuard,       # 内部用: 左画面の見張り役 (コンソールの全画面を固定し、他の窓を右へ)
@@ -44,7 +48,7 @@ $ErrorActionPreference = "Stop"
 # -VMName を明示していない場合、既定名の EdgeBox が無ければ、EdgeBox のディスク
 # (物理ディスクのパススルー) を持つ EdgeBox を探して使う。00-field-launcher.ps1 と
 # 同じ考え方で、登録名が「EdgeBox」でなくても (旧名称のままでも) そのまま動くようにする
-if (-not $PSBoundParameters.ContainsKey("VMName") -and -not ($Splash -or $Backdrop -or $EscWatcher -or $ConsoleCloser -or $LeftGuard -or $UrlRetry) -and
+if (-not $PSBoundParameters.ContainsKey("VMName") -and -not ($Splash -or $Backdrop -or $Notice -or $EscWatcher -or $ConsoleCloser -or $LeftGuard -or $UrlRetry) -and
     -not (Get-VM -Name $VMName -ErrorAction SilentlyContinue)) {
     $foundVms = @()
     foreach ($v in @(Get-VM -ErrorAction SilentlyContinue)) {
@@ -63,7 +67,7 @@ $StatusFile = Join-Path $PSScriptRoot "display-status.txt"
 trap {
     try {
         $errFile = Join-Path $PSScriptRoot "display-error.txt"
-        $mode = if ($Splash) { "Splash" } elseif ($EscWatcher) { "EscWatcher" } elseif ($Backdrop) { "Backdrop" } elseif ($ConsoleCloser) { "ConsoleCloser" } else { "Main" }
+        $mode = if ($Splash) { "Splash" } elseif ($EscWatcher) { "EscWatcher" } elseif ($Backdrop) { "Backdrop" } elseif ($Notice) { "Notice" } elseif ($ConsoleCloser) { "ConsoleCloser" } elseif ($LeftGuard) { "LeftGuard" } else { "Main" }
         Add-Content -Path $errFile -Encoding UTF8 -Value (
             "{0}  [{1}] {2}`r`n  場所: {3}`r`n" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $mode,
             $_.Exception.Message, $_.InvocationInfo.PositionMessage)
@@ -267,7 +271,7 @@ if ($Splash) {
     function Test-MainRunning {
         $procs = @(Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" -ErrorAction SilentlyContinue |
             Where-Object { $_.CommandLine -match '03-field-display-kiosk' -and
-                           $_.CommandLine -notmatch '-(Splash|Backdrop|EscWatcher|ConsoleCloser|LeftGuard)' })
+                           $_.CommandLine -notmatch '-(Splash|Backdrop|Notice|EscWatcher|ConsoleCloser|LeftGuard)' })
         return ($procs.Count -gt 0)
     }
 
@@ -402,6 +406,36 @@ public class BdApi {
         }
     })
     $bt.Start()
+    $f.Show()
+    [System.Windows.Forms.Application]::Run((New-Object System.Windows.Forms.ApplicationContext))
+    exit 0
+}
+
+# ============================================================
+#  案内 (内部用): 右画面の右上に小さな文を数秒だけ出して、自分で閉じる
+#  (見張り役の中で出すと、見張り役の都合で閉じないことがあるため別プロセスにする)
+# ============================================================
+if ($Notice) {
+    Add-Type -AssemblyName System.Windows.Forms
+    Add-Type -AssemblyName System.Drawing
+    $b = @(0, 0, 1920, 1080)
+    try { $q = $NoticeBounds -split ','; if ($q.Count -ge 4) { $b = @([int]$q[0], [int]$q[1], [int]$q[2], [int]$q[3]) } } catch { }
+    $f = New-Object System.Windows.Forms.Form
+    $f.FormBorderStyle = "None"; $f.StartPosition = "Manual"; $f.TopMost = $true; $f.ShowInTaskbar = $false
+    $f.BackColor = [System.Drawing.Color]::FromArgb(40, 40, 40)
+    $l = New-Object System.Windows.Forms.Label
+    $l.Text = $NoticeText; $l.AutoSize = $true
+    $l.ForeColor = [System.Drawing.Color]::White
+    $l.Font = New-Object System.Drawing.Font("Meiryo UI", 11)
+    $l.Location = New-Object System.Drawing.Point(16, 12)
+    $f.Controls.Add($l)
+    $f.ClientSize = New-Object System.Drawing.Size(($l.PreferredWidth + 32), ($l.PreferredHeight + 24))
+    $f.Location = New-Object System.Drawing.Point(($b[0] + $b[2] - $f.Width - 20), ($b[1] + 20))
+    $t = New-Object System.Windows.Forms.Timer
+    $t.Interval = [Math]::Max(1000, $NoticeSec * 1000)
+    $t.Add_Tick({ $t.Stop(); [System.Windows.Forms.Application]::Exit() })
+    $t.Start()
+    $f.Add_Click({ [System.Windows.Forms.Application]::Exit() })   # クリックでも閉じる
     $f.Show()
     [System.Windows.Forms.Application]::Run((New-Object System.Windows.Forms.ApplicationContext))
     exit 0
@@ -714,24 +748,13 @@ public class GuardApi {
         [GuardApi]::keybd_event(0x03, 0x46, 3, 0)
         [GuardApi]::keybd_event(0x12, 0, 2, 0); [GuardApi]::keybd_event(0x11, 0, 2, 0)
     }
-    $script:notice = $null; $script:noticeUntil = [datetime]::MinValue
     function Show-Notice([string]$text) {
-        # 右画面の右上に約 10 秒だけ出す小さな案内
+        # 右画面の右上に約 5 秒だけ出す小さな案内 (別プロセスが自分で閉じる)
         try {
-            if ($script:notice) { $script:notice.Close(); $script:notice.Dispose(); $script:notice = $null }
-            $f = New-Object System.Windows.Forms.Form
-            $f.FormBorderStyle = "None"; $f.StartPosition = "Manual"; $f.TopMost = $true; $f.ShowInTaskbar = $false
-            $f.BackColor = [System.Drawing.Color]::FromArgb(40, 40, 40)
-            $l = New-Object System.Windows.Forms.Label
-            $l.Text = $text; $l.AutoSize = $true
-            $l.ForeColor = [System.Drawing.Color]::White
-            $l.Font = New-Object System.Drawing.Font("Meiryo UI", 11)
-            $l.Location = New-Object System.Drawing.Point(16, 12)
-            $f.Controls.Add($l)
-            $f.ClientSize = New-Object System.Drawing.Size(($l.PreferredWidth + 32), ($l.PreferredHeight + 24))
-            $f.Location = New-Object System.Drawing.Point(($right.X + $right.Width - $f.Width - 20), ($right.Y + 20))
-            $f.Show()
-            $script:notice = $f; $script:noticeUntil = (Get-Date).AddSeconds(10)   # 約 10 秒で閉じる
+            $bounds = "{0},{1},{2},{3}" -f $right.X, $right.Y, $right.Width, $right.Height
+            Start-Process powershell.exe -WindowStyle Hidden -ArgumentList (
+                "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" -Notice -NoticeSec 5 " +
+                "-NoticeText `"$text`" -NoticeBounds `"$bounds`"")
         } catch { }
     }
 
@@ -770,6 +793,7 @@ public class GuardApi {
     $missingSince = $null; $lastRelaunch = [datetime]::MinValue   # コンソール窓が閉じられたときの立て直し用
     $lastCtrlAlt = [datetime]::MinValue   # Ctrl+Alt を押していた時刻 (自分で Ctrl+Alt+Break を押した解除を見分ける)
     $escSince = $null                     # ESC を押し始めた時刻 (長押しの判定)
+    $lastErrLog = [datetime]::MinValue
     $tick = 0
     function Test-ConsoleForeground {
         # 前面の窓が vmconnect のものか
@@ -931,11 +955,10 @@ public class GuardApi {
                     Log ("左画面の見張り役: 『{0}』({1}) を右画面へ移しました。" -f $p.MainWindowTitle, $p.ProcessName)
                 }
             }
-            if ($script:notice) {
-                if ((Get-Date) -gt $script:noticeUntil) { $script:notice.Close(); $script:notice.Dispose(); $script:notice = $null }
-                else { [System.Windows.Forms.Application]::DoEvents() }
-            }
-        } catch { }
+        } catch {
+            # 見回りの中で例外が起きても止まらない。原因が分かるように 1 分に 1 回だけ記録する
+            if (((Get-Date) - $lastErrLog).TotalSeconds -gt 60) { $lastErrLog = Get-Date; Log ("左画面の見張り役: [診断] 見回り中のエラー: " + $_.Exception.Message) }
+        }
         Start-Sleep -Milliseconds 100
     }
 }
