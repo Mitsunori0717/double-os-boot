@@ -223,9 +223,9 @@ function Get-ContainState {
             try { if (Test-Path $FullFile) { $fs = Get-Content $FullFile -Raw -Encoding UTF8 | ConvertFrom-Json } } catch { }
             # 仕組みの名前 (方式・固定の手段など) は画面に出さない。状態だけを出す
             if (-not $fs) { return @{ Text = "完全分離: 準備中 (再起動待ち)"; Ok = $false } }
-            if ($fs.Bound) { return @{ Text = ("完全分離: ○ 成立   Windows = CPU {0} / {1} = CPU {2}" -f $fs.HostLps, $VMName, $fs.GuestLps); Ok = $true } }
-            if (-not $fs.MinrootOk) { return @{ Text = "完全分離: △ 未反映 (再起動待ち)"; Ok = $false } }
-            return @{ Text = ("完全分離: △ 未成立 ({0} の固定が効いていません。『EdgeBox 再起動』で直ることがあります)" -f $VMName); Ok = $false }
+            if ($fs.Bound) { return @{ Text = "完全分離: ○ 成立"; Ok = $true } }
+            if (-not $fs.MinrootOk) { return @{ Text = "完全分離: △ 未成立 (再起動待ち)"; Ok = $false } }
+            return @{ Text = "完全分離: △ 未成立 (『EdgeBox 再起動』で直ることがあります)"; Ok = $false }
         }
         return @{ Text = "分離: 設定なし (設定コンソールで割り当てを適用すると始まります)"; Ok = $false }
     }
