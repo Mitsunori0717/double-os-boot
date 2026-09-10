@@ -803,15 +803,21 @@ public class GuardApi {
             #     Windows 側 (右画面のアプリなど) を操作しているときに効く。コンソールの中にキー入力が
             #     入っている間は vmconnect がキーを EdgeBox へ渡して横取りするため、見張り役からは見えない。
             #     普通の ESC (短押し) は Windows のアプリでよく使うので、長押しだけを合図にする
+            #     固定を解除したあとに窓の最大化ボタンで最大化した場合も、ESC 長押しで最大化を解除する
             if (([GuardApi]::GetAsyncKeyState(0x1B) -band 0x8000) -ne 0) {
                 if (-not $escSince) { $escSince = Get-Date }
-                elseif (-not $released -and ((Get-Date) - $escSince).TotalMilliseconds -ge 1000) {
+                elseif (((Get-Date) - $escSince).TotalMilliseconds -ge 1000) {
                     $h = Get-ConsoleMain
                     if ($h -ne [IntPtr]::Zero -and (Test-ConsoleFullScreenOn $left)) {
                         $released = $true
                         Invoke-FullScreenToggle $h
                         Show-Notice "ESC 長押しで左画面の固定を解除しました ($hotkey でもう一度固定)"
                         Log "左画面の見張り役: ESC 長押しにより固定を解除しました (自動では戻しません。再固定は $hotkey)。"
+                    } elseif ($h -ne [IntPtr]::Zero -and [GuardApi]::IsZoomed($h)) {
+                        $released = $true
+                        [GuardApi]::ShowWindow($h, 9) | Out-Null   # 最大化 → 元の大きさ
+                        Show-Notice "ESC 長押しでコンソールの最大化を解除しました ($hotkey で全画面に固定)"
+                        Log "左画面の見張り役: ESC 長押しにより最大化を解除しました (再固定は $hotkey)。"
                     }
                     while (([GuardApi]::GetAsyncKeyState(0x1B) -band 0x8000) -ne 0) { Start-Sleep -Milliseconds 50 }
                     $escSince = $null
