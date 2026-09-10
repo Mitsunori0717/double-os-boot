@@ -13,8 +13,9 @@ LAN ポート5つ / 工作機械との接続は Ethernet。
 | ⑥ | 初回起動: `.\02-start-field-vm.ps1`。起動中 **Ctrl 長押し厳禁** (工場出荷リセット) | コンソールに EdgeBox の画面 |
 | ⑦ | IP 確認: `Get-VMNetworkAdapter -VMName EdgeBox`。ブラウザで管理画面を開く | 管理画面が開き収集再開 |
 | ⑧ | Windows 側 EdgeBox アプリの接続先に ⑦ の IP を設定 | アプリからデータが見える |
-| ⑨ | 起動時の自動表示 + EdgeBox 自動起動: `.\03-field-display-kiosk.ps1 -Install` (EdgeBox の自動起動も一緒に設定される。登録名が EdgeBox でなくても自動で見つける) | 電源ONだけで収集開始・左に EdgeBox 全画面・右は通常のデスクトップ |
-| ⑩ | 予行: F8 からネイティブ起動できることを確認。撤退手順 (`Remove-VM` + `Set-Disk -IsOffline $false`) を把握 | ネイティブ起動を1回確認 |
+| ⑨ | 起動時の自動表示 + EdgeBox 自動起動: `.\03-field-display-kiosk.ps1 -Install` (登録名が EdgeBox でなくても自動で見つける) | 電源ONだけで収集開始・左に EdgeBox 全画面・右は通常のデスクトップ |
+| ⑩ | CPU の完全分離: `..\windows-cpu-partition\setup.cmd` → 『CPU割り当て』で [この内容で適用] → 再起動 | 『EdgeBox 監視』の「分離の状態」が両方 0.0%・「完全分割: 成立」 |
+| ⑪ | 予行: F8 からネイティブ起動できることを確認。撤退手順 (`Remove-VM` + `Set-Disk -IsOffline $false`) を把握 | ネイティブ起動を1回確認 |
 
 ## いちばん簡単な導入・起動 (①〜⑥をまとめて行う)
 
@@ -54,26 +55,28 @@ LAN ポート5つ / 工作機械との接続は Ethernet。
 
 どの切替も可逆でデータには触れない。再起動 1〜2 回で必ずどれかの層に確定する。
 
-## CPU の取り分保証 (任意・別口ツール)
+## CPU の完全分離 (別口ツール)
 
-CPU コアを Windows と EdgeBox に分割して固定割り当てできる。構成Bからは独立した
-別口ツール `..\windows-cpu-partition\` として保存してある (互いに干渉しない)。
-再起動不要の runtime モードと、完全分割の full モードの 2 段階。詳細はそのフォルダの README。
+CPU コアを Windows と EdgeBox に分割し、両者の処理が混ざらないように固定する。構成Bからは独立した
+別口ツール `..\windows-cpu-partition\` として保存してある (EdgeBox を起動するときだけ順番を譲る)。
+既定は **full モード** (minroot で Windows を CPU 0-19 に封じ込め、CPU グループで EdgeBox を CPU 20-27 に固定。
+再起動 1 回)。標準の割り当ては P コア 8 + E コア 4 = Windows / E コア 8 = EdgeBox。詳細はそのフォルダの README。
 
 ```powershell
+..\windows-cpu-partition\setup.cmd                    # ダブルクリック → 『CPU割り当て』で [この内容で適用] → 再起動
 cd ..\windows-cpu-partition
-.\cpu-partition.ps1 -HostCores 4                      # 分割案の確認 (変更なし)
-.\cpu-partition.ps1 -Apply -Mode runtime -HostCores 4 # 適用 (EdgeBox を専用コアへ固定)
-.\cpu-partition.ps1 -Verify                           # 実測 (各コアで誰が動いたか)
-.\cpu-partition.ps1 -Undo                             # 全解除
+.\cpu-partition.ps1                                   # 現状の確認 (変更なし)
+.\cpu-partition.ps1 -Undo                             # 全解除 (その後 1 回再起動)
 ```
+
+成立の確認は『EdgeBox 監視』の「分離の状態」(両方 0.0% が正常) と「完全分割: 成立」の行。
 
 > 旧手順の `Set-VMProcessor -VMName EdgeBox -Reserve 100` は、クライアント版 Windows の
 > 既定構成 (root スケジューラ) では **機能しない** ことが判明したため撤回
 > (処理能力の予約・上限・重みはハイパーバイザーがスケジュールする構成でのみ有効という公式仕様)。
 > 設定済みでも害はないが、保証にはなっていない。上記スクリプトが正しい代替。
 
-## 便利機能 (手順⑨の代わり/追加)
+## 便利機能 (手順⑨〜⑩の補足)
 
 ### サブモニターへの EdgeBox 全画面自動表示 (03-field-display-kiosk.ps1)
 
@@ -83,18 +86,20 @@ cd ..\windows-cpu-partition
 ```
 
 既定は **左 = EdgeBox のコンソール (全画面) / 右 = 通常の Windows デスクトップ**。
-起動中は右画面だけに「EdgeBox 起動中」を表示し、左の表示が仕上がると消えてデスクトップに戻る。
+起動中は左画面だけに「EdgeBox 起動中」を表示し、コンソールを全画面にする直前に消える (右画面は覆わない)。
 右画面に管理画面のブラウザを出したい場合は『EdgeBox設定』の[画面表示]タブで URL を入れる (再登録は不要)。
 登録名が EdgeBox でなくても (旧名称のままでも)、EdgeBox のディスクを持つ EdgeBox を自動で見つける。
 
-これと `Set-VM -AutomaticStartAction Start` の組み合わせで、電源 ON → ログオンだけで
-「左 = EdgeBox 全画面 / 右 = Windows」になる。
+電源 ON → ログオンだけで「左 = EdgeBox 全画面 / 右 = Windows」になる
+(CPU 分割が full のときは、起動タスクが EdgeBox を固定してから起動する。表示側はそれを待つ)。
 
-コンソール表示 (console 指定) は **閉じずに残る** (既定)。閉じてほしい場合だけ『設定』の[画面表示]で
+コンソール表示は **閉じずに残る** (既定)。閉じてほしい場合だけ『設定』の[画面表示]で
 「自動で閉じる」をオンにできる (閉じても EdgeBox は動き続ける)。
-全画面時に上部へ出る接続バー (「localhost 上の EdgeBox」の帯) は既定で非表示 (同じ画面で切り替え可)。
-左画面は**見張り役が固定**する: 左に出てきた他の窓は右画面へ移し、全画面が外れたら戻す。
-解除/再固定は **Alt+F11** のみ。Windows の「メイン ディスプレイ」は右のモニターにしておく。
+全画面時に上部へ出る接続バー (「localhost 上の EdgeBox」の帯) は常に消す。
+左画面は**見張り役が固定**する: 全画面が外れたら (最小化も含む) 約 1 秒で戻し、
+左に出てきた他の窓は右画面へ移し、コンソール窓が閉じられたら立ち上げ直す。
+自分で解除するには ESC (コンソールが前面のとき) か Alt+F11。自分で解除したときは自動で戻さない。再固定は Alt+F11。
+Windows の「メイン ディスプレイ」は右のモニターにしておく。
 
 ### ワンクリックで EdgeBox 単独起動 (04-reboot-to-field-native.ps1)
 
@@ -169,8 +174,8 @@ wsl --unmount \\.\PHYSICALDRIVE0    # WSL が掴んでいる場合 (その後 ws
 .\10-restart-edgebox.ps1 -Setup   # 『EdgeBox 再起動』『EdgeBox 画面』のアイコンを作成
 ```
 
-『EdgeBox 再起動』は正常シャットダウン → 起動 → 画面表示 (強制電源断はしない)。
-『EdgeBox 画面』は左画面にコンソールを最大化で出し、自動では閉じない。
+『EdgeBox 再起動』は正常シャットダウン → (full なら CPU グループに固定) → 起動 → 画面表示 (強制電源断はしない)。
+『EdgeBox 画面』は左画面にコンソールを全画面で出し、自動では閉じない。
 コンソール窓は既定では閉じない (閉じる設定にした場合も EdgeBox は動き続ける)。
 
 ### 画面が黒いまま操作できないとき (99-fix-black-screen.ps1)

@@ -304,8 +304,8 @@ baremetal/04-setup-file-sharing.sh   Samba によるデータ共有
 baremetal/05-share-keyboard-mouse.sh 1組のキーボード/マウスを両OSで共有
 baremetal/06-tune-resources.sh       CPU/メモリ配分の確認と調整 (運用しながら変更可)
 baremetal/07-connect-app-network.sh  Windows アプリ ⇔ Linux Fsbp のネットワーク接続設定
-windows-host/                        構成B: Linux 側が EdgeBox (メーカー製の専用機) の場合 (Windows をホストに反転)
-windows-cpu-partition/               (別口) Windows ホスト用 CPU コア分割ツール — EdgeBox にコアを固定割り当て (構成Bと独立・干渉なし)
+windows-host/                        構成B: Linux 側が EdgeBox (メーカー製の専用機) の場合 (Windows をホストに反転)。左画面に EdgeBox 全画面 / 右は通常のデスクトップ
+windows-cpu-partition/               (別口) Windows ホスト用 CPU コア分割ツール — full モード (minroot + CPU グループ) で Windows と EdgeBox の処理を完全分離
 docs/DUAL-BOOT-SETUP.md              ネイティブ・デュアルブートの構築手順
 docs/ARCHITECTURE.md                 技術解説 (なぜこの設計か・何がどこまで可能か)
 docs/TROUBLESHOOTING.md              トラブルシューティング

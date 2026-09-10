@@ -295,7 +295,13 @@ $script:VmTotal = 0.0; $script:RootTotal = 0.0; $script:VpOk = $false
 $script:LeakVmHist = @(); $script:LeakWinHist = @()
 $script:LeakWindow = 60
 $script:LeakVm = 0.0; $script:LeakWin = 0.0
-$script:Mem    = @{ TotalGB = 0.0; WinGB = 0.0; VmGB = 0.0; FreeGB = 0.0; VmAssignedGB = 0.0; VmState = "?" }
+$script:Mem    = @{ TotalGB = 0.0; WinGB = 0.0; VmGB = 0.0; FreeGB = 0.0; VmAssignedGB = 0.0; VmState = "?"
+                    WinCommitPct = 0.0; WinPagesPerSec = 0.0                    # Windows のメモリ負荷 (コミット率・ページング)
+                    VmReported = $false; VmVisibleGB = 0.0; VmAvailGB = 0.0    # EdgeBox 内部 (統合サービスの報告)
+                    VmDemandGB = 0.0; VmPressure = 0.0; VmMemStatus = ""; VmDynamic = $false }
+$dmCls = Get-CimClass -ClassName "Win32_PerfFormattedData_*HyperVDynamicMemoryVM" -ErrorAction SilentlyContinue | Select-Object -First 1
+$script:dmName = $null
+if ($dmCls) { $script:dmName = $dmCls.CimClassName }
 $script:LastErr = ""
 $script:TickNo  = 0
 
@@ -394,6 +400,12 @@ function Sample {
         $script:Mem.FreeGB  = $freeGB
         $script:Mem.VmGB    = $vmGB
         $script:Mem.WinGB   = [Math]::Max(0.0, ($totGB - $freeGB) - $vmGB)
+        # Windows のメモリ負荷: コミット率 (仮想メモリの使い切り具合) とページング (ディスクへの退避の激しさ)
+        try {
+            $pm = Get-CimInstance -ClassName Win32_PerfFormattedData_PerfOS_Memory -ErrorAction Stop | Select-Object -First 1
+            $script:Mem.WinCommitPct   = [double]$pm.PercentCommittedBytesInUse
+            $script:Mem.WinPagesPerSec = [double]$pm.PagesPersec
+        } catch { }
     } catch { }
     # EdgeBox の状態と割り当て (重いので 3 回に 1 回)
     if (($script:TickNo % 3) -eq 1) {
@@ -403,6 +415,22 @@ function Sample {
             $asg = [double]$vm.MemoryAssigned / 1GB
             if ($asg -le 0) { try { $asg = [double](Get-VMMemory -VMName $VMName -ErrorAction Stop).Startup / 1GB } catch { } }
             $script:Mem.VmAssignedGB = $asg
+            # EdgeBox 内部のメモリ: EdgeBox が Hyper-V の統合サービス (動的メモリの報告) で知らせてくる値。
+            # 報告が無い EdgeBox (統合サービスの無い OS / 固定メモリ) では外からは見えないので、その旨を出す
+            $script:Mem.VmDynamic   = [bool]$vm.DynamicMemoryEnabled
+            $script:Mem.VmDemandGB  = [double]$vm.MemoryDemand / 1GB
+            $script:Mem.VmMemStatus = [string]$vm.MemoryStatus
+            $vis = 0.0; $avail = 0.0; $pres = 0.0
+            if ($script:dmName) {
+                foreach ($d in @(Get-CimInstance -ClassName $script:dmName -ErrorAction SilentlyContinue)) {
+                    if ([string]$d.Name -ne $VMName) { continue }
+                    $vis = [double]$d.GuestVisiblePhysicalMemory / 1024.0    # MB → GB
+                    $avail = [double]$d.GuestAvailableMemory / 1024.0
+                    $pres = [double]$d.CurrentPressure
+                }
+            }
+            $script:Mem.VmVisibleGB = $vis; $script:Mem.VmAvailGB = $avail; $script:Mem.VmPressure = $pres
+            $script:Mem.VmReported  = (($vis -gt 0 -and $avail -gt 0) -or $script:Mem.VmDemandGB -gt 0)
         } catch { $script:Mem.VmState = "取得不可 (" + $(if ($script:VmLookupError) { $script:VmLookupError } else { $_.Exception.Message }) + ")" }
     }
 }
@@ -527,12 +555,29 @@ function Draw-Memory($g, [int]$x, [int]$y, [int]$w, [int]$h) {
         $g.FillRectangle($BrWin, (Rect $x $barY $wWin $barH))
         $g.FillRectangle($BrVm,  (Rect ($x + $wWin) $barY $wVm $barH))
         $g.DrawRectangle($PenNone, (Rect $x $barY $w $barH))
-        $txt = "PC 全体 {0:N1} GB    Windows 使用中 {1:N1} GB    {2} 使用中 {3:N1} GB (割り当て {4:N0} GB)    空き {5:N1} GB" -f `
-            $tot, $m.WinGB, $VMName, $m.VmGB, $m.VmAssignedGB, $m.FreeGB
+        # 1 行目: Windows 側の負荷 (物理メモリの使用率・コミット率・ページング)
+        $winPct = if ($tot -gt 0) { 100.0 * ($tot - $m.FreeGB) / $tot } else { 0.0 }
+        $l1 = "PC 全体 {0:N1} GB    Windows 使用中 {1:N1} GB    空き {2:N1} GB (物理 {3:N0}% 使用)    コミット率 {4:N0}%    ページング {5:N0} /秒" -f `
+            $tot, $m.WinGB, $m.FreeGB, $winPct, $m.WinCommitPct, $m.WinPagesPerSec
+        $brL1 = $BrText
+        if ($m.WinCommitPct -ge 90 -or $m.WinPagesPerSec -ge 1000) { $brL1 = $BrBad }
+        $g.DrawString($l1, $FontBody, $brL1, (PointF $x ($barY + $barH + 4)))
+        # 2 行目: EdgeBox 内部 (統合サービスの報告があるときだけ数字が出る)
+        if ($m.VmReported) {
+            $usedIn = [Math]::Max(0.0, $m.VmVisibleGB - $m.VmAvailGB)
+            $inPct = if ($m.VmVisibleGB -gt 0) { 100.0 * $usedIn / $m.VmVisibleGB } else { 0.0 }
+            $l2 = "{0} 割り当て {1:N1} GB (実メモリ {2:N1} GB)    内部で使用中 {3:N1} GB / 内部の空き {4:N1} GB ({5:N0}% 使用)    要求 {6:N1} GB    圧力 {7:N0}%    状態 {8}" -f `
+                $VMName, $m.VmAssignedGB, $m.VmGB, $usedIn, $m.VmAvailGB, $inPct, $m.VmDemandGB, $m.VmPressure, $(if ($m.VmMemStatus) { $m.VmMemStatus } else { "-" })
+            $brL2 = if ($m.VmPressure -ge 90 -or $m.VmMemStatus -match 'Low|Warning') { $BrBad } else { $BrText }
+        } else {
+            $l2 = "{0} 割り当て {1:N1} GB (実メモリ {2:N1} GB)    内部の使用量: 取得不可 — {0} が Hyper-V の統合サービス (メモリの報告) を持たないため、外からは見えません" -f `
+                $VMName, $m.VmAssignedGB, $m.VmGB
+            $brL2 = $BrGray
+        }
+        $g.DrawString($l2, $FontBody, $brL2, (PointF $x ($barY + $barH + 22)))
     } else {
-        $txt = "メモリ情報を取得できません"
+        $g.DrawString("メモリ情報を取得できません", $FontBody, $BrText, (PointF $x ($barY + $barH + 4)))
     }
-    $g.DrawString($txt, $FontBody, $BrText, (PointF $x ($barY + $barH + 4)))
 }
 
 function Draw-All($g, [int]$W, [int]$H) {
@@ -577,7 +622,7 @@ function Draw-All($g, [int]$W, [int]$H) {
     $g.DrawString($l3, $FontBody, $BrText, (PointF $pad 40))
 
     # --- 分離の状態: 「EdgeBox が Windows 用コアで動いた割合」と「Windows が EdgeBox 用コアで動いた割合」 ---
-    $memH = 70
+    $memH = 90
     if ($hostLps.Count -gt 0 -and $guestLps.Count -gt 0) {
         $leakVm  = $script:LeakVm    # EdgeBox が EdgeBox 用コアの外で動いた量 (VP 合計と LP 合計の突き合わせ。固定が効いていれば 0)
         $leakWin = $script:LeakWin   # EdgeBox 用コアで動いた EdgeBox 以外 (minroot が効いていれば 0)

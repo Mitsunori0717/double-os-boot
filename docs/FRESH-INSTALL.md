@@ -144,7 +144,7 @@ Windows 側の EdgeBox 専用アプリをインストールし、接続先にこ
 
 ```powershell
 cd C:\double-os-boot\windows-host
-.\03-field-display-kiosk.ps1 -Install   # ログオン時に 左=EdgeBox コンソール / 右=管理画面 を自動表示 + EdgeBox の自動起動
+.\03-field-display-kiosk.ps1 -Install   # ログオン時に 左=EdgeBox コンソール全画面 を自動表示 (右は通常のデスクトップ) + EdgeBox の自動起動
 .\00-field-launcher.ps1 -Setup           # 『EdgeBox 起動』アイコン
 .\08-settings-console.ps1 -Setup         # 『EdgeBox設定』アイコン (表示 URL・自動サインイン等)
 .\05-shutdown-all.ps1 -Setup             # 『全部シャットダウン』アイコン
@@ -152,7 +152,7 @@ cd C:\double-os-boot\windows-host
 powercfg /h off                          # 高速スタートアップ無効 (電源 ON での自動起動を確実にする)
 ```
 
-右画面の URL が ⑨ の IP と違う場合は、『EdgeBox設定』の [画面表示] タブで直します。
+右画面は通常のデスクトップです。右画面に管理画面のブラウザを出したい場合だけ、『EdgeBox設定』の [画面表示] タブで ⑨ の IP を URL に入れます。
 
 任意 (使うなら):
 
@@ -162,7 +162,7 @@ powercfg /h off                          # 高速スタートアップ無効 (�
 .\07-boot-appearance.ps1                 # 起動時の見た目を黒でそろえる
 ```
 
-**確認**: `.\03-field-display-kiosk.ps1` を引数なしで実行すると、今すぐ左右の画面に表示される。
+**確認**: `.\03-field-display-kiosk.ps1` を引数なしで実行すると、今すぐ左画面に EdgeBox の全画面が出る。
 
 ### ⑪ CPU コア分割を入れる
 
@@ -171,18 +171,13 @@ powercfg /h off                          # 高速スタートアップ無効 (�
 
 『CPU割り当て』を開き:
 
-1. 対象の EdgeBox が **EdgeBox** になっていることを確認
-2. かんたん設定の **「P コア = Windows / E コア = EdgeBox (推奨)」** を押す
-   (P/E の無い CPU では「EdgeBox は最低数だけ」)
-3. 検査結果が「適用できます」であることを確認して **[この内容で適用]**
+1. 対象の登録名が **EdgeBox**、方式が **full** になっていることを確認
+2. 割り当てが「末尾の E コア 8 個 = EdgeBox / 残り = Windows」(CPU 20-27 = EdgeBox) になっていることを確認
+   (開いた時点で入っています。P コアは Windows 専用で、EdgeBox には割り当てられません)
+3. 検査結果が「適用できます」であることを確認して **[この内容で適用]** → 「今すぐ再起動」
 
-続けて、管理者の PowerShell で撤退手順の予行と実測:
-
-```powershell
-cd C:\double-os-boot\windows-cpu-partition
-.\cpu-partition.ps1 -SelfTest             # 「予行 合格 (10/10)」
-.\cpu-partition.ps1 -Verify -Seconds 30   # 「分割は効いています」/ 割合 95% 以上
-```
+再起動後は起動タスクが CPU グループを作成して EdgeBox を固定し、EdgeBox を起動します (以後、起動のたびに自動)。
+『CPU割り当て』を開き直すと、上部に「完全分割: 成立 — … EdgeBox は CPU 20-27 に固定」と出ます。
 
 ### ⑫ メモリを確認する
 
@@ -195,9 +190,9 @@ PC を再起動し、サインイン後 5 分待ってから確認します。
 
 | 確認 | 期待 |
 |---|---|
-| EdgeBox が勝手に起動し、左に EdgeBox のコンソール、右に管理画面 | 出ている |
-| `.\cpu-partition.ps1 -Verify -Seconds 30` | 「自動タスク: Ready / 前回実行 〈再起動後の時刻〉 (成功)」、割合 95% 以上 |
-| 『EdgeBox 監視』 | 緑の棒が EdgeBox 用コア (緑枠) だけに出る |
+| EdgeBox が勝手に起動し、左に EdgeBox のコンソールの全画面、右は通常のデスクトップ | 出ている |
+| 『CPU割り当て』の上部 | 「完全分割: 成立 — Windows は CPU 0-19 に封じ込め (minroot) / EdgeBox は CPU 20-27 に固定 (CPU グループ)」 |
+| 『EdgeBox 監視』 | 「分離の状態: ○ 混ざっていません」で両方 0.0% (60 秒待つ)。緑の棒が EdgeBox 用 (CPU 20-27) だけに出る |
 
 ### ⑭ 収集の継続確認 (最重要)
 
@@ -208,7 +203,7 @@ PC を再起動し、サインイン後 5 分待ってから確認します。
 
 | 状況 | 操作 |
 |---|---|
-| CPU 分割を全部やめる | `.\cpu-partition.ps1 -Undo` (即時・再起動不要) |
+| CPU 分割を全部やめる | `.\cpu-partition.ps1 -Undo` → 再起動 (minroot を戻すため) |
 | EdgeBox が「別のプロセスが使用中」(0x80070020) で起動しない | `.\02-start-field-vm.ps1 -Repair` |
 | 画面が黒いまま操作できない | `fix-black-screen.cmd` をダブルクリック (管理者にしない) |
 | EdgeBox を素の装置として起動して切り分けたい | 再起動 → F8 → EdgeBox のディスクを選択 (EdgeBox は残したままで可。**両方から同時に起動しない**) |

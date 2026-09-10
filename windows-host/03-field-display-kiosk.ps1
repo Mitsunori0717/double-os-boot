@@ -112,7 +112,7 @@ function Test-UrlOnce([string]$u) {
         return [bool]$ok
     } catch { return $false }
 }
-$SplashLeftOffFile = Join-Path $PSScriptRoot "display-splash-leftoff.flag"   # 起動中画面を右画面だけに縮める合図
+$SplashLeftOffFile = Join-Path $PSScriptRoot "display-splash-leftoff.flag"   # 起動中画面 (左画面) を閉じる合図
 
 # ============================================================
 #  接続バー探し (共通): vmconnect の窓 (トップレベルと、その子孫) を列挙する
@@ -304,17 +304,16 @@ if ($Splash) {
         return $f
     }
 
-    # 右端のモニターだけを「EdgeBox 起動中」で覆う (あとから2枚目が認識されたらそちらへ移す)。
-    # 左画面 (EdgeBox のコンソール) は覆わない。モニターが 1 枚のときはその 1 枚を覆う
+    # 左端のモニター (EdgeBox のコンソールが出る画面) だけを「EdgeBox 起動中」で覆う
+    # (あとから 2 枚目が認識されて左端が変わったらそちらへ移す)。右画面 (Windows のデスクトップ) は覆わない
     $script:LeftOff = $false
     function Sync-SplashScreens {
         $all = @([System.Windows.Forms.Screen]::AllScreens | ForEach-Object { $_.Bounds })
         if ($all.Count -gt 1) {
-            $maxX = ($all | ForEach-Object { $_.X } | Measure-Object -Maximum).Maximum
-            $all = @($all | Where-Object { $_.X -eq $maxX })
-            # 左端の画面に出してしまった覆い (モニターが 1 枚のときに出したもの) は閉じる
+            $minX = ($all | ForEach-Object { $_.X } | Measure-Object -Minimum).Minimum
+            $all = @($all | Where-Object { $_.X -eq $minX })
             foreach ($f in $script:SplashForms) {
-                if (-not $f.IsDisposed -and $f.Bounds.X -ne $maxX) { $f.Close() }
+                if (-not $f.IsDisposed -and $f.Bounds.X -ne $minX) { $f.Close() }
             }
         }
         foreach ($b in $all) {
@@ -341,13 +340,11 @@ if ($Splash) {
             }
         }
         $script:SplashDots = ($script:SplashDots + 1) % 4
-        # 本体から「左は出た」の合図が来たら、左の画面の覆いだけ外す (右は管理画面が出るまで覆ったまま)
+        # 本体から「左のコンソールを全画面にする」の合図が来たら、覆いを外して終わる
+        # (覆ったままだと全画面の切り替えが効かないことがあるため、切り替えの直前に外す)
         if (-not $script:LeftOff -and (Test-Path $SplashLeftOffFile)) {
             $script:LeftOff = $true
-            $maxX = (@([System.Windows.Forms.Screen]::AllScreens | ForEach-Object { $_.Bounds.X }) | Measure-Object -Maximum).Maximum
-            foreach ($f in $script:SplashForms) {
-                if (-not $f.IsDisposed -and $f.Bounds.X -ne $maxX) { $f.Close() }
-            }
+            [System.Windows.Forms.Application]::Exit(); return
         }
         $status = ""
         try { if (Test-Path $StatusFile) { $status = ([string](Get-Content $StatusFile -Raw -Encoding UTF8)).Trim() } } catch { }
@@ -656,6 +653,7 @@ public class GuardApi {
     [DllImport("kernel32.dll")] public static extern uint GetCurrentThreadId();
     [DllImport("user32.dll")] public static extern IntPtr SetFocus(IntPtr hWnd);
     [DllImport("user32.dll")] public static extern IntPtr GetFocus();
+    [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
 }
 "@
     # "Alt+F11" のような指定をキーコードの一覧にする
@@ -781,11 +779,36 @@ public class GuardApi {
     $lastFs = [datetime]::MinValue; $notCover = 0
     $fsFail = 0   # 全画面に戻せなかった回数 (3 回続いたら 30 秒に 1 回に広げる。あきらめはしない)
     $missingSince = $null; $lastRelaunch = [datetime]::MinValue   # コンソール窓が閉じられたときの立て直し用
+    $lastCtrlAlt = [datetime]::MinValue   # Ctrl+Alt を押していた時刻 (自分で Ctrl+Alt+Break を押した解除を見分ける)
     $tick = 0
+    function Test-ConsoleForeground {
+        # 前面の窓が vmconnect のものか
+        try {
+            $fg = [GuardApi]::GetForegroundWindow()
+            if ($fg -eq [IntPtr]::Zero) { return $false }
+            $fgPid = [uint32]0
+            [GuardApi]::GetWindowThreadProcessId($fg, [ref]$fgPid) | Out-Null
+            return (@(Get-Process vmconnect -ErrorAction SilentlyContinue | ForEach-Object { [uint32]$_.Id }) -contains $fgPid)
+        } catch { return $false }
+    }
     while ($true) {
         try {
             # ホットキーは 0.1 秒ごとに見る (短い押下も取りこぼさない)。窓の見回りは 0.5 秒ごと
             $tick++
+            # --- 自分で解除する操作を見分ける ---
+            # (a) Ctrl+Alt を押している間 (Ctrl+Alt+Break を自分で押した) の解除は自動で戻さない
+            if ((([GuardApi]::GetAsyncKeyState(0x11) -band 0x8000) -ne 0) -and (([GuardApi]::GetAsyncKeyState(0x12) -band 0x8000) -ne 0)) { $lastCtrlAlt = Get-Date }
+            # (b) 全画面中に ESC (コンソールが前面のとき) → 解除して、自動では戻さない。再固定は $hotkey
+            if (-not $released -and (([GuardApi]::GetAsyncKeyState(0x1B) -band 0x8000) -ne 0) -and (Test-ConsoleForeground)) {
+                $h = Get-ConsoleMain
+                if ($h -ne [IntPtr]::Zero -and (Test-ConsoleFullScreenOn $left)) {
+                    $released = $true
+                    Invoke-FullScreenToggle $h
+                    Show-Notice "ESC で左画面の固定を解除しました ($hotkey でもう一度固定)"
+                    Log "左画面の見張り役: ESC により固定を解除しました (自動では戻しません。再固定は $hotkey)。"
+                    while (([GuardApi]::GetAsyncKeyState(0x1B) -band 0x8000) -ne 0) { Start-Sleep -Milliseconds 50 }
+                }
+            }
             # --- ホットキー: 固定の解除 ⇔ 再固定 ---
             $allDown = $true
             foreach ($vk in $vkeys) { if (([GuardApi]::GetAsyncKeyState($vk) -band 0x8000) -eq 0) { $allDown = $false; break } }
@@ -849,6 +872,13 @@ public class GuardApi {
                         # 連続 2 回確認・6 秒に 1 回まで、素早く左画面の全画面に戻す。
                         # 3 回続けて戻せなければ (切り替えが効かない状態)、30 秒に 1 回に広げて試し続ける
                         $notCover++
+                        if ($notCover -eq 2 -and ((Get-Date) - $lastCtrlAlt).TotalSeconds -lt 3) {
+                            # 自分で Ctrl+Alt+Break を押して解除した → 固定を解除扱いにして戻さない
+                            $released = $true; $notCover = 0
+                            Show-Notice "全画面を自分で解除したため、自動では戻しません ($hotkey で再固定)"
+                            Log "左画面の見張り役: Ctrl+Alt+Break による解除を検出したため、自動では戻しません (再固定は $hotkey)。"
+                            continue
+                        }
                         $interval = if ($fsFail -ge 3) { 30 } else { 6 }
                         if ($notCover -ge 2 -and ((Get-Date) - $lastFs).TotalSeconds -gt $interval) {
                             if (Test-ConsoleFullScreenOn $right) { Invoke-FullScreenToggle $h; Start-Sleep -Milliseconds 800 }   # 右で全画面 → いったん解除
@@ -2092,7 +2122,7 @@ function Open-Display([string]$val, $screen, [string]$profile, [bool]$fullScreen
 # 管理画面の応答待ちはそのあとに行う (長くかかっても左は見えている)
 if ($leftIsConsole) {
     Open-Display $LeftUrl $leftScreen "FieldKioskL" $LeftFull
-    # 左は出たので、起動中画面は右画面だけに縮める (右は管理画面が出るまで「応答待ち」を表示)
+    # 左は出たので、起動中画面 (左画面の黒い覆い) を閉じる合図を出す (既に閉じていれば何もしない)
     try { Set-Content -Path $SplashLeftOffFile -Value "1" -Encoding ASCII } catch { }
     if ($RightUrl) { Set-Status "管理画面の応答を待っています" } else { Set-Status "左画面の表示を仕上げています" }
 }
