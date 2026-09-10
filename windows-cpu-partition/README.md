@@ -158,7 +158,7 @@ Restart-Computer                                                          # 再�
  EdgeBox : 平均 5%   (割り当て CPU 20-27 / 8 論理)   状態: Running
  コア構成: P コア 8 (CPU 0-15) / E コア 12 (CPU 16-27)   合計 20 コア / 28 スレッド
  分離の状態: ○ 混ざっていません   EdgeBox が Windows 用コアで動いた割合 0.0%  /  Windows が EdgeBox 用コアで動いた割合 0.0%   (直近 60 秒)
- 完全分離: ○ 成立
+ 完全分離: ○ 成立   Windows は CPU 0-19 に固定 / EdgeBox は CPU 20-27 に固定
 
  Windows 用 (CPU 0-19 / 20 論理)        ← 番号順。上に CPU 番号と P0/E3 の印、下に使用率
   CPU 0  CPU 1 ... CPU 15  CPU 16 ... CPU 19
