@@ -447,6 +447,16 @@ function Update-Environment {
 # ============================================================
 $script:VmNameSel = $VMName
 Update-Environment
+# その名前の登録が無ければ (名前を変えた等)、EdgeBox の物理ディスクを持つ登録か 1 つしかない登録を選ぶ
+if ($script:HyperVOk -and -not $script:Vm) {
+    try {
+        $all = @(Get-VM -ErrorAction SilentlyContinue)
+        $found = @($all | Where-Object { @(Get-VMHardDiskDrive -VMName $_.Name -ErrorAction SilentlyContinue | Where-Object { $null -ne $_.DiskNumber }).Count -gt 0 })
+        $pick = $null
+        if ($found.Count -eq 1) { $pick = $found[0].Name } elseif ($all.Count -eq 1) { $pick = $all[0].Name }
+        if ($pick) { $script:VmNameSel = $pick; Update-Environment }
+    } catch { }
+}
 
 # minroot 適用中は Windows から一部のコアが見えないため、初回に保存した構成を使う
 $live = Get-LiveTopology
