@@ -563,17 +563,16 @@ function Draw-Memory($g, [int]$x, [int]$y, [int]$w, [int]$h) {
         $brL1 = $BrText
         if ($m.WinCommitPct -ge 90 -or $m.WinPagesPerSec -ge 1000) { $brL1 = $BrBad }
         $g.DrawString($l1, $FontBody, $brL1, (PointF $x ($barY + $barH + 4)))
-        # 2 行目: EdgeBox 内部 (統合サービスの報告があるときだけ数字が出る)
+        # 2 行目: EdgeBox 内部 (統合サービスの報告があるときだけ表示する。報告が無ければ割り当てだけ)
         if ($m.VmReported) {
             $usedIn = [Math]::Max(0.0, $m.VmVisibleGB - $m.VmAvailGB)
             $inPct = if ($m.VmVisibleGB -gt 0) { 100.0 * $usedIn / $m.VmVisibleGB } else { 0.0 }
-            $l2 = "{0} 割り当て {1:N1} GB (実メモリ {2:N1} GB)    内部で使用中 {3:N1} GB / 内部の空き {4:N1} GB ({5:N0}% 使用)    要求 {6:N1} GB    圧力 {7:N0}%    状態 {8}" -f `
-                $VMName, $m.VmAssignedGB, $m.VmGB, $usedIn, $m.VmAvailGB, $inPct, $m.VmDemandGB, $m.VmPressure, $(if ($m.VmMemStatus) { $m.VmMemStatus } else { "-" })
+            $l2 = "{0} 割り当て {1:N1} GB    内部で使用中 {2:N1} GB / 内部の空き {3:N1} GB ({4:N0}% 使用)    要求 {5:N1} GB    圧力 {6:N0}%    状態 {7}" -f `
+                $VMName, $m.VmAssignedGB, $usedIn, $m.VmAvailGB, $inPct, $m.VmDemandGB, $m.VmPressure, $(if ($m.VmMemStatus) { $m.VmMemStatus } else { "-" })
             $brL2 = if ($m.VmPressure -ge 90 -or $m.VmMemStatus -match 'Low|Warning') { $BrBad } else { $BrText }
         } else {
-            $l2 = "{0} 割り当て {1:N1} GB (実メモリ {2:N1} GB)    内部の使用量: 取得不可 — {0} が Hyper-V の統合サービス (メモリの報告) を持たないため、外からは見えません" -f `
-                $VMName, $m.VmAssignedGB, $m.VmGB
-            $brL2 = $BrGray
+            $l2 = "{0} 割り当て {1:N1} GB" -f $VMName, $m.VmAssignedGB
+            $brL2 = $BrText
         }
         $g.DrawString($l2, $FontBody, $brL2, (PointF $x ($barY + $barH + 22)))
     } else {
@@ -668,11 +667,10 @@ function Draw-All($g, [int]$W, [int]$H) {
 
 $form = New-Object System.Windows.Forms.Form
 $form.Text = "$VMName 監視 — 各コアの負荷とメモリ"
-$form.ClientSize = New-Object System.Drawing.Size(1120, 620)
-$form.MinimumSize = New-Object System.Drawing.Size(640, 440)
+$form.ClientSize = New-Object System.Drawing.Size(1120, 600)
 $form.StartPosition = "CenterScreen"
-$form.FormBorderStyle = "Sizable"      # 大きさは自由に変えられる
-$form.MaximizeBox = $true
+$form.FormBorderStyle = "FixedDialog"   # 大きさは固定
+$form.MaximizeBox = $false
 $form.MinimizeBox = $true              # 最小化してしまっておける
 $form.TopMost = [bool]$TopMost
 $form.Font = New-Object System.Drawing.Font -ArgumentList @("Meiryo UI", [float]9)

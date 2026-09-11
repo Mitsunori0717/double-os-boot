@@ -543,11 +543,11 @@ $script:btnMon.Size = New-Object System.Drawing.Size(134, 28)
 $grpPc.Controls.AddRange(@($script:lblCpu1, $script:lblCpu2, $script:lblCpu3, $script:btnMon))
 $form.Controls.Add($grpPc)
 
-# --- 対象と方式 ---
+# --- 対象 ---
 $grpMode = New-Object System.Windows.Forms.GroupBox
-$grpMode.Text = "対象と方式"
+$grpMode.Text = "対象"
 $grpMode.Location = New-Object System.Drawing.Point(12, 90)
-$grpMode.Size = New-Object System.Drawing.Size(940, 92)
+$grpMode.Size = New-Object System.Drawing.Size(940, 58)
 
 $grpMode.Controls.Add((New-Lbl "対象の登録名:" 14 26))
 $script:cmbVm = New-Object System.Windows.Forms.ComboBox
@@ -565,28 +565,7 @@ $grpMode.Controls.Add($script:cmbVm)
 $script:lblVm = New-Lbl "" 314 26 610
 $grpMode.Controls.Add($script:lblVm)
 
-$grpMode.Controls.Add((New-Lbl "方式:" 14 58))
-$script:rbRuntime = New-Object System.Windows.Forms.RadioButton
-$script:rbRuntime.Text = "簡易分離 (再起動なし)"
-$script:rbRuntime.Location = New-Object System.Drawing.Point(96, 55)
-$script:rbRuntime.Size = New-Object System.Drawing.Size(250, 24)
-$script:rbFull = New-Object System.Windows.Forms.RadioButton
-$script:rbFull.Text = "完全分離 (再起動 1 回。推奨)"
-$script:rbFull.Location = New-Object System.Drawing.Point(356, 55)
-$script:rbFull.Size = New-Object System.Drawing.Size(240, 24)
-# 既定は full (完全分割)。保存済みの計画があればその方式に従う
-if ($script:SavedCfg -and $script:SavedCfg.Mode -eq "runtime") { $script:rbRuntime.Checked = $true } else { $script:rbFull.Checked = $true }
-$grpMode.Controls.AddRange(@($script:rbRuntime, $script:rbFull))
-
-$grpMode.Controls.Add((New-Lbl "EdgeBox 側の最低コア数:" 646 58))
-$script:numMin = New-Object System.Windows.Forms.NumericUpDown
-$script:numMin.Location = New-Object System.Drawing.Point(790, 55)
-$script:numMin.Size = New-Object System.Drawing.Size(56, 24)
-$script:numMin.Minimum = $(if ($script:Hybrid -and @($script:Cores | Where-Object { $_.Kind -eq "E" }).Count -ge $MinGuestCores) { $MinGuestCores } else { 1 })
-$script:numMin.Maximum = 32
-$script:numMin.Value = [Math]::Max([int]$script:numMin.Minimum, [Math]::Min(32, $MinGuestCores))
-$grpMode.Controls.Add($script:numMin)
-$grpMode.Controls.Add((New-Lbl "コア" 852 58))
+# 方式は「完全分離」固定 (選択肢は出さない)
 $form.Controls.Add($grpMode)
 
 # --- コアのタイル ---
@@ -666,10 +645,6 @@ if ($script:Hybrid) {
     $form.Controls.Add($grpA)
 }
 
-$lblHint = New-Lbl "タイルをクリックするたびに  Windows 用 → EdgeBox 用 → 未割当  と切り替わります (P コアは Windows 専用。EdgeBox は末尾の E コアに、最低数以上)" 16 478 900
-$lblHint.ForeColor = [System.Drawing.Color]::DimGray
-$form.Controls.Add($lblHint)
-
 # --- 割り当ての要約 ---
 $grpSum = New-Object System.Windows.Forms.GroupBox
 $grpSum.Text = "この内容で割り当てます"
@@ -739,16 +714,6 @@ $grpApps.Controls.Add($script:lblApps)
 $form.Controls.Add($grpApps)
 
 # --- 操作ボタン ---
-$script:btnUndo = New-Object System.Windows.Forms.Button
-$script:btnUndo.Text = "分割を解除"
-$script:btnUndo.Location = New-Object System.Drawing.Point(12, 834)
-$script:btnUndo.Size = New-Object System.Drawing.Size(140, 32)
-
-$script:btnVerify = New-Object System.Windows.Forms.Button
-$script:btnVerify.Text = "効き具合を実測"
-$script:btnVerify.Location = New-Object System.Drawing.Point(160, 834)
-$script:btnVerify.Size = New-Object System.Drawing.Size(140, 32)
-
 $script:btnFix = New-Object System.Windows.Forms.Button
 $script:btnFix.Text = "完全分離用に並べ直す"
 $script:btnFix.Location = New-Object System.Drawing.Point(308, 834)
@@ -773,7 +738,7 @@ $btnClose.Location = New-Object System.Drawing.Point(838, 834)
 $btnClose.Size = New-Object System.Drawing.Size(114, 32)
 $btnClose.DialogResult = "Cancel"
 $form.CancelButton = $btnClose
-$form.Controls.AddRange(@($script:btnUndo, $script:btnVerify, $script:btnFix, $script:chkTools, $script:btnApply, $btnClose))
+$form.Controls.AddRange(@($script:btnFix, $script:chkTools, $script:btnApply, $btnClose))
 
 # ============================================================
 #  アプリの割り当て (cpu-apps.json / cpu-apps.ps1)
@@ -857,8 +822,7 @@ function Format-Side($Cores, [int[]]$Lps) {
 
 function Update-Validation {
     $sel = Get-Selection
-    $mode = if ($script:rbFull.Checked) { "full" } else { "runtime" }
-    $minGuest = [int]$script:numMin.Value
+    $mode = "full"          # 方式は完全分離のみ
     $errors = @(); $warnings = @()
 
     $hostCoreObjs  = @($script:Cores | Where-Object { $_.State -eq "Host" })
@@ -880,8 +844,8 @@ function Update-Validation {
     }
 
     # --- 割り当ての量 ---
-    if ($sel.GuestCores -lt $minGuest) {
-        $errors += "$($script:VmNameSel) 側が $($sel.GuestCores) コアです。最低 $minGuest コア必要です (右上の設定で変更可)。"
+    if ($sel.GuestCores -lt 1) {
+        $errors += "$($script:VmNameSel) にコアが 1 つも割り当てられていません。このままでは $($script:VmNameSel) を起動できません (コアを 1 つ以上、EdgeBox 用にしてください)。"
     }
     if ($sel.HostCores -lt 2) {
         $errors += "Windows 側が $($sel.HostCores) コアです。最低 2 コア必要です (EdgeBox のディスク/ネットワーク処理も Windows 側で動くため)。"
@@ -908,34 +872,18 @@ function Update-Validation {
         }
     }
 
-    # --- 方式ごとの成立条件 ---
+    # --- 完全分離の成立条件 ---
+    # minroot は「先頭から N 個」の論理 CPU を Windows に割り当てる方式
     $script:btnFix.Visible = $false
-    if ($mode -eq "runtime") {
-        if ($script:Scheduler -ne "root") {
-            $errors += "完全分離の設定が有効になっている PC では簡易分離は使えません。完全分離を選ぶか、[分割を解除] 後に再起動してください。"
-        }
-        if ($script:Bcd -and ($script:Bcd.SchedulerType -or $script:Bcd.RootProc)) {
-            $errors += "完全分離の設定が書き込み済みです (次の再起動で有効になり、簡易分離と矛盾します)。完全分離を続けるか、[分割を解除] してください。"
-        }
-        if ($script:UnderMinroot) {
-            $errors += "完全分離が有効なため、Windows から見えないコアには簡易分離の固定ができません。[分割を解除] して再起動してから使ってください。"
-        }
-        $over = @($sel.HostLps + $sel.GuestLps | Where-Object { $_ -ge 63 })
-        if ($over.Count -gt 0) {
-            $errors += "論理 CPU 63 以上は簡易分離では扱えません。完全分離を使ってください。"
-        }
-    } else {
-        # minroot は「先頭から N 個」の論理 CPU をWindows に割り当てる方式
-        $ok = $true
-        for ($i = 0; $i -lt $sel.HostLps.Count; $i++) {
-            if ($sel.HostLps[$i] -ne $i) { $ok = $false; break }
-        }
-        if (-not $ok -or $sel.HostLps.Count -eq 0) {
-            $errors += "完全分離では Windows 側が CPU 0 から続き番号である必要があります。現在: CPU $(ConvertTo-LpRangeText $sel.HostLps)"
-            $script:btnFix.Visible = $true
-        }
-        $warnings += "完全分離は再起動が 1 回必要です (適用 → 再起動。再起動後は自動で完了します)。"
+    $ok = $true
+    for ($i = 0; $i -lt $sel.HostLps.Count; $i++) {
+        if ($sel.HostLps[$i] -ne $i) { $ok = $false; break }
     }
+    if (-not $ok -or $sel.HostLps.Count -eq 0) {
+        $errors += "完全分離では Windows 側が CPU 0 から続き番号である必要があります。現在: CPU $(ConvertTo-LpRangeText $sel.HostLps)"
+        $script:btnFix.Visible = $true
+    }
+    $warnings += "完全分離は再起動が 1 回必要です (適用 → 再起動。再起動後は自動で完了します)。"
 
     # --- 分割の質 ---
     foreach ($c in $script:Cores) {
@@ -1082,9 +1030,6 @@ $script:cmbVm.Add_Leave({
     $t = ([string]$script:cmbVm.Text).Trim()
     if ($t -and $t -ne $script:VmNameSel) { $script:VmNameSel = $t; Refresh-All }
 })
-$script:rbRuntime.Add_CheckedChanged({ Update-Validation })
-$script:rbFull.Add_CheckedChanged({ Update-Validation })
-$script:numMin.Add_ValueChanged({ Update-Validation })
 $script:numMem.Add_ValueChanged({ Update-MemoryUi })
 
 $script:btnMem.Add_Click({
@@ -1132,16 +1077,15 @@ $script:btnFix.Add_Click({
 
 $script:btnApply.Add_Click({
     $sel = Get-Selection
-    $mode = if ($script:rbFull.Checked) { "full" } else { "runtime" }
+    $mode = "full"          # 方式は完全分離のみ
     $hostText  = ConvertTo-LpRangeText $sel.HostLps
     $guestText = ConvertTo-LpRangeText $sel.GuestLps
     $verb = if ($script:VmMissing) { "保存します (EdgeBox を作成・起動した時点で自動適用)" } else { "適用します" }
     $confirm = "次の内容で${verb}。`n`n" +
         "  Windows            : CPU $hostText  ($($sel.HostCores) コア)`n" +
-        "  $($script:VmNameSel) : CPU $guestText  ($($sel.GuestCores) コア)`n" +
-        "  方式               : $(if ($mode -eq "full") { "完全分離" } else { "簡易分離" })`n`n" +
-        $(if ($mode -eq "full") { "この後 PC の再起動が 1 回必要です (再起動後は自動で完了します)。`n`n" } else { "" }) +
-        "よろしいですか? (いつでも [分割を解除] で元に戻せます)"
+        "  $($script:VmNameSel) : CPU $guestText  ($($sel.GuestCores) コア)`n`n" +
+        "この後 PC の再起動が 1 回必要です (再起動後は自動で完了します)。`n`n" +
+        "よろしいですか?"
     $r = [System.Windows.Forms.MessageBox]::Show($confirm, "CPU コア割り当て",
         [System.Windows.Forms.MessageBoxButtons]::YesNo, [System.Windows.Forms.MessageBoxIcon]::Question)
     if ($r -ne [System.Windows.Forms.DialogResult]::Yes) { return }
@@ -1187,37 +1131,8 @@ $script:btnApply.Add_Click({
             "(EdgeBox の起動を検出して自動で適用します)")
     } else {
     Show-Info ("適用しました。`n`n  Windows            : CPU $hostText`n  $($script:VmNameSel) : CPU $guestText`n`n" +
-        $(if ($mode -eq "runtime") { "Windows 側のプロセスを CPU $hostText へ固定し続けます ($($script:VmNameSel) 用コアに Windows のプロセスは載りません)。`n`n" } else { "" }) +
-        "[効き具合を実測] または『EdgeBox 監視』の「分離の状態」で、実際にどのコアで動いているか確認できます。")
+        "『EdgeBox 監視』の「分離の状態」で、実際にどのコアで動いているか確認できます。")
     }
-})
-
-$script:btnUndo.Add_Click({
-    $r = [System.Windows.Forms.MessageBox]::Show(
-        "CPU コア分割の設定をすべて解除して、元の状態に戻します。`nよろしいですか?", "CPU コア割り当て",
-        [System.Windows.Forms.MessageBoxButtons]::YesNo, [System.Windows.Forms.MessageBoxIcon]::Question)
-    if ($r -ne [System.Windows.Forms.DialogResult]::Yes) { return }
-    $form.Enabled = $false
-    try { $code = Invoke-Engine @("-Undo", "-VMName", "`"$($script:VmNameSel)`"", "-NoConfirm") } finally { $form.Enabled = $true }
-    Refresh-All
-    if ($code -eq 0) {
-        Show-Info "解除しました。`n(完全分離を使っていた場合は、PC の再起動で完全に元へ戻ります)"
-    } else {
-        Show-Info "解除の途中で問題が起きました (終了コード $code)。表示されたウィンドウの内容をご確認ください。" "Warning"
-    }
-})
-
-$script:btnVerify.Add_Click({
-    if (-not $script:Vm -or $script:Vm.State -ne "Running") {
-        $r = [System.Windows.Forms.MessageBox]::Show(
-            "$($script:VmNameSel) が動いていないため、実測してもEdgeBox 側の数値はほぼ 0 になります。`nそれでも実行しますか?",
-            "CPU コア割り当て",
-            [System.Windows.Forms.MessageBoxButtons]::YesNo, [System.Windows.Forms.MessageBoxIcon]::Information)
-        if ($r -ne [System.Windows.Forms.DialogResult]::Yes) { return }
-    }
-    # 結果を読める状態で残すため、閉じないウィンドウで実行する
-    Start-Process powershell.exe -ArgumentList (
-        "-NoProfile -NoExit -ExecutionPolicy Bypass -File `"$EnginePath`" -Verify -VMName `"$($script:VmNameSel)`"")
 })
 
 
@@ -1725,7 +1640,8 @@ $form.Add_Shown({ Update-Validation })
 # 画面の並べ直し: 「この PC の CPU」を 1 行増やし (+22)、かんたん設定の行を無くした (-34) 分を詰める
 foreach ($ctl in @($form.Controls)) {
     if ($ctl -eq $grpMode) { $ctl.Top += 22 }
-    elseif ($ctl.Top -ge 224) { $ctl.Top -= 12 }
+    elseif ($ctl.Top -ge 498) { $ctl.Top -= 66 }   # 12 + 34 (方式欄) + 20 (説明行)
+    elseif ($ctl.Top -ge 224) { $ctl.Top -= 46 }   # 12 + 34 (方式欄)
 }
 $maxBottom = 0
 foreach ($ctl in @($form.Controls)) { if ($ctl.Bottom -gt $maxBottom) { $maxBottom = $ctl.Bottom } }
