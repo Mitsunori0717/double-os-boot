@@ -575,6 +575,7 @@ $DefaultConfig = [ordered]@{
     "ConsoleHideBar"    = $true    # 全画面時に上部の接続バー (「localhost 上の EdgeBox」の帯) を出さない
     "LeftGuard"         = $true    # 左画面をコンソールの全画面で固定 (他の窓は右へ移し、全画面が外れたら戻す)
     "LeftGuardHotkey"   = "Alt+F11" # 固定の解除/再固定に使うキー
+    "StowHotkey"        = "Ctrl+Alt+K" # 長押しでコンソールを収納 (最小化) ⇔ 全画面に戻す
     "ConsoleResolution" = "自動 (モニターに合わせる)"
 }
 if (-not (Test-Path $ConfigFile)) {
@@ -668,6 +669,7 @@ public class GuardApi {
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetMenuString(IntPtr hMenu, uint uIDItem, StringBuilder s, int cch, uint flags);
     [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam);
     [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
+    [DllImport("user32.dll")] public static extern bool BringWindowToTop(IntPtr hWnd);
     [DllImport("user32.dll")] public static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, uint dwExtraInfo);
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern IntPtr FindWindowEx(IntPtr parent, IntPtr after, string className, string windowName);
     [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint pid);
@@ -691,16 +693,21 @@ public class GuardApi {
             elseif ($k -match '^F(\d{1,2})$') { $keys += (0x6F + [int]$Matches[1]) }
             elseif ($k -match '^[A-Z0-9]$')   { $keys += [int][char]$k }
         }
-        return ,$keys
+        return $keys
     }
     $hotkey = if ($cfg.LeftGuardHotkey) { [string]$cfg.LeftGuardHotkey } else { "Alt+F11" }
     $vkeys = @(ConvertTo-VKeys $hotkey)
     if ($vkeys.Count -eq 0) { $vkeys = @(0x12, 0x7A); $hotkey = "Alt+F11" }
+    # 収納/再表示のキー (長押し)。コンソール窓を最小化して左画面を Windows に明け渡し、もう一度で全画面に戻す
+    $stowHotkey = if ($cfg.StowHotkey) { [string]$cfg.StowHotkey } else { "Ctrl+Alt+K" }
+    $stowKeys = @(ConvertTo-VKeys $stowHotkey)
+    if ($stowKeys.Count -eq 0) { $stowKeys = @(0x11, 0x12, 0x4B); $stowHotkey = "Ctrl+Alt+K" }
+    $HoldMs = 1000   # 長押しとみなす時間 (ESC / 収納キー 共通)
 
     $screens = @([System.Windows.Forms.Screen]::AllScreens | Sort-Object { $_.Bounds.X })
     if ($screens.Count -lt 2) { Log "左画面の見張り役: モニターが 1 枚のため何もしません。"; exit 0 }
     $left = $screens[0].Bounds; $right = $screens[-1].Bounds
-    Log "左画面の見張り役を開始しました (解除/再固定: $hotkey)。"
+    Log "左画面の見張り役を開始しました (解除/再固定: $hotkey / 収納⇔全画面: $stowHotkey 長押し)。"
 
     function Get-ConsoleMain {
         $p = Get-Process vmconnect -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object -First 1
@@ -719,19 +726,47 @@ public class GuardApi {
         }
         return -1
     }
-    function Invoke-FullScreenToggle([IntPtr]$h) {
-        # メニュー『全画面』を WM_COMMAND で直接実行 (フォーカス不要)。無ければ Ctrl+Alt+Break を送る
-        $menu = [GuardApi]::GetMenu($h)
-        if ($menu -ne [IntPtr]::Zero) {
-            $id = Find-MenuId $menu '全画面|Full' 0
-            if ($id -ge 0) { [GuardApi]::PostMessage($h, 0x0111, [IntPtr]$id, [IntPtr]::Zero) | Out-Null; return }
+    # vmconnect の見えているトップレベルの窓 (本体と、全画面のときに RDP 部品が作る枠なしの窓)
+    function Get-ConsoleTopWindows {
+        return @(Get-ConsoleWindows | Where-Object { $_.Hwnd -ne [IntPtr]::Zero -and $_.Parent -eq [IntPtr]::Zero -and $_.Visible } |
+                 ForEach-Object { [IntPtr]$_.Hwnd })
+    }
+    # モニター $b を全画面で覆っている vmconnect の窓 (Test-ConsoleFullScreenOn と同じ見分け方)。無ければ Zero
+    function Get-ConsoleFullScreenWindow($b) {
+        foreach ($w in Get-ConsoleWindows) {
+            if ($w.Hwnd -eq [IntPtr]::Zero -or $w.Parent -ne [IntPtr]::Zero -or -not $w.Visible) { continue }
+            if ($w.Left -gt ($b.X + 4) -or $w.Right -lt ($b.X + $b.Width - 4) -or $w.Bottom -lt ($b.Y + $b.Height - 4)) { continue }
+            if (-not $w.HasCaption -and $w.Top -le ($b.Y + 4)) { return [IntPtr]$w.Hwnd }
+            if ($w.HasCaption -and $w.Top -le ($b.Y - 20)) { return [IntPtr]$w.Hwnd }
         }
-        # 前面化 (見張り役は自分の窓を持たないので、ALT の疑似押下で前面化のブロックを避ける)
-        [GuardApi]::keybd_event(0x12, 0, 0, 0)
-        [GuardApi]::SetForegroundWindow($h) | Out-Null
-        [GuardApi]::keybd_event(0x12, 0, 2, 0)
-        Start-Sleep -Milliseconds 300
-        # キーボードフォーカスを映像の入力窓へ (Ctrl+Alt+Break はそこで受け付けられる)
+        return [IntPtr]::Zero
+    }
+    # 前面化 (本体側の Force-Foreground と同じ手順)。見張り役は自分の窓を持たないので、
+    # ALT の疑似押下で前面化のブロックを避け、駄目なら前面の窓のスレッドに入力を相乗りさせて前面化する
+    function Set-GuardForeground([IntPtr]$h) {
+        for ($i = 0; $i -lt 3; $i++) {
+            [GuardApi]::keybd_event(0x12, 0, 0, 0)
+            [GuardApi]::SetForegroundWindow($h) | Out-Null
+            [GuardApi]::keybd_event(0x12, 0, 2, 0)
+            Start-Sleep -Milliseconds 300
+            if ([GuardApi]::GetForegroundWindow() -eq $h) { return $true }
+            try {
+                $fg = [GuardApi]::GetForegroundWindow()
+                $procId = [uint32]0
+                $fgThread = [GuardApi]::GetWindowThreadProcessId($fg, [ref]$procId); $my = [GuardApi]::GetCurrentThreadId()
+                [GuardApi]::AttachThreadInput($my, $fgThread, $true) | Out-Null
+                [GuardApi]::BringWindowToTop($h) | Out-Null
+                [GuardApi]::SetForegroundWindow($h) | Out-Null
+                [GuardApi]::AttachThreadInput($my, $fgThread, $false) | Out-Null
+            } catch { }
+            Start-Sleep -Milliseconds 300
+            if ([GuardApi]::GetForegroundWindow() -eq $h) { return $true }
+        }
+        return ([GuardApi]::GetForegroundWindow() -eq $h)
+    }
+    # キーボードフォーカスを映像の入力窓へ移し、Ctrl+Alt+Break を 1 回送る (Ctrl+Alt+Break はその窓で受け付けられる)。
+    # 偶数回目は SendKeys で送る (本体側と同じく、環境によって効く方が違うため交互に試す)
+    function Send-GuardCtrlAltBreak([IntPtr]$h, [int]$try) {
         try {
             $ih = Get-ConsoleInputWindow; if ($ih -eq [IntPtr]::Zero) { $ih = $h }
             $procId = [uint32]0
@@ -741,12 +776,92 @@ public class GuardApi {
             [GuardApi]::AttachThreadInput($my, $t, $false) | Out-Null
             Start-Sleep -Milliseconds 100
         } catch { }
+        if (($try % 2) -eq 0) {
+            try { [System.Windows.Forms.SendKeys]::SendWait("^%{BREAK}"); return } catch { }
+        }
         # Ctrl+Alt+Break。Break は実際のキーと同じ「VK_CANCEL (0x03) + 拡張スキャンコード 0x46」で送る
         [GuardApi]::keybd_event(0x11, 0, 0, 0); [GuardApi]::keybd_event(0x12, 0, 0, 0)
         [GuardApi]::keybd_event(0x03, 0x46, 1, 0)
         Start-Sleep -Milliseconds 60
         [GuardApi]::keybd_event(0x03, 0x46, 3, 0)
         [GuardApi]::keybd_event(0x12, 0, 2, 0); [GuardApi]::keybd_event(0x11, 0, 2, 0)
+    }
+    function Invoke-FullScreenToggle([IntPtr]$h) {
+        # メニュー『全画面』を WM_COMMAND で直接実行 (フォーカス不要)。無ければ Ctrl+Alt+Break を送る
+        $menu = [GuardApi]::GetMenu($h)
+        if ($menu -ne [IntPtr]::Zero) {
+            $id = Find-MenuId $menu '全画面|Full' 0
+            if ($id -ge 0) { [GuardApi]::PostMessage($h, 0x0111, [IntPtr]$id, [IntPtr]::Zero) | Out-Null; return }
+        }
+        Set-GuardForeground $h | Out-Null
+        Send-GuardCtrlAltBreak $h 1
+    }
+    # 全画面を解除する (ESC 長押し・ホットキー用)。1 回送って終わりにせず、解除できたかを確かめて繰り返す。
+    # 全画面のときは本体の窓ではなく「モニターを覆っている窓」を前面にしてからキーを送る
+    # (RDP 部品が別の窓で全画面にしている環境では、本体の窓を前面にしてもキーが届かなかった)。
+    # それでも解除できなければ、最後の手段としてコンソール窓を最小化 (収納) して左画面を明け渡す。
+    # 戻り値: "解除" / "収納" / "" (どちらもできなかった)
+    function Exit-GuardFullScreen([IntPtr]$h) {
+        for ($try = 1; $try -le 4; $try++) {
+            if (-not (Test-ConsoleFullScreenOn $left)) { return "解除" }
+            $target = Get-ConsoleFullScreenWindow $left
+            if ($target -eq [IntPtr]::Zero) { $target = $h }
+            if ($try -eq 1) {
+                # 本体側と同じく、まず Win32 メニューの『全画面』を WM_COMMAND で試す (フォーカス不要)
+                $menu = [GuardApi]::GetMenu($h)
+                if ($menu -ne [IntPtr]::Zero) {
+                    $id = Find-MenuId $menu '全画面|Full' 0
+                    if ($id -ge 0) {
+                        [GuardApi]::PostMessage($h, 0x0111, [IntPtr]$id, [IntPtr]::Zero) | Out-Null
+                        Start-Sleep -Milliseconds 1000
+                        if (-not (Test-ConsoleFullScreenOn $left)) { return "解除" }
+                    }
+                }
+            }
+            $fgOk = Set-GuardForeground $target
+            Send-GuardCtrlAltBreak $target $try
+            Start-Sleep -Milliseconds 1200
+            if (-not (Test-ConsoleFullScreenOn $left)) { return "解除" }
+            if ($try -eq 1 -or $try -eq 3) {
+                Log ("左画面の見張り役: 全画面の解除がまだ効きません (試行 $try / 前面化=" + $(if ($fgOk) { "成功" } else { "失敗" }) + ")。窓: " + (Get-ConsoleTopWindowDiag))
+            }
+        }
+        # 最後の手段: 収納 (最小化)。全画面のまま最小化されるので、戻すときは復元するだけで全画面に戻る
+        Log "左画面の見張り役: 全画面の切り替えが効かないため、コンソール窓を収納 (最小化) して左画面を明け渡します。"
+        if (Set-GuardStowed $true) { return "収納" }
+        return ""
+    }
+    # 収納 (最小化) ⇔ 復元。全画面のときに RDP 部品が別の窓を作る環境にも備えて、見えているトップレベルの窓すべてに掛ける
+    function Set-GuardStowed([bool]$stow) {
+        $wins = @(Get-ConsoleTopWindows)
+        $main = Get-ConsoleMain
+        if ($main -ne [IntPtr]::Zero -and ($wins -notcontains $main)) { $wins += $main }
+        if ($wins.Count -eq 0) { return $false }
+        if ($stow) {
+            foreach ($w in $wins) { [GuardApi]::ShowWindow($w, 6) | Out-Null }   # SW_MINIMIZE
+            Start-Sleep -Milliseconds 400
+            $m = Get-ConsoleMain
+            return ($m -eq [IntPtr]::Zero -or [GuardApi]::IsIconic($m))
+        }
+        foreach ($w in $wins) { if ([GuardApi]::IsIconic($w)) { [GuardApi]::ShowWindow($w, 9) | Out-Null } }   # SW_RESTORE
+        Start-Sleep -Milliseconds 400
+        $m = Get-ConsoleMain
+        if ($m -ne [IntPtr]::Zero) {
+            $fs = Get-ConsoleFullScreenWindow $left
+            Set-GuardForeground $(if ($fs -ne [IntPtr]::Zero) { $fs } else { $m }) | Out-Null
+        }
+        return $true
+    }
+    # キーが離されるまで待つ (最長 $maxMs)。押しっぱなしで何度も切り替わらないようにするための待ち。
+    # コンソールの中にフォーカスが移ると離した合図が見張り役に届かないことがあるため、待ちに上限を設ける
+    function Wait-KeysUp([int[]]$keys, [int]$maxMs) {
+        $t0 = Get-Date
+        while (((Get-Date) - $t0).TotalMilliseconds -lt $maxMs) {
+            $any = $false
+            foreach ($vk in $keys) { if (([GuardApi]::GetAsyncKeyState($vk) -band 0x8000) -ne 0) { $any = $true; break } }
+            if (-not $any) { return }
+            Start-Sleep -Milliseconds 50
+        }
     }
     function Show-Notice([string]$text) {
         # 右画面の右上に約 5 秒だけ出す小さな案内 (別プロセスが自分で閉じる)
@@ -793,6 +908,8 @@ public class GuardApi {
     $missingSince = $null; $lastRelaunch = [datetime]::MinValue   # コンソール窓が閉じられたときの立て直し用
     $lastCtrlAlt = [datetime]::MinValue   # Ctrl+Alt を押していた時刻 (自分で Ctrl+Alt+Break を押した解除を見分ける)
     $escSince = $null                     # ESC を押し始めた時刻 (長押しの判定)
+    $stowSince = $null                    # 収納キーを押し始めた時刻 (長押しの判定)
+    $stowed = $false                      # 収納中 (コンソール窓を最小化して左画面を明け渡している)
     $lastErrLog = [datetime]::MinValue
     $tick = 0
     function Test-ConsoleForeground {
@@ -817,25 +934,69 @@ public class GuardApi {
             #     入っている間は vmconnect がキーを EdgeBox へ渡して横取りするため、見張り役からは見えない。
             #     普通の ESC (短押し) は Windows のアプリでよく使うので、長押しだけを合図にする
             #     固定を解除したあとに窓の最大化ボタンで最大化した場合も、ESC 長押しで最大化を解除する
+            #     切り替えのキーは ESC を離してから送る (ESC を押したまま送ると、押しっぱなしの ESC が
+            #     前面にしたコンソールへ流れ込み、Ctrl+Alt+Break が組み合わせとして成立しないことがあった)。
+            #     1 回送って終わりにせず、解除できたかを確かめて繰り返し、駄目なら収納 (最小化) で明け渡す
             if (([GuardApi]::GetAsyncKeyState(0x1B) -band 0x8000) -ne 0) {
                 if (-not $escSince) { $escSince = Get-Date }
-                elseif (((Get-Date) - $escSince).TotalMilliseconds -ge 1000) {
+                elseif (((Get-Date) - $escSince).TotalMilliseconds -ge $HoldMs) {
+                    Wait-KeysUp @(0x1B) 3000
+                    $escSince = $null
                     $h = Get-ConsoleMain
                     if ($h -ne [IntPtr]::Zero -and (Test-ConsoleFullScreenOn $left)) {
                         $released = $true
-                        Invoke-FullScreenToggle $h
-                        Show-Notice "ESC 長押しで左画面の固定を解除しました ($hotkey でもう一度固定)"
-                        Log "左画面の見張り役: ESC 長押しにより固定を解除しました (自動では戻しません。再固定は $hotkey)。"
+                        $how = Exit-GuardFullScreen $h
+                        if ($how -eq "解除") {
+                            Show-Notice "ESC 長押しで左画面の固定を解除しました ($hotkey でもう一度固定)"
+                            Log "左画面の見張り役: ESC 長押しにより固定を解除しました (自動では戻しません。再固定は $hotkey)。"
+                        } elseif ($how -eq "収納") {
+                            $stowed = $true
+                            Show-Notice "ESC 長押し: 全画面の解除が効かないため、コンソールを収納しました ($stowHotkey 長押しで戻す)"
+                            Log "左画面の見張り役: ESC 長押し: 全画面を解除できなかったため、コンソールを収納 (最小化) しました (戻すには $stowHotkey 長押し / $hotkey)。"
+                        } else {
+                            Show-Notice "ESC 長押し: 全画面を解除できませんでした ($hotkey で固定の解除/再固定)"
+                            Log ("左画面の見張り役: ESC 長押し: 全画面を解除できませんでした (固定は解除扱い。再固定は $hotkey)。窓: " + (Get-ConsoleTopWindowDiag))
+                        }
                     } elseif ($h -ne [IntPtr]::Zero -and [GuardApi]::IsZoomed($h)) {
                         $released = $true
                         [GuardApi]::ShowWindow($h, 9) | Out-Null   # 最大化 → 元の大きさ
                         Show-Notice "ESC 長押しでコンソールの最大化を解除しました ($hotkey で全画面に固定)"
                         Log "左画面の見張り役: ESC 長押しにより最大化を解除しました (再固定は $hotkey)。"
                     }
-                    while (([GuardApi]::GetAsyncKeyState(0x1B) -band 0x8000) -ne 0) { Start-Sleep -Milliseconds 50 }
-                    $escSince = $null
                 }
             } else { $escSince = $null }
+            # (c) 収納キー ($stowHotkey) を 1 秒長押し → コンソール窓を収納 (最小化) して左画面を Windows に明け渡す。
+            #     もう一度長押し → 窓を戻し、左画面の全画面に固定し直す (全画面のまま最小化されていれば復元だけで戻る。
+            #     外れていれば見張り役が全画面に戻す)。ESC と同じく Windows 側を操作しているときに効く
+            $stowDown = $true
+            foreach ($vk in $stowKeys) { if (([GuardApi]::GetAsyncKeyState($vk) -band 0x8000) -eq 0) { $stowDown = $false; break } }
+            if ($stowDown) {
+                if (-not $stowSince) { $stowSince = Get-Date }
+                elseif (((Get-Date) - $stowSince).TotalMilliseconds -ge $HoldMs) {
+                    Wait-KeysUp $stowKeys 3000
+                    $stowSince = $null
+                    $h = Get-ConsoleMain
+                    if ($h -eq [IntPtr]::Zero) {
+                        Show-Notice "コンソール窓が見つかりません (『EdgeBox 画面』で表示し直せます)"
+                        Log "左画面の見張り役: $stowHotkey 長押し: コンソール窓が見つからないため何もしません。"
+                    } elseif (-not $stowed -and -not [GuardApi]::IsIconic($h)) {
+                        if (Set-GuardStowed $true) {
+                            $stowed = $true; $released = $true
+                            Show-Notice "コンソールを収納しました ($stowHotkey 長押しで全画面に戻す)"
+                            Log "左画面の見張り役: $stowHotkey 長押しによりコンソールを収納 (最小化) しました (戻すには $stowHotkey 長押し)。"
+                        } else {
+                            Show-Notice "コンソールを収納できませんでした"
+                            Log ("左画面の見張り役: $stowHotkey 長押し: コンソールを収納 (最小化) できませんでした。窓: " + (Get-ConsoleTopWindowDiag))
+                        }
+                    } else {
+                        Set-GuardStowed $false | Out-Null
+                        $stowed = $false; $released = $false
+                        $notCover = 3; $lastFs = [datetime]::MinValue   # 全画面が外れていれば次の見回りで戻す
+                        Show-Notice "コンソールを左画面の全画面に戻します ($stowHotkey 長押しで収納)"
+                        Log "左画面の見張り役: $stowHotkey 長押しによりコンソールを戻し、左画面の全画面に固定します。"
+                    }
+                }
+            } else { $stowSince = $null }
             # --- ホットキー: 固定の解除 ⇔ 再固定 ---
             $allDown = $true
             foreach ($vk in $vkeys) { if (([GuardApi]::GetAsyncKeyState($vk) -band 0x8000) -eq 0) { $allDown = $false; break } }
@@ -843,21 +1004,21 @@ public class GuardApi {
                 $released = -not $released
                 $h = Get-ConsoleMain
                 if ($released) {
-                    if ($h -ne [IntPtr]::Zero -and (Test-ConsoleFullScreenOn $left)) { Invoke-FullScreenToggle $h }
+                    if ($h -ne [IntPtr]::Zero -and (Test-ConsoleFullScreenOn $left)) {
+                        $how = Exit-GuardFullScreen $h
+                        if ($how -eq "収納") { $stowed = $true }
+                    }
                     Show-Notice "左画面の固定を解除しました ($hotkey でもう一度固定)"
                     Log "左画面の見張り役: $hotkey により固定を解除しました。"
                 } else {
+                    if ($stowed -or ($h -ne [IntPtr]::Zero -and [GuardApi]::IsIconic($h))) { Set-GuardStowed $false | Out-Null }
+                    $stowed = $false
                     Show-Notice "左画面を EdgeBox の全画面で固定しました ($hotkey で解除)"
                     Log "左画面の見張り役: $hotkey により固定に戻しました。"
                     $notCover = 3; $lastFs = [datetime]::MinValue
                 }
                 # キーが離されるまで待つ (押しっぱなしで何度も切り替わらないように)
-                while ($true) {
-                    $any = $false
-                    foreach ($vk in $vkeys) { if (([GuardApi]::GetAsyncKeyState($vk) -band 0x8000) -ne 0) { $any = $true } }
-                    if (-not $any) { break }
-                    Start-Sleep -Milliseconds 50
-                }
+                Wait-KeysUp $vkeys 5000
             }
             if (-not $released -and ($tick % 5) -eq 0) {
                 # 自分たちの補助ウィンドウ (起動中画面・黒背景) は動かさない。PID を 10 秒ごとに更新
@@ -1209,6 +1370,7 @@ if ($Settings) {
         if ($cfg.PSObject.Properties["ConsoleHideBar"]) { $out["ConsoleHideBar"] = ($cfg.ConsoleHideBar -ne $false) }
         if ($cfg.PSObject.Properties["LeftGuard"]) { $out["LeftGuard"] = ($cfg.LeftGuard -ne $false) }
         if ($cfg.PSObject.Properties["LeftGuardHotkey"]) { $out["LeftGuardHotkey"] = [string]$cfg.LeftGuardHotkey }
+        if ($cfg.PSObject.Properties["StowHotkey"]) { $out["StowHotkey"] = [string]$cfg.StowHotkey }
         $out["ConsoleAutoCloseV2"] = $true
         $out | ConvertTo-Json | Set-Content -Path $ConfigFile -Encoding UTF8
 
@@ -2248,7 +2410,8 @@ if (($LeftUrl -match '^(console|コンソール)$') -and ($cfg.LeftGuard -ne $fa
     Start-Process powershell.exe -WindowStyle Hidden -ArgumentList (
         "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" -LeftGuard -VMName `"$VMName`"")
     $hk = if ($cfg.LeftGuardHotkey) { [string]$cfg.LeftGuardHotkey } else { "Alt+F11" }
-    Log "左画面を EdgeBox の全画面で固定します (他の窓は右画面へ。解除/再固定: $hk。『設定』の[画面表示]で変更可)。"
+    $sk = if ($cfg.StowHotkey) { [string]$cfg.StowHotkey } else { "Ctrl+Alt+K" }
+    Log "左画面を EdgeBox の全画面で固定します (他の窓は右画面へ。解除/再固定: $hk / 収納⇔全画面: $sk 長押し。『設定』の[画面表示]で変更可)。"
 }
 
 Log "===== 表示処理を完了 ====="
