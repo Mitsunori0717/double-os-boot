@@ -551,15 +551,21 @@ function Draw-Memory($g, [int]$x, [int]$y, [int]$w, [int]$h) {
     $barY = $y + 22; $barH = 18
     $g.FillRectangle($BrFree, (Rect $x $barY $w $barH))
     if ($tot -gt 0) {
-        $wWin = [int]($w * [double]$m.WinGB / $tot)
-        $wVm  = [int]($w * [double]$m.VmGB / $tot)
+        # EdgeBox の取り分は、渡している量 (割り当て) で数える。
+        # vmmem として見えない構成があるため、見えない場合も割り当て量で色分けする
+        $vmGB = [double]$m.VmGB
+        if ($vmGB -le 0.1 -and $m.VmState -eq "Running") { $vmGB = [double]$m.VmAssignedGB }
+        # 使用中の合計から EdgeBox の分を引いたものが Windows の分
+        $winGB = [Math]::Max(0.0, ($tot - $m.FreeGB) - $vmGB)
+        $wWin = [int]($w * $winGB / $tot)
+        $wVm  = [int]($w * $vmGB / $tot)
         $g.FillRectangle($BrWin, (Rect $x $barY $wWin $barH))
         $g.FillRectangle($BrVm,  (Rect ($x + $wWin) $barY $wVm $barH))
         $g.DrawRectangle($PenNone, (Rect $x $barY $w $barH))
-        # 1 行目: Windows 側の負荷 (物理メモリの使用率・コミット率・ページング)
+        # 1 行目: PC 全体の内訳 (Windows / EdgeBox / 空き) とメモリの逼迫具合
         $winPct = if ($tot -gt 0) { 100.0 * ($tot - $m.FreeGB) / $tot } else { 0.0 }
-        $l1 = "PC 全体 {0:N1} GB    Windows 使用中 {1:N1} GB    空き {2:N1} GB (物理 {3:N0}% 使用)    コミット率 {4:N0}%    ページング {5:N0} /秒" -f `
-            $tot, $m.WinGB, $m.FreeGB, $winPct, $m.WinCommitPct, $m.WinPagesPerSec
+        $l1 = "PC 全体 {0:N1} GB    Windows {1:N1} GB    {2} {3:N1} GB    空き {4:N1} GB (物理 {5:N0}% 使用)    コミット率 {6:N0}%    ページング {7:N0} /秒" -f `
+            $tot, $winGB, $VMName, $vmGB, $m.FreeGB, $winPct, $m.WinCommitPct, $m.WinPagesPerSec
         $brL1 = $BrText
         if ($m.WinCommitPct -ge 90 -or $m.WinPagesPerSec -ge 1000) { $brL1 = $BrBad }
         $g.DrawString($l1, $FontBody, $brL1, (PointF $x ($barY + $barH + 4)))
@@ -571,8 +577,9 @@ function Draw-Memory($g, [int]$x, [int]$y, [int]$w, [int]$h) {
                 $VMName, $m.VmAssignedGB, $usedIn, $m.VmAvailGB, $inPct, $m.VmDemandGB, $m.VmPressure, $(if ($m.VmMemStatus) { $m.VmMemStatus } else { "-" })
             $brL2 = if ($m.VmPressure -ge 90 -or $m.VmMemStatus -match 'Low|Warning') { $BrBad } else { $BrText }
         } else {
-            $l2 = "{0} 割り当て {1:N1} GB" -f $VMName, $m.VmAssignedGB
-            $brL2 = $BrText
+            $l2 = "{0} 割り当て {1:N1} GB    (量の変更は『CPU コア割り当て』画面の「メモリの割り当て」から)" -f `
+                $VMName, $m.VmAssignedGB
+            $brL2 = $BrGray
         }
         $g.DrawString($l2, $FontBody, $brL2, (PointF $x ($barY + $barH + 22)))
     } else {
