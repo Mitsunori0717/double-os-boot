@@ -873,7 +873,7 @@ public class GuardApi {
         # (覆いは左端のモニターだけなので、右画面の Windows 作業はそのまま続けられる)
         Start-Process powershell.exe -WindowStyle Hidden -ArgumentList (
             "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" -VMName `"$VMName`" -LeftUrl console -RightUrl `"`" -KeepConsole " +
-            "-CoverText `"左画面を全画面に戻しています`"")
+            "-CoverText `"FsBP の画面表示を戻しています`"")
     }
     # 収納: コンソール窓を閉じて左画面を Windows に明け渡す (EdgeBox は動き続ける)。
     #   全画面の解除や最小化は使わない: 全画面のまま最小化すると戻したときに真っ白になり、
@@ -1091,7 +1091,7 @@ public class GuardApi {
                             # 立ち上げ直しの間は左画面を「EdgeBox 起動中」で覆う (組み立て中の窓を見せない)
                             Start-Process powershell.exe -WindowStyle Hidden -ArgumentList (
                                 "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" -VMName `"$VMName`" -LeftUrl console -RightUrl `"`" -KeepConsole " +
-                                "-CoverText `"左画面を全画面に戻しています`"")
+                                "-CoverText `"FsBP の画面表示を戻しています`"")
                             Start-Sleep -Seconds 20   # 立ち上げ直し (この見張り役も入れ替わる) の間は何もしない
                         }
                     }
