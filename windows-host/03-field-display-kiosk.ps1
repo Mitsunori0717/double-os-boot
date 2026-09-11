@@ -864,8 +864,11 @@ public class GuardApi {
     }
     # 左画面のコンソール表示を立ち上げ直す (電源 ON のときと同じ流れで全画面になる。見張り役も新しいものに入れ替わる)
     function Start-GuardConsole {
+        # -NoSplash は付けない: 立ち上げ直しの間、左画面を「EdgeBox 起動中」の黒い画面で覆う。
+        # 組み立て中の小さい窓を見せず、覆いが外れた時点ですでに全画面になっている
+        # (覆いは左端のモニターだけなので、右画面の Windows 作業はそのまま続けられる)
         Start-Process powershell.exe -WindowStyle Hidden -ArgumentList (
-            "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" -VMName `"$VMName`" -LeftUrl console -RightUrl `"`" -NoSplash -KeepConsole")
+            "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" -VMName `"$VMName`" -LeftUrl console -RightUrl `"`" -KeepConsole")
     }
     # 収納: コンソール窓を閉じて左画面を Windows に明け渡す (EdgeBox は動き続ける)。
     #   全画面の解除や最小化は使わない: 全画面のまま最小化すると戻したときに真っ白になり、
@@ -1080,8 +1083,9 @@ public class GuardApi {
                         if ($vmState -eq "Running") {
                             $lastRelaunch = Get-Date; $missingSince = $null
                             Log "左画面の見張り役: コンソール窓が閉じられていたため、左画面の表示を立ち上げ直します。"
+                            # 立ち上げ直しの間は左画面を「EdgeBox 起動中」で覆う (組み立て中の窓を見せない)
                             Start-Process powershell.exe -WindowStyle Hidden -ArgumentList (
-                                "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" -VMName `"$VMName`" -LeftUrl console -RightUrl `"`" -NoSplash -KeepConsole")
+                                "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" -VMName `"$VMName`" -LeftUrl console -RightUrl `"`" -KeepConsole")
                             Start-Sleep -Seconds 20   # 立ち上げ直し (この見張り役も入れ替わる) の間は何もしない
                         }
                     }
