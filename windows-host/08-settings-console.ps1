@@ -70,7 +70,8 @@ if ($Setup) {
     $taskName = "EdgeBox-Settings-Console"
     $action = New-ScheduledTaskAction -Execute "powershell.exe" `
         -Argument "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$PSCommandPath`""
-    $ts = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -ExecutionTimeLimit (New-TimeSpan -Hours 2)
+    # 時間制限なし + 多重起動可 (設定コンソールから表示処理を呼ぶと常駐プロセスが残るため。理由は 10-restart-edgebox.ps1 の -Setup を参照)
+    $ts = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -MultipleInstances Parallel -ExecutionTimeLimit (New-TimeSpan -Seconds 0)
     Register-ScheduledTask -TaskName $taskName -Action $action -Settings $ts -RunLevel Highest -Force | Out-Null
 
     $lnkPath = Join-Path $desktop "設定.lnk"

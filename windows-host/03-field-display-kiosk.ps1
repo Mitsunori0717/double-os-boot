@@ -1436,7 +1436,9 @@ if ($Install) {
         Write-Error "管理者権限で実行してください (スタートボタンを右クリック →『ターミナル (管理者)』または『Windows PowerShell (管理者)』)。"
         exit 1
     }
-    $taskSettings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -ExecutionTimeLimit (New-TimeSpan -Hours 1)
+    # 時間制限なし + 多重起動可。表示処理は見張り役などの常駐プロセスを残すため、タスクは「実行中」のままになる。
+    # 時間制限があると、その時間が来たときにタスクごと (常駐プロセスも) 止められてしまう
+    $taskSettings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -MultipleInstances Parallel -ExecutionTimeLimit (New-TimeSpan -Seconds 0)
 
     # 起動中画面 (スプラッシュ) は独立のタスクとして先に走らせる。
     # サインイン直後の数秒はデスクトップの準備中で不安定なため、少しだけ遅らせる
@@ -1498,6 +1500,31 @@ if (-not $RightUrl -and -not $LeftUrl) {
 # ログが育ちすぎないように、大きくなったら作り直す
 if ((Test-Path $LogFile) -and ((Get-Item $LogFile).Length -gt 200KB)) { Remove-Item $LogFile -Force }
 Log "===== 表示処理を開始 (左=$LeftUrl / 右=$RightUrl) ====="
+
+# アイコン用のタスク (『EdgeBox 再起動』『EdgeBox 画面』『設定』『EdgeBox 起動』とログオン時の表示) の設定を直す。
+# 表示処理は見張り役などの常駐プロセスを残すため、タスクは「実行中」のままになる。旧設定 (時間制限 1 時間・
+# 多重起動不可) のままだと、1 時間後にタスクごと常駐プロセスが止められ、「実行中」の間はアイコンを押しても
+# 何も起きない。アイコンを作り直さなくても済むよう、表示処理 (管理者で動く) のたびに設定だけ直す
+function Repair-LauncherTasks {
+    try {
+        $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
+            ).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+        if (-not $isAdmin) { return }
+        $fixed = @()
+        foreach ($tn in @($TaskName, "$TaskName-Splash", "EdgeBox-Restart", "EdgeBox-Console", "EdgeBox-Settings-Console", "EdgeBox-Launcher")) {
+            $t = Get-ScheduledTask -TaskName $tn -ErrorAction SilentlyContinue
+            if (-not $t) { continue }
+            $limit = [string]$t.Settings.ExecutionTimeLimit
+            $multi = [string]$t.Settings.MultipleInstances
+            if (($limit -eq "PT0S" -or $limit -eq "") -and $multi -eq "Parallel") { continue }
+            $ts = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -MultipleInstances Parallel -ExecutionTimeLimit (New-TimeSpan -Seconds 0)
+            Set-ScheduledTask -TaskName $tn -Settings $ts -ErrorAction Stop | Out-Null
+            $fixed += $tn
+        }
+        if ($fixed.Count -gt 0) { Log ("アイコン用タスクの設定を直しました (時間制限なし・多重起動可): " + ($fixed -join ", ")) }
+    } catch { Log ("アイコン用タスクの設定を直せませんでした: " + $_.Exception.Message) }
+}
+Repair-LauncherTasks
 
 # --- 起動中画面: 表示がそろうまでデスクトップを黒い画面で覆う ---
 function Stop-Splash {
