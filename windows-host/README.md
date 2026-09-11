@@ -185,8 +185,32 @@ Git は不要)。端末ごとの設定ファイル (display-config.json / cpu-pa
 | `08-settings-console.ps1` | 『EdgeBox設定』(統合設定コンソール) |
 | `09-rename-to-edgebox.ps1` | 旧名称の登録を EdgeBox に改名 (CPU 分割の設定も追従) |
 | `10-restart-edgebox.ps1` | 『EdgeBox 再起動』『EdgeBox 画面』 |
+| `11-io-passthrough.ps1` | 入出力の素通し: メモリの固定 + LAN の直結 (SR-IOV)。引数なし = 確認のみ / `-Apply` = 適用 |
 | `99-fix-black-screen.ps1` / `fix-black-screen.cmd` | 黒画面の復旧 |
 | `SETUP-STEPS.md` | 手順書 (①〜⑩・運用ルール・切り分けフロー) |
+
+## 入出力を素通しに近づける (11-io-passthrough.ps1)
+
+CPU は完全分離で EdgeBox 専用のコアの上で直接動いています。残る「仮想化らしさ」は
+メモリの割り当て方と、ディスク・LAN の入出力が Windows 側を経由することです。
+このうち **メモリの固定** と **LAN の直結 (SR-IOV)** は次の 1 本で確認・適用できます。
+
+```powershell
+.\11-io-passthrough.ps1            # 現状と「あと何が必要か」を表示 (何も変えない)
+.\11-io-passthrough.ps1 -Apply     # メモリ固定 + SR-IOV を適用 (EdgeBox を正常停止 → 適用 → 起動)
+```
+
+- **メモリの固定**: 動的メモリになっていれば、起動時の量で固定にします (`-MemoryGB 8` で量を指定可)
+- **SR-IOV**: LAN アダプターがハードウェアで持つ分身を EdgeBox に直接渡します。有効になると
+  EdgeBox の通信が Windows 側の CPU を経由しません。条件は 3 つで、確認画面に ○× で出ます:
+  1. BIOS で VT-d と SR-IOV が有効 (× のときは理由と BIOS の項目名を表示)
+  2. EdgeBox 用の LAN ポートのドライバーが SR-IOV 対応 (Intel I350 / X550 / I210 などのカードは対応。
+     マザーボード内蔵の I225 / I226 / Realtek は非対応のことが多い)
+  3. スイッチが SR-IOV 有効で作られている (`-Apply` が同じ名前・同じ設定で作り直します。
+     Windows 側の固定 IP は控えて戻します)
+- EdgeBox 側に対応ドライバーが無い場合は従来の経路のまま動き続けます (悪化はしません)。
+  「EdgeBox が実際に直結で通信中」が ○ になれば成功です
+- ディスクの直結 (NVMe をまるごと渡す) は Windows Server 専用機能のため、Pro ではできません
 
 ## 注意
 
