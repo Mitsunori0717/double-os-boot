@@ -665,7 +665,46 @@ function Draw-All($g, [int]$W, [int]$H) {
 
 # ============================================================ ウィンドウ
 
+# --- 普通のアプリらしく見せる: 専用のアイコンと、タスクバーでの独立 ---
+# これを入れないと、PowerShell のアイコンで PowerShell と同じ束にまとめられてしまう
+if (-not ("Win.AppShell" -as [type])) {
+    Add-Type -Namespace Win -Name AppShell -MemberDefinition @'
+[DllImport("shell32.dll", CharSet = CharSet.Unicode)]
+public static extern int SetCurrentProcessExplicitAppUserModelID(string AppID);
+'@ -ErrorAction SilentlyContinue
+}
+try { [Win.AppShell]::SetCurrentProcessExplicitAppUserModelID("EdgeBox.Monitor") | Out-Null } catch { }
+
+function Get-AppIcon([string]$Style) {
+    try {
+        Add-Type -AssemblyName System.Drawing -ErrorAction Stop
+        $bmp = New-Object System.Drawing.Bitmap 32, 32
+        $g = [System.Drawing.Graphics]::FromImage($bmp)
+        $g.Clear([System.Drawing.Color]::Transparent)
+        $body = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb(38, 62, 110))
+        $win  = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb(80, 148, 232))
+        $vm   = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb(104, 196, 138))
+        $g.FillRectangle($body, 3, 3, 26, 26)
+        switch ($Style) {
+            "monitor" {
+                $g.FillRectangle($win, 8, 17, 5, 7); $g.FillRectangle($vm, 14, 10, 5, 14); $g.FillRectangle($win, 20, 19, 5, 5)
+            }
+            "settings" {
+                $g.FillRectangle($win, 8, 9, 16, 4); $g.FillRectangle($vm, 8, 16, 16, 4); $g.FillRectangle($win, 8, 23, 10, 3)
+            }
+            default {
+                $g.FillRectangle($win, 8, 8, 6, 16); $g.FillRectangle($vm, 18, 8, 6, 16)
+            }
+        }
+        $g.Dispose()
+        $ico = [System.Drawing.Icon]::FromHandle($bmp.GetHicon())
+        return $ico
+    } catch { return $null }
+}
+
 $form = New-Object System.Windows.Forms.Form
+$appIcon = Get-AppIcon "monitor"
+if ($appIcon) { $form.Icon = $appIcon }
 $form.Text = "$VMName 監視 — 各コアの負荷とメモリ"
 $form.ClientSize = New-Object System.Drawing.Size(1120, 600)
 $form.StartPosition = "CenterScreen"
