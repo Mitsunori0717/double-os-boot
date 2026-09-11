@@ -248,55 +248,6 @@ if (-not (Test-Path $ConfigFile)) {
 }
 $cfg = Get-Content $ConfigFile -Raw -Encoding UTF8 | ConvertFrom-Json
 
-$ResolutionChoices = @(
-    "自動 (モニターに合わせる)",
-    "1920x1080", "1920x1200", "1680x1050", "1600x900",
-    "1440x900", "1366x768", "1280x1024", "1280x720", "1024x768"
-)
-
-function Resolve-ResolutionText([string]$text) {
-    $t = ([string]$text).Trim()
-    if (-not $t) { return $null }
-    if ($t -match '^(auto|自動)') {
-        $b = (@([System.Windows.Forms.Screen]::AllScreens | Sort-Object { $_.Bounds.X })[0]).Bounds
-        return [pscustomobject]@{ W = $b.Width; H = $b.Height }
-    }
-    if ($t -match '^(\d{3,5})\s*[xX×*]\s*(\d{3,5})$') {
-        return [pscustomobject]@{ W = [int]$Matches[1]; H = [int]$Matches[2] }
-    }
-    return $null
-}
-
-function Set-ConsoleResolution([int]$w, [int]$h) {
-    $vm = Get-VM -Name $VMName -ErrorAction SilentlyContinue
-    if (-not $vm) { return "登録 '$VMName' が見つからないため、解像度は反映していません。" }
-    if ($vm.State -eq "Off") {
-        Set-VMVideo -VMName $VMName -ResolutionType Single -HorizontalResolution $w -VerticalResolution $h
-        return "コンソールの解像度を ${w}x${h} にしました。"
-    }
-    $r = [System.Windows.Forms.MessageBox]::Show(
-        "コンソールの解像度を ${w}x${h} にするには、EdgeBox をいったん終了して起動し直す必要があります。`n`n" +
-        "今すぐ再起動しますか?`n[はい] 正常終了 → 変更 → 起動し直す`n[いいえ] 設定だけ保存 (次回起動時に反映)",
-        "設定",
-        [System.Windows.Forms.MessageBoxButtons]::YesNo,
-        [System.Windows.Forms.MessageBoxIcon]::Question)
-    if ($r -ne [System.Windows.Forms.DialogResult]::Yes) {
-        return "解像度は保存のみ。次に EdgeBox を起動し直したときに反映されます。"
-    }
-    Stop-VM -Name $VMName
-    $sw = [System.Diagnostics.Stopwatch]::StartNew()
-    while ($sw.Elapsed.TotalSeconds -lt 180) {
-        if ((Get-VM -Name $VMName).State -eq "Off") { break }
-        Start-Sleep -Seconds 3
-    }
-    if ((Get-VM -Name $VMName).State -ne "Off") {
-        return "EdgeBox が3分以内に停止しませんでした。解像度は変更していません。"
-    }
-    Set-VMVideo -VMName $VMName -ResolutionType Single -HorizontalResolution $w -VerticalResolution $h
-    Start-VM -Name $VMName
-    return "解像度を ${w}x${h} にして EdgeBox を起動し直しました。"
-}
-
 # ============================================================
 #  画面の構築
 # ============================================================
@@ -304,7 +255,7 @@ $form = New-Object System.Windows.Forms.Form
 $form.Text = "設定"
 $form.TopMost = $true          # 全画面表示のブラウザ等に隠れないように
 $form.Add_Shown({ $form.Activate() })
-$form.Size = New-Object System.Drawing.Size(660, 560)
+$form.Size = New-Object System.Drawing.Size(640, 340)
 $form.StartPosition = "CenterScreen"
 $form.FormBorderStyle = "FixedDialog"
 $form.MaximizeBox = $false
@@ -323,110 +274,14 @@ function New-Check($text, $x, $y, $w, $checked) {
     return $c
 }
 
-$tabs = New-Object System.Windows.Forms.TabControl
-$tabs.Location = New-Object System.Drawing.Point(12, 12)
-$tabs.Size = New-Object System.Drawing.Size(620, 440)
-
-# ------------------------------------------------------------
-#  タブ1: 画面表示
-# ------------------------------------------------------------
-$tp1 = New-Object System.Windows.Forms.TabPage
-$tp1.Text = "画面表示"
-$tp1.BackColor = [System.Drawing.SystemColors]::Control
-
-$tp1.Controls.Add((New-Label "モニターに表示する内容 (URL / console = EdgeBox のコンソール画面 / 空欄 = 表示しない)" 15 15))
-
-$tp1.Controls.Add((New-Label "左モニター:" 15 45))
-$tbL = New-Object System.Windows.Forms.TextBox
-$tbL.Location = New-Object System.Drawing.Point(110, 42)
-$tbL.Size = New-Object System.Drawing.Size(360, 24)
-$tbL.Text = [string]$cfg.LeftUrl
-$tp1.Controls.Add($tbL)
-$cbLF = New-Check "全画面" 485 44 100 ($cfg.LeftFullScreen -eq $true)
-$tp1.Controls.Add($cbLF)
-
-$tp1.Controls.Add((New-Label "右モニター:" 15 80))
-$tbR = New-Object System.Windows.Forms.TextBox
-$tbR.Location = New-Object System.Drawing.Point(110, 77)
-$tbR.Size = New-Object System.Drawing.Size(360, 24)
-$tbR.Text = [string]$cfg.RightUrl
-$tp1.Controls.Add($tbR)
-$cbRF = New-Check "全画面" 485 79 100 ($cfg.RightFullScreen -eq $true)
-$tp1.Controls.Add($cbRF)
-
-$lblFs = New-Label "右モニター 空欄 = 通常のデスクトップ (起動中だけ『EdgeBox 起動中』を表示) / 全画面 = 枠なしで画面全体" 110 108
-$lblFs.ForeColor = [System.Drawing.Color]::DimGray
-$tp1.Controls.Add($lblFs)
-
-$cbEsc = New-Check "ESC キーでブラウザの全画面/最大化を解除する (ブラウザが前面のときのみ)" 15 140 580 ($cfg.EscEnabled -ne $false)
-$tp1.Controls.Add($cbEsc)
-$cbSF = New-Check "コンソールの全画面が効かないときは、黒背景の上に中央表示する (代替の全画面)" 15 170 580 ($cfg.ConsoleStripFrame -ne $false)
-$tp1.Controls.Add($cbSF)
-$cbAC = New-Check "EdgeBox の起動を確認したら、コンソール画面を自動で閉じる (通常はオフ。閉じても EdgeBox は動き続ける)" 15 200 580 ($cfg.ConsoleAutoClose -eq $true)
-$tp1.Controls.Add($cbAC)
-$cbBar = New-Check "コンソールが全画面のとき、上の接続バー (「localhost 上の EdgeBox」の帯) を表示しない" 15 230 580 ($cfg.ConsoleHideBar -ne $false)
-$tp1.Controls.Add($cbBar)
-$lgHot = if ($cfg.LeftGuardHotkey) { [string]$cfg.LeftGuardHotkey } else { "Alt+F11" }
-$cbLG = New-Check "左画面を EdgeBox の全画面で固定する (他の窓は右画面へ移し、全画面が外れたら戻す。解除/再固定: $lgHot)" 15 260 580 ($cfg.LeftGuard -ne $false)
-$tp1.Controls.Add($cbLG)
-
-$grpRes = New-Object System.Windows.Forms.GroupBox
-$grpRes.Text = "コンソールの表示サイズ (EdgeBox 側の画面解像度)"
-$grpRes.Location = New-Object System.Drawing.Point(15, 300)
-$grpRes.Size = New-Object System.Drawing.Size(580, 120)
-
-$cbFit = New-Check "モニターいっぱいに全画面表示する (解像度をモニターに合わせ、全画面にする)" 15 25 550 $false
-$grpRes.Controls.Add($cbFit)
-
-$grpRes.Controls.Add((New-Label "解像度:" 15 62))
-$cmbRes = New-Object System.Windows.Forms.ComboBox
-$cmbRes.Location = New-Object System.Drawing.Point(85, 59)
-$cmbRes.Size = New-Object System.Drawing.Size(220, 24)
-$cmbRes.DropDownStyle = "DropDown"
-$cmbRes.Items.AddRange($ResolutionChoices)
-$cmbRes.Text = if ($cfg.ConsoleResolution) { [string]$cfg.ConsoleResolution } else { $ResolutionChoices[0] }
-$grpRes.Controls.Add($cmbRes)
-$lblRes = New-Label "一覧にないサイズは直接入力 (例: 2560x1440)" 315 62
-$lblRes.ForeColor = [System.Drawing.Color]::DimGray
-$grpRes.Controls.Add($lblRes)
-$lblRes2 = New-Label "※ 変更は EdgeBox の起動し直しで反映 (保存時に選択できます)" 15 90
-$lblRes2.ForeColor = [System.Drawing.Color]::DimGray
-$grpRes.Controls.Add($lblRes2)
-$tp1.Controls.Add($grpRes)
-
-$resCur = [string]$cfg.ConsoleResolution
-$consoleFull = if (([string]$cfg.LeftUrl) -match '^(console|コンソール)$') { $cfg.LeftFullScreen -eq $true }
-               elseif (([string]$cfg.RightUrl) -match '^(console|コンソール)$') { $cfg.RightFullScreen -eq $true }
-               else { $false }
-$cbFit.Checked = (((-not $resCur) -or ($resCur -match '^(auto|自動)')) -and $consoleFull)
-$syncFit = {
-    if ($cbFit.Checked) {
-        $cmbRes.Text = $ResolutionChoices[0]
-        $cmbRes.Enabled = $false
-        if ($tbL.Text.Trim() -match '^(console|コンソール)$') { $cbLF.Checked = $true }
-        if ($tbR.Text.Trim() -match '^(console|コンソール)$') { $cbRF.Checked = $true }
-    } else {
-        $cmbRes.Enabled = $true
-    }
-}
-$cbFit.Add_CheckedChanged($syncFit)
-& $syncFit
-
-# ------------------------------------------------------------
-#  タブ2: 自動サインイン
-# ------------------------------------------------------------
-$tp2 = New-Object System.Windows.Forms.TabPage
-$tp2.Text = "自動サインイン"
-$tp2.BackColor = [System.Drawing.SystemColors]::Control
-
 $alState = Get-AutoLogonState
 
 $cbAuto = New-Check "電源 ON でサインイン画面を省略し、デスクトップまで自動で進む" 15 20 580 $alState.Enabled
-$tp2.Controls.Add($cbAuto)
+$form.Controls.Add($cbAuto)
 
 $grpAcc = New-Object System.Windows.Forms.GroupBox
 $grpAcc.Text = "サインインするアカウント"
-$grpAcc.Location = New-Object System.Drawing.Point(15, 55)
+$grpAcc.Location = New-Object System.Drawing.Point(15, 52)
 $grpAcc.Size = New-Object System.Drawing.Size(580, 150)
 $grpAcc.Controls.Add((New-Label "アカウント名:" 15 32))
 $tbUser = New-Object System.Windows.Forms.TextBox
@@ -447,42 +302,24 @@ $grpAcc.Controls.Add($lblPw)
 $lblPw2 = New-Label "※ PIN は使えません。Windows のパスワードを入力してください。" 15 122
 $lblPw2.ForeColor = [System.Drawing.Color]::DimGray
 $grpAcc.Controls.Add($lblPw2)
-$tp2.Controls.Add($grpAcc)
+$form.Controls.Add($grpAcc)
 
 $lblAl = New-Label "現在: $(if ($alState.Enabled) { '有効' } else { '無効' })  ($($alState.Domain)\$($alState.UserName))" 15 220
-$tp2.Controls.Add($lblAl)
+$form.Controls.Add($lblAl)
 
-$btnNet = New-Object System.Windows.Forms.Button
-$btnNet.Text = "うまくいかないときは: Windows 標準の方法 (netplwiz)"
-$btnNet.Location = New-Object System.Drawing.Point(15, 250)
-$btnNet.Size = New-Object System.Drawing.Size(340, 32)
-$btnNet.Add_Click({
-    if (-not (Test-Path $PwdLessKey)) { New-Item -Path $PwdLessKey -Force | Out-Null }
-    Set-ItemProperty $PwdLessKey -Name DevicePasswordLessBuildVersion -Value 0 -Type DWord
-    Start-Process netplwiz.exe
-    [System.Windows.Forms.MessageBox]::Show(
-        "Windows 標準の『ユーザー アカウント』画面を開きました。`n`n" +
-        "1. 一覧からアカウントを選ぶ`n" +
-        "2.『ユーザーがこのコンピューターを使うには…入力が必要』のチェックを外す`n" +
-        "3.『OK』→ パスワードを2回入力",
-        "設定") | Out-Null
-})
-$tp2.Controls.Add($btnNet)
 
-$tabs.TabPages.AddRange(@($tp1, $tp2))
-$form.Controls.Add($tabs)
 
 # ------------------------------------------------------------
 #  保存 / 閉じる
 # ------------------------------------------------------------
 $btnOK = New-Object System.Windows.Forms.Button
 $btnOK.Text = "保存"
-$btnOK.Location = New-Object System.Drawing.Point(430, 468)
+$btnOK.Location = New-Object System.Drawing.Point(400, 252)
 $btnOK.Size = New-Object System.Drawing.Size(90, 34)
 $btnOK.DialogResult = "OK"
 $btnCancel = New-Object System.Windows.Forms.Button
 $btnCancel.Text = "閉じる"
-$btnCancel.Location = New-Object System.Drawing.Point(535, 468)
+$btnCancel.Location = New-Object System.Drawing.Point(505, 252)
 $btnCancel.Size = New-Object System.Drawing.Size(90, 34)
 $btnCancel.DialogResult = "Cancel"
 $form.Controls.AddRange(@($btnOK, $btnCancel))
@@ -493,43 +330,7 @@ if ($form.ShowDialog() -ne "OK") { exit 0 }
 
 $messages = @()
 
-# --- 1. 画面表示の保存 ---
-$resText = $cmbRes.Text.Trim()
-$res = Resolve-ResolutionText $resText
-$resChanged = ($resText -ne [string]$cfg.ConsoleResolution)
-if (-not $res) {
-    $messages += "解像度の指定『$resText』は解釈できないため、前の値のままにしました。"
-    $resText = [string]$cfg.ConsoleResolution
-    $resChanged = $false
-}
-$out = [ordered]@{
-    "_説明"             = "EdgeBox 表示の設定。『設定』アイコンから編集できます。"
-    "RightUrl"          = $tbR.Text.Trim()
-    "RightFullScreen"   = $cbRF.Checked
-    "LeftUrl"           = $tbL.Text.Trim()
-    "LeftFullScreen"    = $cbLF.Checked
-    "EscEnabled"        = $cbEsc.Checked
-    "ConsoleStripFrame" = $cbSF.Checked
-    "ConsoleAutoClose"  = $cbAC.Checked
-    "ConsoleAutoCloseV2" = $true
-    "RightBrowserV2"    = $true    # 右画面の既定を切り替え済み (03 側の一度きりの移行を再実行させない)
-    "ConsoleHideBar"    = $cbBar.Checked
-    "LeftGuard"         = $cbLG.Checked
-    "LeftGuardHotkey"   = $lgHot
-    "ConsoleResolution" = $resText
-}
-# 手動で追加できる詳細設定 (自動クローズまでの秒数) は保存で消さない
-if ($cfg.PSObject.Properties["ConsoleAutoCloseDelaySec"]) {
-    $out["ConsoleAutoCloseDelaySec"] = [int]$cfg.ConsoleAutoCloseDelaySec
-}
-$out | ConvertTo-Json | Set-Content -Path $ConfigFile -Encoding UTF8
-$messages += "画面表示の設定を保存しました (次回の表示から反映)。"
-if ($res -and $resChanged) {
-    try { $messages += (Set-ConsoleResolution $res.W $res.H) }
-    catch { $messages += "解像度の変更に失敗しました: $($_.Exception.Message)" }
-}
-
-# --- 2. 自動サインインの保存 ---
+# --- 自動サインインの保存 ---
 try {
     if ($cbAuto.Checked) {
         $acct = Split-Account $tbUser.Text
