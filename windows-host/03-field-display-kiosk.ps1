@@ -26,6 +26,7 @@ param(
     [switch]$EscWatcher,
     [switch]$Splash,
     [switch]$NoSplash,
+    [string]$CoverText = "",     # 左画面の覆いに出す文字 (既定: 電源 ON 時の「EdgeBox 起動中」)
     [switch]$Backdrop,
     [string]$BackdropBounds,
     [switch]$Notice,          # 内部用: 右画面の右上に数秒だけ出す小さな案内 (別プロセスで自分で閉じる)
@@ -266,6 +267,9 @@ if ($Splash) {
     $script:SplashForms = @()
     $script:SplashDots = 0
     $script:SplashCheck = 0
+    # 覆いに出す文字。電源 ON のときは「EdgeBox 起動中」、
+    # 表示だけ戻すとき (Ctrl+Alt+K など) は呼び出し側が「画面を戻しています」などを渡す
+    $script:SplashMsg = if ($CoverText) { $CoverText } else { "EdgeBox 起動中" }
     # 表示処理の本体 (このスクリプトを補助モードなしで実行しているプロセス) が動いているか。
     # 本体が起動しなかった / 途中で止まった場合に、黒い画面だけが残らないようにするための確認
     function Test-MainRunning {
@@ -294,7 +298,7 @@ if ($Splash) {
         $main.BackColor = [System.Drawing.Color]::Black
         $main.ForeColor = [System.Drawing.Color]::White
         $main.Font = New-Object System.Drawing.Font("Meiryo UI", 26)
-        $main.Text = "EdgeBox 起動中"
+        $main.Text = $script:SplashMsg
         # 下の説明文 (進み具合) は出さない。「EdgeBox 起動中」だけ
         $f.Controls.Add($main)
         return $f
@@ -345,7 +349,7 @@ if ($Splash) {
         foreach ($f in $script:SplashForms) {
             if ($f.IsDisposed) { continue }
             foreach ($c in $f.Controls) {
-                if ($c.Name -eq "main") { $c.Text = "EdgeBox 起動中" + ("." * $script:SplashDots) }
+                if ($c.Name -eq "main") { $c.Text = $script:SplashMsg + ("." * $script:SplashDots) }
             }
         }
         Sync-SplashScreens
@@ -868,7 +872,8 @@ public class GuardApi {
         # 組み立て中の小さい窓を見せず、覆いが外れた時点ですでに全画面になっている
         # (覆いは左端のモニターだけなので、右画面の Windows 作業はそのまま続けられる)
         Start-Process powershell.exe -WindowStyle Hidden -ArgumentList (
-            "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" -VMName `"$VMName`" -LeftUrl console -RightUrl `"`" -KeepConsole")
+            "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" -VMName `"$VMName`" -LeftUrl console -RightUrl `"`" -KeepConsole " +
+            "-CoverText `"左画面を全画面に戻しています`"")
     }
     # 収納: コンソール窓を閉じて左画面を Windows に明け渡す (EdgeBox は動き続ける)。
     #   全画面の解除や最小化は使わない: 全画面のまま最小化すると戻したときに真っ白になり、
@@ -1085,7 +1090,8 @@ public class GuardApi {
                             Log "左画面の見張り役: コンソール窓が閉じられていたため、左画面の表示を立ち上げ直します。"
                             # 立ち上げ直しの間は左画面を「EdgeBox 起動中」で覆う (組み立て中の窓を見せない)
                             Start-Process powershell.exe -WindowStyle Hidden -ArgumentList (
-                                "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" -VMName `"$VMName`" -LeftUrl console -RightUrl `"`" -KeepConsole")
+                                "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" -VMName `"$VMName`" -LeftUrl console -RightUrl `"`" -KeepConsole " +
+                                "-CoverText `"左画面を全画面に戻しています`"")
                             Start-Sleep -Seconds 20   # 立ち上げ直し (この見張り役も入れ替わる) の間は何もしない
                         }
                     }
@@ -1580,8 +1586,9 @@ if (-not $NoSplash) {
     $existing = @(Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" -ErrorAction SilentlyContinue |
         Where-Object { $_.CommandLine -match '-Splash' -and $_.ProcessId -ne $PID })
     if ($existing.Count -eq 0) {
+        $stArg = if ($CoverText) { " -CoverText `"$CoverText`"" } else { "" }
         Start-Process powershell.exe -WindowStyle Hidden `
-            -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" -Splash -TimeoutSec $TimeoutSec"
+            -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" -Splash -TimeoutSec $TimeoutSec$stArg"
     }
 }
 $leftIsConsole = ($LeftUrl -match '^(console|コンソール)$')
