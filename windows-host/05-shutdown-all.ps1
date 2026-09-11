@@ -107,6 +107,10 @@ if ($vm -and $vm.State -eq "Running") {
     Write-Host "EdgeBox は既に停止しています。"
 }
 
+# --- 停止中のいまのうちに、予約していた入出力の設定 (メモリの固定など) を反映しておく ---
+$s11 = Join-Path $PSScriptRoot "11-io-passthrough.ps1"
+if (Test-Path $s11) { try { & $s11 -VMName $VMName -ApplyPending } catch { } }
+
 # --- 停止中のいまのうちに、『EdgeBox表示設定』のコンソール解像度を反映しておく ---
 # (EdgeBox は Windows 起動時に自動起動するため、解像度変更はここが唯一の機会)
 try {

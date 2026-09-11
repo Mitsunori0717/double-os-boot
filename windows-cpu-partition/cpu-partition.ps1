@@ -598,6 +598,11 @@ function Invoke-FullStage2([int[]]$HostArr, [int[]]$GuestArr, [bool]$Interactive
     }
     Write-FullStatus @{ MinrootOk = $true; Bound = [bool]$bind.Bound; Message = $bind.Message; HostLps = $hostText; GuestLps = $guestText; Scheduler = $schedNow2; VisibleLps = $visibleLps }
 
+    # 表示ツール側で予約された入出力の設定 (メモリの固定など) があれば、停止中のいまのうちに反映する
+    if ($vm2 -and [string]$vm2.State -eq "Off") {
+        $s11 = Join-Path (Split-Path $PSScriptRoot -Parent) "windows-host\11-io-passthrough.ps1"
+        if (Test-Path $s11) { try { $r11 = & $s11 -VMName $VMName -ApplyPending -Quiet; if ($r11) { Write-PinLog ([string]$r11) } } catch { } }
+    }
     # EdgeBox の自動起動を任されている場合は、固定したあとに起動する (固定できなくても止めたままにはしない)
     if ($vm2 -and [string]$vm2.State -eq "Off" -and $cfg2 -and $cfg2.ManageVmStart) {
         try { Start-VM -Name $VMName -ErrorAction Stop; Write-PinLog "Full: EdgeBox を起動しました" }
