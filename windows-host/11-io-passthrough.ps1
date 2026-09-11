@@ -16,6 +16,9 @@
     .\11-io-passthrough.ps1            # 現状の確認だけ (何も変えない)
     .\11-io-passthrough.ps1 -Apply     # メモリ固定 + SR-IOV を適用 (確認あり)
     .\11-io-passthrough.ps1 -Apply -MemoryGB 8   # 固定にするメモリ量を指定
+    .\11-io-passthrough.ps1 -Apply -NetAdapterName "イーサネット 6"
+                                       # SR-IOV 対応の LAN カードを足したあと、EdgeBox のスイッチを
+                                       # そのポートに付け替えて SR-IOV を有効にする (ケーブルも差し替えること)
 
 .NOTES
     管理者権限が必要です。
@@ -25,6 +28,7 @@ param(
     [string]$VMName = "EdgeBox",
     [switch]$Apply,
     [int]$MemoryGB = 0,       # 0 = 今の起動時メモリ量のまま固定にする
+    [string]$NetAdapterName = "",   # EdgeBox のスイッチをこの物理アダプターに付け替える (Get-NetAdapter の Name)
     [switch]$NoConfirm,
     [switch]$NoRestart        # 適用後に EdgeBox を起動しない
 )
@@ -93,6 +97,16 @@ if ($vmNic -and $vmNic.SwitchName) { $sw = Get-VMSwitch -Name $vmNic.SwitchName 
 $pfDesc  = if ($sw) { [string]$sw.NetAdapterInterfaceDescription } else { "" }
 $pf      = $null
 if ($pfDesc) { $pf = Get-NetAdapter -Physical -ErrorAction SilentlyContinue | Where-Object { $_.InterfaceDescription -eq $pfDesc } | Select-Object -First 1 }
+$switchMove = $false
+if ($NetAdapterName) {
+    $pfNew = Get-NetAdapter -Physical -ErrorAction SilentlyContinue | Where-Object { $_.Name -eq $NetAdapterName } | Select-Object -First 1
+    if (-not $pfNew) {
+        Write-Error ("物理アダプター '{0}' が見つかりません。Get-NetAdapter -Physical の Name を指定してください。" -f $NetAdapterName); exit 1
+    }
+    if (-not $sw) { Write-Error "EdgeBox の LAN がスイッチに接続されていないため、付け替えできません。"; exit 1 }
+    $switchMove = ($pfNew.InterfaceDescription -ne $pfDesc)
+    $pf = $pfNew; $pfDesc = [string]$pfNew.InterfaceDescription
+}
 $sriovAll = @(Get-NetAdapterSriov -ErrorAction SilentlyContinue)
 $pfSriov  = $null
 if ($pf) { $pfSriov = $sriovAll | Where-Object { $_.Name -eq $pf.Name } | Select-Object -First 1 }
@@ -129,7 +143,8 @@ if (-not $vmNic) {
 } elseif (-not $sw) {
     Mark $false ("EdgeBox の LAN が接続されていません (スイッチ '{0}')" -f $vmNic.SwitchName)
 } else {
-    Line ("  EdgeBox の LAN: スイッチ '{0}' ← 物理アダプター '{1}'" -f $sw.Name, $(if ($pf) { $pf.Name } else { $pfDesc }))
+    Line ("  EdgeBox の LAN: スイッチ '{0}' ← 物理アダプター '{1}'" -f $sw.Name, $(if ($switchMove) { [string]$sw.NetAdapterInterfaceDescription } elseif ($pf) { $pf.Name } else { $pfDesc }))
+    if ($switchMove) { Line ("  付け替え先: 物理アダプター '{0}' ({1})" -f $pf.Name, $pf.InterfaceDescription) "White" }
     if ($pf) {
         if (-not $pfSriov) {
             Mark $false ("物理アダプター '{0}' は SR-IOV 非対応 (ドライバーが対応していません)" -f $pf.Name) `
@@ -156,7 +171,7 @@ Line ""
 
 $canSriov = $hostIov -and $pfOk
 $needMem  = -not $memFixed -or ($MemoryGB -gt 0 -and [long]($MemoryGB * 1GB) -ne [long]$mem.Startup)
-$needSw   = $canSriov -and -not $swIov
+$needSw   = $canSriov -and (-not $swIov -or $switchMove)
 $needPf   = $canSriov -and -not $pfEnabled
 $needNic  = $canSriov -and ($nicWeight -le 0)
 
@@ -169,7 +184,7 @@ if (-not $Apply) {
         Line "  -Apply を付けて実行すると、次を行います:" "White"
         if ($needMem) { Line "    - メモリを固定にする (EdgeBox を一度停止)" }
         if ($needPf)  { Line ("    - 物理アダプター '{0}' の SR-IOV を有効にする" -f $pf.Name) }
-        if ($needSw)  { Line ("    - スイッチ '{0}' を SR-IOV 有効で作り直す (EdgeBox を一度停止)" -f $sw.Name) }
+        if ($needSw)  { Line ("    - スイッチ '{0}' を SR-IOV 有効で作り直す{1} (EdgeBox を一度停止)" -f $sw.Name, $(if ($switchMove) { " (物理アダプター '" + $pf.Name + "' に付け替え)" } else { "" })) }
         if ($needNic) { Line "    - EdgeBox の LAN に SR-IOV を要求する (IovWeight 100)" }
         if (-not $canSriov -and $needMem) { Line "  SR-IOV は今のところ使えないため、メモリの固定だけ行います。" "Yellow" }
     }
@@ -187,7 +202,7 @@ if (-not $NoConfirm) {
     $msg = "次を適用します:`n"
     if ($needMem) { $msg += "  - メモリを固定にする`n" }
     if ($needPf)  { $msg += "  - 物理アダプターの SR-IOV を有効にする (LAN が数秒切れます)`n" }
-    if ($needSw)  { $msg += "  - スイッチを SR-IOV 有効で作り直す (LAN が数秒切れます)`n" }
+    if ($needSw)  { $msg += "  - スイッチを SR-IOV 有効で作り直す" + $(if ($switchMove) { " (物理アダプター '" + $pf.Name + "' に付け替え。ケーブルもそのポートへ)" } else { "" }) + " (LAN が数秒切れます)`n" }
     if ($needNic) { $msg += "  - EdgeBox の LAN に SR-IOV を要求する`n" }
     if ($needStop) { $msg += "`nEdgeBox を正常シャットダウンしてから適用し、終わったら起動します。収集が数分止まります。" }
     $msg += "`n続けますか? [y/N] "
@@ -239,7 +254,7 @@ if ($needSw) {
             Line ("Windows 側の固定 IP {0}/{1} を控えました (作り直し後に戻します)。" -f $saved.IP, $saved.Prefix) "DarkGray"
         }
     }
-    Line ("スイッチ '{0}' を SR-IOV 有効で作り直します..." -f $swName) "White"
+    Line ("スイッチ '{0}' を SR-IOV 有効で作り直します (物理アダプター '{1}')..." -f $swName, $pf.Name) "White"
     Remove-VMSwitch -Name $swName -Force -ErrorAction Stop
     Start-Sleep -Seconds 3
     New-VMSwitch -Name $swName -NetAdapterInterfaceDescription $pfDesc -AllowManagementOS $allowMg -EnableIov $true -ErrorAction Stop | Out-Null
