@@ -7,6 +7,9 @@
     -Apply        : メモリを固定にし、この PC で SR-IOV が使えるなら EdgeBox の LAN に適用します。
                     変更には EdgeBox の停止が必要なため、正常シャットダウン → 適用 → 起動 の順に進みます
                     (強制電源断は行いません)。
+    -Apply -AtNextStop : いま止めずに「予約」します。次に EdgeBox が止まったとき (『全部シャットダウン』・
+                    『EdgeBox 再起動』・電源 ON 直後の起動処理) に、停止中のすきまでメモリを固定にします。
+                    収集を余分に止めません。予約は io-pending.json に残ります (SR-IOV は予約の対象外)。
 
     SR-IOV とは: LAN アダプターがハードウェアで持つ「分身」を EdgeBox に直接渡す仕組みです。
     有効になると、EdgeBox の通信が Windows 側の CPU を経由しなくなります。
@@ -15,6 +18,7 @@
 .EXAMPLE
     .\11-io-passthrough.ps1            # 現状の確認だけ (何も変えない)
     .\11-io-passthrough.ps1 -Apply     # メモリ固定 + SR-IOV を適用 (確認あり)
+    .\11-io-passthrough.ps1 -Apply -AtNextStop   # 今は止めず、次に止まったときにメモリを固定 (予約)
     .\11-io-passthrough.ps1 -Apply -MemoryGB 8   # 固定にするメモリ量を指定
     .\11-io-passthrough.ps1 -Apply -NetAdapterName "イーサネット 6"
                                        # SR-IOV 対応の LAN カードを足したあと、EdgeBox のスイッチを
@@ -30,7 +34,10 @@ param(
     [int]$MemoryGB = 0,       # 0 = 今の起動時メモリ量のまま固定にする
     [string]$NetAdapterName = "",   # EdgeBox のスイッチをこの物理アダプターに付け替える (Get-NetAdapter の Name)
     [switch]$NoConfirm,
-    [switch]$NoRestart        # 適用後に EdgeBox を起動しない
+    [switch]$NoRestart,       # 適用後に EdgeBox を起動しない
+    [switch]$AtNextStop,      # 今は止めず、次に EdgeBox が止まったときに反映する (予約)
+    [switch]$ApplyPending,    # (内部用) 予約を反映する。EdgeBox が停止中のときだけ何かをする
+    [switch]$Quiet            # (内部用) -ApplyPending の結果を 1 行の文字列で返す
 )
 
 $ErrorActionPreference = "Stop"
@@ -54,6 +61,33 @@ if (-not $PSBoundParameters.ContainsKey("VMName") -and
 }
 $vm = Get-VM -Name $VMName -ErrorAction SilentlyContinue
 if (-not $vm) { Write-Error "登録 '$VMName' が見つかりません。"; exit 1 }
+$PendingFile = Join-Path $PSScriptRoot "io-pending.json"
+
+# ------------------------------------------------------------ -ApplyPending: 予約の反映 (停止中のときだけ)
+# 『全部シャットダウン』『EdgeBox 再起動』、電源 ON 直後の起動処理から呼ばれる。
+if ($ApplyPending) {
+    if (-not (Test-Path $PendingFile)) { exit 0 }
+    if ([string]$vm.State -ne "Off") { exit 0 }    # 停止中にしか変えられない。次の機会まで持ち越す
+    try {
+        $pend = Get-Content $PendingFile -Raw -Encoding UTF8 | ConvertFrom-Json
+        $done = @()
+        if ($pend.FixMemory) {
+            $b = [long]$pend.MemoryBytes
+            if ($b -le 0) { $b = [long](Get-VMMemory -VMName $VMName).Startup }
+            Set-VMMemory -VMName $VMName -DynamicMemoryEnabled $false -StartupBytes $b
+            $done += ("メモリを固定 {0:N1} GB にしました" -f ($b / 1GB))
+        }
+        Remove-Item $PendingFile -Force -ErrorAction SilentlyContinue
+        if ($done.Count -gt 0) {
+            $txt = "予約していた設定を停止中に反映: " + ($done -join " / ")
+            if ($Quiet) { Write-Output $txt } else { Write-Host $txt -ForegroundColor Green }
+        }
+    } catch {
+        $txt = "予約していた設定を反映できませんでした: " + $_.Exception.Message
+        if ($Quiet) { Write-Output $txt } else { Write-Host $txt -ForegroundColor Yellow }
+    }
+    exit 0
+}
 
 function Line([string]$Text, [string]$Color = "Gray") { Write-Host $Text -ForegroundColor $Color }
 function Mark([bool]$Ok, [string]$Text, [string]$Hint = "") {
@@ -129,7 +163,10 @@ Line ""
 Line "[メモリ]" "White"
 $memText = if ($memFixed) { "固定 {0:N1} GB" -f ($mem.Startup / 1GB) }
            else { "動的 (起動 {0:N1} GB / 最小 {1:N1} GB / 最大 {2:N1} GB)" -f ($mem.Startup / 1GB), ($mem.Minimum / 1GB), ($mem.Maximum / 1GB) }
-Mark $memFixed ("メモリは " + $memText) "-Apply で固定にします (起動時の量で固定。-MemoryGB で変更可)"
+Mark $memFixed ("メモリは " + $memText) "-Apply で固定にします (起動時の量で固定。-MemoryGB で変更可)。-Apply -AtNextStop なら次に止まったときに反映"
+if (-not $memFixed -and (Test-Path $PendingFile)) {
+    Line "  予約あり: 次に EdgeBox が止まったとき (全部シャットダウン / EdgeBox 再起動 / 電源 ON) に固定にします" "Cyan"
+}
 
 Line ""
 Line "[LAN の直結 (SR-IOV)]" "White"
@@ -196,6 +233,23 @@ if (-not $Apply) {
 
 if (-not $needMem -and -not $needSw -and -not $needPf -and -not $needNic) {
     Line "変更するものがありません。" "Green"; exit 0
+}
+
+# --- -AtNextStop: 今は止めず、メモリの固定を予約する ---
+if ($AtNextStop) {
+    if ($needMem) {
+        $bytes = if ($MemoryGB -gt 0) { [long]$MemoryGB * 1GB } else { [long]$mem.Startup }
+        @{ FixMemory = $true; MemoryBytes = $bytes; Created = (Get-Date).ToString("s") } |
+            ConvertTo-Json | Set-Content -Path $PendingFile -Encoding UTF8
+        Line ("予約しました: 次に EdgeBox が止まったときに、メモリを固定 {0:N1} GB にします。" -f ($bytes / 1GB)) "Green"
+        Line "  (『全部シャットダウン』『EdgeBox 再起動』、電源 ON 直後の起動処理のどれでも反映されます)" "DarkGray"
+    } else {
+        Line "メモリは固定済みのため、予約するものはありません。" "Green"
+    }
+    if ($needSw -or $needPf -or $needNic) {
+        Line "SR-IOV の適用は予約できません。-AtNextStop を付けずに -Apply を実行してください。" "Yellow"
+    }
+    exit 0
 }
 $needStop = $needMem -or $needSw
 if (-not $NoConfirm) {

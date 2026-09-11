@@ -1370,6 +1370,9 @@ try {
 # --- EdgeBox の起動を待つ (止まっていれば起動する: 自動起動が働かなかった場合の保険) ---
 $vm = Get-VM -Name $VMName -ErrorAction SilentlyContinue
 if ($vm -and $vm.State -eq "Off") {
+    # 予約された入出力の設定 (メモリの固定など) があれば、停止中のいまのうちに反映する
+    $s11 = Join-Path $PSScriptRoot "11-io-passthrough.ps1"
+    if (Test-Path $s11) { try { $r11 = & $s11 -VMName $VMName -ApplyPending -Quiet; if ($r11) { Log ([string]$r11) } } catch { } }
     # CPU コア分割ツール (full モード) があれば、EdgeBox を CPU グループに固定してから起動する
     if (Invoke-CpuPartitionBoot) { Log "CPU コア分割 (full): EdgeBox を CPU グループに固定する処理を先に行いました。" }
     $vm = Get-VM -Name $VMName -ErrorAction SilentlyContinue

@@ -1,2 +1,4 @@
 # 更新用トークン (端末固有・絶対にコミットしない)
 update-token.txt
+# 入出力設定の予約 (端末固有)
+windows-host/io-pending.json

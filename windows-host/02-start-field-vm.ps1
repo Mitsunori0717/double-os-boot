@@ -225,6 +225,8 @@ if ($vm.State -ne "Running") {
         } catch { }
     }
     Write-Host "EdgeBox を起動しています..." -ForegroundColor Cyan
+    $s11 = Join-Path $PSScriptRoot "11-io-passthrough.ps1"   # 予約された設定 (メモリの固定など) を停止中に反映
+    if (Test-Path $s11) { try { & $s11 -VMName $VMName -ApplyPending } catch { } }
     if (Invoke-CpuPartitionBoot) { Write-Host "  CPU コア分割 (full): CPU グループに固定してから起動します" -ForegroundColor Cyan }
     try {
         Start-VM -Name $VMName -ErrorAction Stop
