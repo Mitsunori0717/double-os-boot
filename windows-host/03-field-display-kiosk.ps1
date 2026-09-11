@@ -575,6 +575,7 @@ $DefaultConfig = [ordered]@{
     "ConsoleHideBar"    = $true    # 全画面時に上部の接続バー (「localhost 上の EdgeBox」の帯) を出さない
     "LeftGuard"         = $true    # 左画面をコンソールの全画面で固定 (他の窓は右へ移し、全画面が外れたら戻す)
     "LeftGuardHotkey"   = "Alt+F11" # 固定の解除/再固定に使うキー
+    "LeftGuardStowHotkey" = "Ctrl+Alt+K" # 2 秒長押しで EdgeBox の画面を収納 (最小化) ⇔ 左画面の全画面に戻す
     "ConsoleResolution" = "自動 (モニターに合わせる)"
 }
 if (-not (Test-Path $ConfigFile)) {
@@ -696,11 +697,170 @@ public class GuardApi {
     $hotkey = if ($cfg.LeftGuardHotkey) { [string]$cfg.LeftGuardHotkey } else { "Alt+F11" }
     $vkeys = @(ConvertTo-VKeys $hotkey)
     if ($vkeys.Count -eq 0) { $vkeys = @(0x12, 0x7A); $hotkey = "Alt+F11" }
+    # 収納キー: 2 秒長押しで EdgeBox の画面を収納 (全画面を解除して最小化) し、もう一度の長押しで左画面の全画面に戻す
+    $stowHotkey = if ($cfg.LeftGuardStowHotkey) { [string]$cfg.LeftGuardStowHotkey } else { "Ctrl+Alt+K" }
+    $stowKeys = @(ConvertTo-VKeys $stowHotkey)
+    if ($stowKeys.Count -eq 0) { $stowKeys = @(0x11, 0x12, 0x4B); $stowHotkey = "Ctrl+Alt+K" }
+    $StowHoldMs = 2000   # 収納キーの長押し時間
+    $EscHoldMs  = 1000   # ESC の長押し時間
+
+    # ------------------------------------------------------------
+    #  キー監視 (低レベルキーボードフック)
+    #  コンソール (vmconnect) にキー入力が入っている間、vmconnect は自分のフックでキーを EdgeBox へ
+    #  渡してから捨てるため、GetAsyncKeyState では ESC やホットキーが見えない (長押しが効かない原因)。
+    #  フックは「あとから入れたものが先に呼ばれる」ので、自分のフックを短い間隔で入れ直して
+    #  vmconnect より先に受け取り (受け取るだけで捨てない)、長押しの判定もフック側の専用スレッドで行う。
+    #  これにより、コンソールの中にフォーカスがあっても、見回りが重いときでも取りこぼさない
+    # ------------------------------------------------------------
+    $KeyHookSource = @'
+using System;
+using System.Threading;
+using System.Collections.Generic;
+using System.Runtime.InteropServices;
+public class GuardKeyHook {
+    delegate IntPtr HookProc(int nCode, IntPtr wParam, IntPtr lParam);
+    delegate void TimerProc(IntPtr hWnd, uint msg, IntPtr id, uint time);
+    [StructLayout(LayoutKind.Sequential)] struct MSG { public IntPtr hwnd; public uint message; public IntPtr wParam; public IntPtr lParam; public uint time; public int x; public int y; }
+    [DllImport("user32.dll", SetLastError = true)] static extern IntPtr SetWindowsHookEx(int idHook, HookProc lpfn, IntPtr hMod, uint dwThreadId);
+    [DllImport("user32.dll")] static extern bool UnhookWindowsHookEx(IntPtr hhk);
+    [DllImport("user32.dll")] static extern IntPtr CallNextHookEx(IntPtr hhk, int nCode, IntPtr wParam, IntPtr lParam);
+    [DllImport("user32.dll")] static extern int GetMessage(out MSG msg, IntPtr hWnd, uint min, uint max);
+    [DllImport("user32.dll")] static extern bool TranslateMessage(ref MSG msg);
+    [DllImport("user32.dll")] static extern IntPtr DispatchMessage(ref MSG msg);
+    [DllImport("user32.dll")] static extern IntPtr SetTimer(IntPtr hWnd, IntPtr id, uint elapse, TimerProc fn);
+    [DllImport("user32.dll")] static extern bool PostThreadMessage(uint tid, uint msg, IntPtr wParam, IntPtr lParam);
+    [DllImport("kernel32.dll")] static extern uint GetCurrentThreadId();
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode)] static extern IntPtr GetModuleHandle(string name);
+
+    class Combo { public int[] Keys; public int HoldMs; public bool Fired; public int Count; }
+    static readonly List<Combo> combos = new List<Combo>();
+    static readonly HookProc hookProc = Callback;      // GC に回収されないよう保持
+    static readonly TimerProc timerProc = OnTimer;
+    static readonly bool[] down = new bool[256];
+    static readonly int[] downSince = new int[256];   // 押し始めた時刻 (TickCount)
+    static readonly int[] lastSeen = new int[256];    // 最後に「押されている」を見た時刻 (取りこぼし対策)
+    const int StaleMs = 5000;                         // これより長く音沙汰が無い「押されたまま」は離されたとみなす
+    static IntPtr hook = IntPtr.Zero;
+    static Thread thread;
+    static uint threadId;
+    static int rehookMs;
+    static volatile bool running;
+    public static volatile bool Installed;
+    public static string LastError = "";
+    public static int Rehooks;
+
+    // 組み合わせを登録する (Start の前に)。holdMs = 0 なら押した瞬間、それ以外は全部を押し続けた時間
+    public static int AddCombo(int[] keys, int holdMs) {
+        lock (combos) { combos.Add(new Combo { Keys = keys, HoldMs = holdMs }); return combos.Count - 1; }
+    }
+    // 前回の Consume 以降に成立した回数を返し、0 に戻す
+    public static int Consume(int idx) {
+        Combo c; lock (combos) { if (idx < 0 || idx >= combos.Count) return 0; c = combos[idx]; }
+        return Interlocked.Exchange(ref c.Count, 0);
+    }
+    public static bool Start(int rehookIntervalMs) {
+        if (thread != null) return Installed;
+        rehookMs = rehookIntervalMs; running = true;
+        thread = new Thread(Run); thread.IsBackground = true; thread.Name = "GuardKeyHook";
+        thread.Start();
+        for (int i = 0; i < 60 && !Installed && LastError == ""; i++) Thread.Sleep(50);
+        return Installed;
+    }
+    public static void Stop() {
+        running = false;
+        if (threadId != 0) PostThreadMessage(threadId, 0x0012, IntPtr.Zero, IntPtr.Zero);   // WM_QUIT
+    }
+    static void Run() {
+        threadId = GetCurrentThreadId();
+        Install();
+        SetTimer(IntPtr.Zero, IntPtr.Zero, 50, timerProc);   // 50ms ごとに長押しの判定と、フックの入れ直し
+        MSG msg;
+        while (running && GetMessage(out msg, IntPtr.Zero, 0, 0) > 0) { TranslateMessage(ref msg); DispatchMessage(ref msg); }
+        if (hook != IntPtr.Zero) { UnhookWindowsHookEx(hook); hook = IntPtr.Zero; }
+        Installed = false;
+    }
+    static void Install() {
+        IntPtr old = hook;
+        IntPtr h = SetWindowsHookEx(13, hookProc, GetModuleHandle(null), 0);   // WH_KEYBOARD_LL
+        if (h == IntPtr.Zero) {
+            if (old == IntPtr.Zero) LastError = "SetWindowsHookEx に失敗 (エラー " + Marshal.GetLastWin32Error() + ")";
+            return;   // 入れ直しに失敗したときは古いフックをそのまま使う
+        }
+        hook = h; Installed = true;
+        if (old != IntPtr.Zero) { UnhookWindowsHookEx(old); Rehooks++; }
+    }
+    static int lastRehook = Environment.TickCount;
+    static void OnTimer(IntPtr hWnd, uint msg, IntPtr id, uint time) {
+        try {
+            int now = Environment.TickCount;
+            if (rehookMs > 0 && now - lastRehook >= rehookMs) { lastRehook = now; Install(); }
+            Evaluate(now);
+        } catch { }
+    }
+    static IntPtr Callback(int nCode, IntPtr wParam, IntPtr lParam) {
+        try {
+            if (nCode >= 0) {
+                int flags = Marshal.ReadInt32(lParam, 8);
+                if ((flags & 0x10) == 0) {   // LLKHF_INJECTED (自分が送った Ctrl+Alt+Break など) は無視
+                    int vk = Marshal.ReadInt32(lParam, 0) & 0xFF;
+                    int m = (int)wParam;
+                    int now = Environment.TickCount;
+                    if (m == 0x0100 || m == 0x0104) {          // WM_KEYDOWN / WM_SYSKEYDOWN
+                        if (!down[vk] || now - lastSeen[vk] > StaleMs) downSince[vk] = now;
+                        down[vk] = true; lastSeen[vk] = now;
+                    } else if (m == 0x0101 || m == 0x0105) {   // WM_KEYUP / WM_SYSKEYUP
+                        down[vk] = false;
+                    }
+                }
+            }
+        } catch { }
+        return CallNextHookEx(hook, nCode, wParam, lParam);
+    }
+    // 左右の区別が無いキー指定 (Ctrl=0x11 など) は、左右どちらかが押されていれば押されている扱い
+    static bool KeyDown(int vk, int now, out int since) {
+        since = 0;
+        int a = vk, b = vk;
+        if (vk == 0x11) { a = 0xA2; b = 0xA3; } else if (vk == 0x12) { a = 0xA4; b = 0xA5; }
+        else if (vk == 0x10) { a = 0xA0; b = 0xA1; } else if (vk == 0x5B) { a = 0x5B; b = 0x5C; }
+        bool da = down[a] && now - lastSeen[a] <= StaleMs;
+        bool db = (b != a) && down[b] && now - lastSeen[b] <= StaleMs;
+        if (!da && !db) return false;
+        if (da && db) since = Math.Min(downSince[a], downSince[b]); else since = da ? downSince[a] : downSince[b];
+        return true;
+    }
+    static void Evaluate(int now) {
+        Combo[] list; lock (combos) { list = combos.ToArray(); }
+        foreach (Combo c in list) {
+            bool all = true; int since = int.MinValue;
+            foreach (int vk in c.Keys) {
+                int s; if (!KeyDown(vk, now, out s)) { all = false; break; }
+                if (since == int.MinValue || s - since > 0) since = s;   // いちばん最後に押されたキーの時刻から数える
+            }
+            if (!all) { c.Fired = false; continue; }
+            if (!c.Fired && now - since >= c.HoldMs) { c.Fired = true; Interlocked.Increment(ref c.Count); }
+        }
+    }
+}
+'@
+    $hookOk = $false; $hookLoaded = $false; $ciEsc = -1; $ciHot = -1; $ciStow = -1
+    try {
+        if (-not ("GuardKeyHook" -as [type])) { Add-Type -TypeDefinition $KeyHookSource -ErrorAction Stop }
+        $hookLoaded = $true
+        $ciEsc  = [GuardKeyHook]::AddCombo([int[]]@(0x1B), $EscHoldMs)
+        $ciHot  = [GuardKeyHook]::AddCombo([int[]]$vkeys, 0)
+        $ciStow = [GuardKeyHook]::AddCombo([int[]]$stowKeys, $StowHoldMs)
+        $hookOk = [GuardKeyHook]::Start(1500)
+        if (-not $hookOk) { Log ("左画面の見張り役: キー監視のフックを入れられないため、Windows 側の操作中だけキーを見ます: " + [GuardKeyHook]::LastError) }
+    } catch {
+        $hookOk = $false
+        Log ("左画面の見張り役: キー監視の準備に失敗したため、Windows 側の操作中だけキーを見ます: " + $_.Exception.Message)
+    }
 
     $screens = @([System.Windows.Forms.Screen]::AllScreens | Sort-Object { $_.Bounds.X })
     if ($screens.Count -lt 2) { Log "左画面の見張り役: モニターが 1 枚のため何もしません。"; exit 0 }
     $left = $screens[0].Bounds; $right = $screens[-1].Bounds
-    Log "左画面の見張り役を開始しました (解除/再固定: $hotkey)。"
+    Log ("左画面の見張り役を開始しました (解除/再固定: $hotkey、ESC 長押し $($EscHoldMs / 1000) 秒で解除、$stowHotkey 長押し $($StowHoldMs / 1000) 秒で収納⇔全画面。キー監視: " +
+        $(if ($hookOk) { "フック (コンソールの中でも効く)" } else { "GetAsyncKeyState (Windows 側の操作中のみ)" }) + ")。")
 
     function Get-ConsoleMain {
         $p = Get-Process vmconnect -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object -First 1
@@ -792,9 +952,23 @@ public class GuardApi {
     $fsFail = 0   # 全画面に戻せなかった回数 (3 回続いたら 30 秒に 1 回に広げる。あきらめはしない)
     $missingSince = $null; $lastRelaunch = [datetime]::MinValue   # コンソール窓が閉じられたときの立て直し用
     $lastCtrlAlt = [datetime]::MinValue   # Ctrl+Alt を押していた時刻 (自分で Ctrl+Alt+Break を押した解除を見分ける)
-    $escSince = $null                     # ESC を押し始めた時刻 (長押しの判定)
+    $escSince = $null                     # ESC を押し始めた時刻 (長押しの判定。フックが使えないときの代替)
+    $stowSince = $null                    # 収納キーを押し始めた時刻 (同上)
     $lastErrLog = [datetime]::MinValue
     $tick = 0
+    # フックが使えないときの代替: GetAsyncKeyState で「全部押されているか」と「離されるまで待つ」
+    function Test-AllKeysDown([int[]]$keys) {
+        foreach ($vk in $keys) { if (([GuardApi]::GetAsyncKeyState($vk) -band 0x8000) -eq 0) { return $false } }
+        return $true
+    }
+    function Wait-KeysUp([int[]]$keys) {
+        while ($true) {
+            $any = $false
+            foreach ($vk in $keys) { if (([GuardApi]::GetAsyncKeyState($vk) -band 0x8000) -ne 0) { $any = $true } }
+            if (-not $any) { break }
+            Start-Sleep -Milliseconds 50
+        }
+    }
     function Test-ConsoleForeground {
         # 前面の窓が vmconnect のものか
         try {
@@ -813,33 +987,75 @@ public class GuardApi {
             # (a) Ctrl+Alt を押している間 (Ctrl+Alt+Break を自分で押した) の解除は自動で戻さない
             if ((([GuardApi]::GetAsyncKeyState(0x11) -band 0x8000) -ne 0) -and (([GuardApi]::GetAsyncKeyState(0x12) -band 0x8000) -ne 0)) { $lastCtrlAlt = Get-Date }
             # (b) 全画面中に ESC を 1 秒長押し → 解除して、自動では戻さない。再固定は $hotkey
-            #     Windows 側 (右画面のアプリなど) を操作しているときに効く。コンソールの中にキー入力が
-            #     入っている間は vmconnect がキーを EdgeBox へ渡して横取りするため、見張り役からは見えない。
             #     普通の ESC (短押し) は Windows のアプリでよく使うので、長押しだけを合図にする
             #     固定を解除したあとに窓の最大化ボタンで最大化した場合も、ESC 長押しで最大化を解除する
-            if (([GuardApi]::GetAsyncKeyState(0x1B) -band 0x8000) -ne 0) {
-                if (-not $escSince) { $escSince = Get-Date }
-                elseif (((Get-Date) - $escSince).TotalMilliseconds -ge 1000) {
-                    $h = Get-ConsoleMain
-                    if ($h -ne [IntPtr]::Zero -and (Test-ConsoleFullScreenOn $left)) {
-                        $released = $true
-                        Invoke-FullScreenToggle $h
-                        Show-Notice "ESC 長押しで左画面の固定を解除しました ($hotkey でもう一度固定)"
-                        Log "左画面の見張り役: ESC 長押しにより固定を解除しました (自動では戻しません。再固定は $hotkey)。"
-                    } elseif ($h -ne [IntPtr]::Zero -and [GuardApi]::IsZoomed($h)) {
-                        $released = $true
-                        [GuardApi]::ShowWindow($h, 9) | Out-Null   # 最大化 → 元の大きさ
-                        Show-Notice "ESC 長押しでコンソールの最大化を解除しました ($hotkey で全画面に固定)"
-                        Log "左画面の見張り役: ESC 長押しにより最大化を解除しました (再固定は $hotkey)。"
-                    }
-                    while (([GuardApi]::GetAsyncKeyState(0x1B) -band 0x8000) -ne 0) { Start-Sleep -Milliseconds 50 }
-                    $escSince = $null
+            # (c) ホットキー ($hotkey) → 固定の解除 ⇔ 再固定
+            # (d) 収納キー ($stowHotkey) を 2 秒長押し → EdgeBox の画面を収納 (全画面を解除して最小化)。
+            #     もう一度の長押しで、最小化を解除して左画面の全画面に固定し直す
+            # キーの検出はフック (コンソールの中にフォーカスがあっても効く)。フックが使えない環境では
+            # GetAsyncKeyState で代替する (この場合は Windows 側を操作しているときだけ効く。コンソールの中に
+            # キー入力が入っている間は vmconnect がキーを EdgeBox へ渡して横取りするため見えない)
+            $escHeld = $false; $hotPressed = $false; $stowPressed = $false
+            if ($hookLoaded) { $hookOk = [GuardKeyHook]::Installed }   # 最初に失敗しても、あとから入れられたら使う
+            if ($hookOk) {
+                if ([GuardKeyHook]::Consume($ciEsc)  -gt 0) { $escHeld = $true }
+                if ([GuardKeyHook]::Consume($ciHot)  -gt 0) { $hotPressed = $true }
+                if ([GuardKeyHook]::Consume($ciStow) -gt 0) { $stowPressed = $true }
+            } else {
+                if (Test-AllKeysDown @(0x1B)) {
+                    if (-not $escSince) { $escSince = Get-Date }
+                    elseif (((Get-Date) - $escSince).TotalMilliseconds -ge $EscHoldMs) { $escHeld = $true; Wait-KeysUp @(0x1B); $escSince = $null }
+                } else { $escSince = $null }
+                if (Test-AllKeysDown $stowKeys) {
+                    if (-not $stowSince) { $stowSince = Get-Date }
+                    elseif (((Get-Date) - $stowSince).TotalMilliseconds -ge $StowHoldMs) { $stowPressed = $true; Wait-KeysUp $stowKeys; $stowSince = $null }
+                } else { $stowSince = $null }
+                if (Test-AllKeysDown $vkeys) { $hotPressed = $true }
+            }
+            if ($escHeld) {
+                $h = Get-ConsoleMain
+                if ($h -ne [IntPtr]::Zero -and (Test-ConsoleFullScreenOn $left)) {
+                    $released = $true
+                    Invoke-FullScreenToggle $h
+                    Show-Notice "ESC 長押しで左画面の固定を解除しました ($hotkey でもう一度固定)"
+                    Log "左画面の見張り役: ESC 長押しにより固定を解除しました (自動では戻しません。再固定は $hotkey)。"
+                } elseif ($h -ne [IntPtr]::Zero -and [GuardApi]::IsZoomed($h)) {
+                    $released = $true
+                    [GuardApi]::ShowWindow($h, 9) | Out-Null   # 最大化 → 元の大きさ
+                    Show-Notice "ESC 長押しでコンソールの最大化を解除しました ($hotkey で全画面に固定)"
+                    Log "左画面の見張り役: ESC 長押しにより最大化を解除しました (再固定は $hotkey)。"
+                } else {
+                    Log ("左画面の見張り役: ESC 長押しを受け取りましたが、コンソールは全画面でも最大化でもないため何もしません。窓: " + (Get-ConsoleTopWindowDiag))
                 }
-            } else { $escSince = $null }
+            }
+            # --- 収納キー: 収納 (全画面を解除して最小化) ⇔ 左画面の全画面に戻す ---
+            if ($stowPressed) {
+                $h = Get-ConsoleMain
+                if ($h -eq [IntPtr]::Zero) {
+                    Show-Notice "$stowHotkey 長押し: EdgeBox のコンソール窓が見つかりません"
+                    Log "左画面の見張り役: $stowHotkey 長押しを受け取りましたが、コンソール窓が見つかりません。"
+                } elseif (-not [GuardApi]::IsIconic($h)) {
+                    # 収納: 見張り役の固定を解除し、全画面なら解除してから最小化する (自動では戻さない)
+                    $released = $true; $lastCtrlAlt = [datetime]::MinValue
+                    if (Test-ConsoleFullScreenOn $left) {
+                        Invoke-FullScreenToggle $h
+                        Start-Sleep -Milliseconds 800
+                        $h2 = Get-ConsoleMain; if ($h2 -ne [IntPtr]::Zero) { $h = $h2 }
+                    }
+                    [GuardApi]::ShowWindow($h, 6) | Out-Null   # SW_MINIMIZE
+                    Show-Notice "$stowHotkey 長押しで EdgeBox の画面を収納しました (もう一度 $stowHotkey 長押しで全画面に戻す)"
+                    Log "左画面の見張り役: $stowHotkey 長押しにより EdgeBox の画面を収納しました (自動では戻しません。戻すにはもう一度 $stowHotkey 長押し)。"
+                } else {
+                    # 戻す: 最小化を解除し、見張り役の固定に戻す (次の見回りで左画面の全画面に戻る)
+                    $released = $false; $lastCtrlAlt = [datetime]::MinValue
+                    [GuardApi]::ShowWindow($h, 9) | Out-Null   # SW_RESTORE
+                    $notCover = 3; $lastFs = [datetime]::MinValue
+                    Show-Notice "$stowHotkey 長押しで EdgeBox の画面を左画面の全画面に戻します ($stowHotkey 長押しで収納)"
+                    Log "左画面の見張り役: $stowHotkey 長押しにより EdgeBox の画面を左画面の全画面に戻します。"
+                }
+            }
             # --- ホットキー: 固定の解除 ⇔ 再固定 ---
-            $allDown = $true
-            foreach ($vk in $vkeys) { if (([GuardApi]::GetAsyncKeyState($vk) -band 0x8000) -eq 0) { $allDown = $false; break } }
-            if ($allDown) {
+            if ($hotPressed) {
                 $released = -not $released
                 $h = Get-ConsoleMain
                 if ($released) {
@@ -851,13 +1067,8 @@ public class GuardApi {
                     Log "左画面の見張り役: $hotkey により固定に戻しました。"
                     $notCover = 3; $lastFs = [datetime]::MinValue
                 }
-                # キーが離されるまで待つ (押しっぱなしで何度も切り替わらないように)
-                while ($true) {
-                    $any = $false
-                    foreach ($vk in $vkeys) { if (([GuardApi]::GetAsyncKeyState($vk) -band 0x8000) -ne 0) { $any = $true } }
-                    if (-not $any) { break }
-                    Start-Sleep -Milliseconds 50
-                }
+                # キーが離されるまで待つ (押しっぱなしで何度も切り替わらないように。フックは離すまで 1 回しか数えない)
+                if (-not $hookOk) { Wait-KeysUp $vkeys }
             }
             if (-not $released -and ($tick % 5) -eq 0) {
                 # 自分たちの補助ウィンドウ (起動中画面・黒背景) は動かさない。PID を 10 秒ごとに更新
@@ -1209,6 +1420,7 @@ if ($Settings) {
         if ($cfg.PSObject.Properties["ConsoleHideBar"]) { $out["ConsoleHideBar"] = ($cfg.ConsoleHideBar -ne $false) }
         if ($cfg.PSObject.Properties["LeftGuard"]) { $out["LeftGuard"] = ($cfg.LeftGuard -ne $false) }
         if ($cfg.PSObject.Properties["LeftGuardHotkey"]) { $out["LeftGuardHotkey"] = [string]$cfg.LeftGuardHotkey }
+        if ($cfg.PSObject.Properties["LeftGuardStowHotkey"]) { $out["LeftGuardStowHotkey"] = [string]$cfg.LeftGuardStowHotkey }
         $out["ConsoleAutoCloseV2"] = $true
         $out | ConvertTo-Json | Set-Content -Path $ConfigFile -Encoding UTF8
 
@@ -2245,7 +2457,8 @@ if (($LeftUrl -match '^(console|コンソール)$') -and ($cfg.LeftGuard -ne $fa
     Start-Process powershell.exe -WindowStyle Hidden -ArgumentList (
         "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" -LeftGuard -VMName `"$VMName`"")
     $hk = if ($cfg.LeftGuardHotkey) { [string]$cfg.LeftGuardHotkey } else { "Alt+F11" }
-    Log "左画面を EdgeBox の全画面で固定します (他の窓は右画面へ。解除/再固定: $hk。『設定』の[画面表示]で変更可)。"
+    $sk = if ($cfg.LeftGuardStowHotkey) { [string]$cfg.LeftGuardStowHotkey } else { "Ctrl+Alt+K" }
+    Log "左画面を EdgeBox の全画面で固定します (他の窓は右画面へ。解除/再固定: $hk、ESC 長押しで解除、$sk 長押し 2 秒で収納⇔全画面。『設定』の[画面表示]で変更可)。"
 }
 
 Log "===== 表示処理を完了 ====="

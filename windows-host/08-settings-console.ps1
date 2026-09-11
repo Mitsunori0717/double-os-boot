@@ -240,6 +240,7 @@ $DefaultConfig = [ordered]@{
     "ConsoleHideBar"    = $true
     "LeftGuard"         = $true
     "LeftGuardHotkey"   = "Alt+F11"
+    "LeftGuardStowHotkey" = "Ctrl+Alt+K"   # 2 秒長押しで EdgeBox の画面を収納 (最小化) ⇔ 左画面の全画面に戻す
     "ConsoleResolution" = "自動 (モニターに合わせる)"
 }
 if (-not (Test-Path $ConfigFile)) {
@@ -366,7 +367,8 @@ $tp1.Controls.Add($cbAC)
 $cbBar = New-Check "コンソールが全画面のとき、上の接続バー (「localhost 上の EdgeBox」の帯) を表示しない" 15 230 580 ($cfg.ConsoleHideBar -ne $false)
 $tp1.Controls.Add($cbBar)
 $lgHot = if ($cfg.LeftGuardHotkey) { [string]$cfg.LeftGuardHotkey } else { "Alt+F11" }
-$cbLG = New-Check "左画面を EdgeBox の全画面で固定する (他の窓は右画面へ移し、全画面が外れたら戻す。解除/再固定: $lgHot)" 15 260 580 ($cfg.LeftGuard -ne $false)
+$lgStow = if ($cfg.LeftGuardStowHotkey) { [string]$cfg.LeftGuardStowHotkey } else { "Ctrl+Alt+K" }
+$cbLG = New-Check "左画面を EdgeBox の全画面で固定する (他の窓は右画面へ移し、全画面が外れたら戻す。解除/再固定: $lgHot、ESC 長押しで解除、$lgStow 長押し 2 秒で収納⇔全画面)" 15 260 580 ($cfg.LeftGuard -ne $false)
 $tp1.Controls.Add($cbLG)
 
 $grpRes = New-Object System.Windows.Forms.GroupBox
@@ -515,6 +517,7 @@ $out = [ordered]@{
     "ConsoleHideBar"    = $cbBar.Checked
     "LeftGuard"         = $cbLG.Checked
     "LeftGuardHotkey"   = $lgHot
+    "LeftGuardStowHotkey" = $lgStow
     "ConsoleResolution" = $resText
 }
 # 手動で追加できる詳細設定 (自動クローズまでの秒数) は保存で消さない
