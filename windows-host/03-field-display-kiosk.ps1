@@ -726,11 +726,6 @@ public class GuardApi {
         }
         return -1
     }
-    # vmconnect の見えているトップレベルの窓 (本体と、全画面のときに RDP 部品が作る枠なしの窓)
-    function Get-ConsoleTopWindows {
-        return @(Get-ConsoleWindows | Where-Object { $_.Hwnd -ne [IntPtr]::Zero -and $_.Parent -eq [IntPtr]::Zero -and $_.Visible } |
-                 ForEach-Object { [IntPtr]$_.Hwnd })
-    }
     # モニター $b を全画面で覆っている vmconnect の窓 (Test-ConsoleFullScreenOn と同じ見分け方)。無ければ Zero
     function Get-ConsoleFullScreenWindow($b) {
         foreach ($w in Get-ConsoleWindows) {
@@ -799,8 +794,8 @@ public class GuardApi {
     # 全画面を解除する (ESC 長押し・ホットキー用)。1 回送って終わりにせず、解除できたかを確かめて繰り返す。
     # 全画面のときは本体の窓ではなく「モニターを覆っている窓」を前面にしてからキーを送る
     # (RDP 部品が別の窓で全画面にしている環境では、本体の窓を前面にしてもキーが届かなかった)。
-    # それでも解除できなければ、最後の手段としてコンソール窓を最小化 (収納) して左画面を明け渡す。
-    # 戻り値: "解除" / "収納" / "" (どちらもできなかった)
+    # 戻り値: "解除" / "" (解除できなかった)。全画面のまま最小化するような代替はしない
+    # (RDP 部品の全画面窓は最小化・復元に耐えられず、戻したときに真っ白になった)
     function Exit-GuardFullScreen([IntPtr]$h) {
         for ($try = 1; $try -le 4; $try++) {
             if (-not (Test-ConsoleFullScreenOn $left)) { return "解除" }
@@ -826,31 +821,58 @@ public class GuardApi {
                 Log ("左画面の見張り役: 全画面の解除がまだ効きません (試行 $try / 前面化=" + $(if ($fgOk) { "成功" } else { "失敗" }) + ")。窓: " + (Get-ConsoleTopWindowDiag))
             }
         }
-        # 最後の手段: 収納 (最小化)。全画面のまま最小化されるので、戻すときは復元するだけで全画面に戻る
-        Log "左画面の見張り役: 全画面の切り替えが効かないため、コンソール窓を収納 (最小化) して左画面を明け渡します。"
-        if (Set-GuardStowed $true) { return "収納" }
+        Log ("左画面の見張り役: 全画面を解除できませんでした。窓: " + (Get-ConsoleTopWindowDiag))
         return ""
     }
-    # 収納 (最小化) ⇔ 復元。全画面のときに RDP 部品が別の窓を作る環境にも備えて、見えているトップレベルの窓すべてに掛ける
-    function Set-GuardStowed([bool]$stow) {
-        $wins = @(Get-ConsoleTopWindows)
-        $main = Get-ConsoleMain
-        if ($main -ne [IntPtr]::Zero -and ($wins -notcontains $main)) { $wins += $main }
-        if ($wins.Count -eq 0) { return $false }
-        if ($stow) {
-            foreach ($w in $wins) { [GuardApi]::ShowWindow($w, 6) | Out-Null }   # SW_MINIMIZE
-            Start-Sleep -Milliseconds 400
-            $m = Get-ConsoleMain
-            return ($m -eq [IntPtr]::Zero -or [GuardApi]::IsIconic($m))
+    # コンソール窓を正しく閉じる (本体側の Close-ConsoleGracefully と同じ。EdgeBox は動き続ける)。閉じられたら $true
+    function Close-GuardConsole {
+        $procs = @(Get-Process vmconnect -ErrorAction SilentlyContinue)
+        if ($procs.Count -eq 0) { return $true }
+        foreach ($p in $procs) { try { [void]$p.CloseMainWindow() } catch { } }
+        $csw = [System.Diagnostics.Stopwatch]::StartNew()
+        while ($csw.Elapsed.TotalSeconds -lt 8) {
+            if (-not (Get-Process vmconnect -ErrorAction SilentlyContinue)) { Start-Sleep -Milliseconds 300; return $true }
+            Start-Sleep -Milliseconds 300
         }
-        foreach ($w in $wins) { if ([GuardApi]::IsIconic($w)) { [GuardApi]::ShowWindow($w, 9) | Out-Null } }   # SW_RESTORE
+        Get-Process vmconnect -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+        Start-Sleep -Milliseconds 500
+        return (-not (Get-Process vmconnect -ErrorAction SilentlyContinue))
+    }
+    # 左画面のコンソール表示を立ち上げ直す (電源 ON のときと同じ流れで全画面になる。見張り役も新しいものに入れ替わる)
+    function Start-GuardConsole {
+        Start-Process powershell.exe -WindowStyle Hidden -ArgumentList (
+            "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" -VMName `"$VMName`" -LeftUrl console -RightUrl `"`" -NoSplash -KeepConsole")
+    }
+    # 収納: 左画面を Windows に明け渡す。全画面のまま最小化はしない (戻したときに真っ白になる) ので、
+    #   全画面 → 解除してから普通の窓を最小化。解除できない環境では、コンソール窓を閉じる (EdgeBox は動き続ける)
+    # 戻り値: "最小化" / "閉じた" / "" (できなかった)
+    function Invoke-GuardStow {
+        $h = Get-ConsoleMain
+        if ($h -eq [IntPtr]::Zero) { return "" }
+        if (Test-ConsoleFullScreenOn $left) {
+            if ((Exit-GuardFullScreen $h) -ne "解除") {
+                Log "左画面の見張り役: 全画面を解除できないため、コンソール窓を閉じて左画面を明け渡します (EdgeBox は動いています)。"
+                if (Close-GuardConsole) { return "閉じた" } else { return "" }
+            }
+            Start-Sleep -Milliseconds 300
+            $h = Get-ConsoleMain
+            if ($h -eq [IntPtr]::Zero) { return "閉じた" }
+        }
+        [GuardApi]::ShowWindow($h, 6) | Out-Null   # SW_MINIMIZE (普通の窓なので安全に戻せる)
         Start-Sleep -Milliseconds 400
-        $m = Get-ConsoleMain
-        if ($m -ne [IntPtr]::Zero) {
-            $fs = Get-ConsoleFullScreenWindow $left
-            Set-GuardForeground $(if ($fs -ne [IntPtr]::Zero) { $fs } else { $m }) | Out-Null
-        }
-        return $true
+        if ([GuardApi]::IsIconic($h)) { return "最小化" }
+        Log "左画面の見張り役: コンソール窓を最小化できないため、閉じて左画面を明け渡します (EdgeBox は動いています)。"
+        if (Close-GuardConsole) { return "閉じた" }
+        return ""
+    }
+    # 収納から戻す: 最小化した窓なら復元する (全画面への固定は見張り役の通常の見回りに任せる = 実績のある手順)。
+    #   窓が無ければ (閉じた / 閉じられた) 表示を立ち上げ直す。戻り値: "復元" / "立ち上げ直し"
+    function Invoke-GuardUnstow {
+        $h = Get-ConsoleMain
+        if ($h -eq [IntPtr]::Zero) { Start-GuardConsole; return "立ち上げ直し" }
+        if ([GuardApi]::IsIconic($h)) { [GuardApi]::ShowWindow($h, 9) | Out-Null; Start-Sleep -Milliseconds 400 }   # SW_RESTORE
+        Set-GuardForeground $h | Out-Null
+        return "復元"
     }
     # キーが離されるまで待つ (最長 $maxMs)。押しっぱなしで何度も切り替わらないようにするための待ち。
     # コンソールの中にフォーカスが移ると離した合図が見張り役に届かないことがあるため、待ちに上限を設ける
@@ -949,13 +971,17 @@ public class GuardApi {
                         if ($how -eq "解除") {
                             Show-Notice "ESC 長押しで左画面の固定を解除しました ($hotkey でもう一度固定)"
                             Log "左画面の見張り役: ESC 長押しにより固定を解除しました (自動では戻しません。再固定は $hotkey)。"
-                        } elseif ($how -eq "収納") {
-                            $stowed = $true
-                            Show-Notice "ESC 長押し: 全画面の解除が効かないため、コンソールを収納しました ($stowHotkey 長押しで戻す)"
-                            Log "左画面の見張り役: ESC 長押し: 全画面を解除できなかったため、コンソールを収納 (最小化) しました (戻すには $stowHotkey 長押し / $hotkey)。"
                         } else {
-                            Show-Notice "ESC 長押し: 全画面を解除できませんでした ($hotkey で固定の解除/再固定)"
-                            Log ("左画面の見張り役: ESC 長押し: 全画面を解除できませんでした (固定は解除扱い。再固定は $hotkey)。窓: " + (Get-ConsoleTopWindowDiag))
+                            # 解除できない環境では、代わりにコンソール窓を閉じて左画面を明け渡す (EdgeBox は動き続ける)。
+                            # 再表示は $stowHotkey 長押し (すぐ立ち上げ直す) か $hotkey (見張り役が立ち上げ直す)
+                            if (Close-GuardConsole) {
+                                $stowed = $true
+                                Show-Notice "ESC 長押し: 全画面の解除が効かないため、コンソール画面を閉じました ($stowHotkey 長押しで再表示)"
+                                Log "左画面の見張り役: ESC 長押し: 全画面を解除できなかったため、コンソール窓を閉じました (EdgeBox は動いています。再表示は $stowHotkey 長押し / $hotkey)。"
+                            } else {
+                                Show-Notice "ESC 長押し: 全画面を解除できませんでした ($hotkey で固定の解除/再固定)"
+                                Log "左画面の見張り役: ESC 長押し: 全画面を解除できず、コンソール窓も閉じられませんでした (固定は解除扱い。再固定は $hotkey)。"
+                            }
                         }
                     } elseif ($h -ne [IntPtr]::Zero -and [GuardApi]::IsZoomed($h)) {
                         $released = $true
@@ -965,9 +991,11 @@ public class GuardApi {
                     }
                 }
             } else { $escSince = $null }
-            # (c) 収納キー ($stowHotkey) を 1 秒長押し → コンソール窓を収納 (最小化) して左画面を Windows に明け渡す。
-            #     もう一度長押し → 窓を戻し、左画面の全画面に固定し直す (全画面のまま最小化されていれば復元だけで戻る。
-            #     外れていれば見張り役が全画面に戻す)。ESC と同じく Windows 側を操作しているときに効く
+            # (c) 収納キー ($stowHotkey) を 1 秒長押し → コンソールを収納して左画面を Windows に明け渡す
+            #     (全画面を解除してから普通の窓を最小化。解除できない環境では窓を閉じる。EdgeBox は動き続ける)。
+            #     もう一度長押し → 窓を戻し (閉じていれば立ち上げ直し)、左画面の全画面に固定し直す。
+            #     ESC と同じく Windows 側を操作しているときに効く。
+            #     収納の操作中は先に「固定の解除」にしておき、見張り役の見回りが途中の状態を全画面に戻そうとしないようにする
             $stowDown = $true
             foreach ($vk in $stowKeys) { if (([GuardApi]::GetAsyncKeyState($vk) -band 0x8000) -eq 0) { $stowDown = $false; break } }
             if ($stowDown) {
@@ -976,24 +1004,29 @@ public class GuardApi {
                     Wait-KeysUp $stowKeys 3000
                     $stowSince = $null
                     $h = Get-ConsoleMain
-                    if ($h -eq [IntPtr]::Zero) {
-                        Show-Notice "コンソール窓が見つかりません (『EdgeBox 画面』で表示し直せます)"
-                        Log "左画面の見張り役: $stowHotkey 長押し: コンソール窓が見つからないため何もしません。"
-                    } elseif (-not $stowed -and -not [GuardApi]::IsIconic($h)) {
-                        if (Set-GuardStowed $true) {
-                            $stowed = $true; $released = $true
+                    if (-not $stowed -and $h -ne [IntPtr]::Zero -and -not [GuardApi]::IsIconic($h)) {
+                        $released = $true
+                        $how = Invoke-GuardStow
+                        if ($how) {
+                            $stowed = $true
                             Show-Notice "コンソールを収納しました ($stowHotkey 長押しで全画面に戻す)"
-                            Log "左画面の見張り役: $stowHotkey 長押しによりコンソールを収納 (最小化) しました (戻すには $stowHotkey 長押し)。"
+                            Log "左画面の見張り役: $stowHotkey 長押しによりコンソールを収納しました ($how。戻すには $stowHotkey 長押し)。"
                         } else {
-                            Show-Notice "コンソールを収納できませんでした"
-                            Log ("左画面の見張り役: $stowHotkey 長押し: コンソールを収納 (最小化) できませんでした。窓: " + (Get-ConsoleTopWindowDiag))
+                            Show-Notice "コンソールを収納できませんでした ($hotkey で固定の解除/再固定)"
+                            Log ("左画面の見張り役: $stowHotkey 長押し: コンソールを収納できませんでした (固定は解除扱い)。窓: " + (Get-ConsoleTopWindowDiag))
                         }
                     } else {
-                        Set-GuardStowed $false | Out-Null
+                        $how = Invoke-GuardUnstow
                         $stowed = $false; $released = $false
                         $notCover = 3; $lastFs = [datetime]::MinValue   # 全画面が外れていれば次の見回りで戻す
-                        Show-Notice "コンソールを左画面の全画面に戻します ($stowHotkey 長押しで収納)"
-                        Log "左画面の見張り役: $stowHotkey 長押しによりコンソールを戻し、左画面の全画面に固定します。"
+                        if ($how -eq "立ち上げ直し") {
+                            Show-Notice "コンソール画面を立ち上げ直します (左画面に全画面で出るまで少しかかります)"
+                            Log "左画面の見張り役: $stowHotkey 長押し: コンソール窓が無いため、左画面の表示を立ち上げ直します (この見張り役も入れ替わります)。"
+                            Start-Sleep -Seconds 20   # 立ち上げ直しの間は何もしない (新しい見張り役に入れ替わる)
+                        } else {
+                            Show-Notice "コンソールを左画面の全画面に戻します ($stowHotkey 長押しで収納)"
+                            Log "左画面の見張り役: $stowHotkey 長押しによりコンソールを戻し、左画面の全画面に固定します。"
+                        }
                     }
                 }
             } else { $stowSince = $null }
@@ -1004,18 +1037,20 @@ public class GuardApi {
                 $released = -not $released
                 $h = Get-ConsoleMain
                 if ($released) {
-                    if ($h -ne [IntPtr]::Zero -and (Test-ConsoleFullScreenOn $left)) {
-                        $how = Exit-GuardFullScreen $h
-                        if ($how -eq "収納") { $stowed = $true }
-                    }
+                    if ($h -ne [IntPtr]::Zero -and (Test-ConsoleFullScreenOn $left)) { Exit-GuardFullScreen $h | Out-Null }
                     Show-Notice "左画面の固定を解除しました ($hotkey でもう一度固定)"
                     Log "左画面の見張り役: $hotkey により固定を解除しました。"
                 } else {
-                    if ($stowed -or ($h -ne [IntPtr]::Zero -and [GuardApi]::IsIconic($h))) { Set-GuardStowed $false | Out-Null }
+                    $how = ""
+                    if ($stowed -or $h -eq [IntPtr]::Zero -or [GuardApi]::IsIconic($h)) { $how = Invoke-GuardUnstow }   # 収納中なら戻す (閉じていれば立ち上げ直す)
                     $stowed = $false
                     Show-Notice "左画面を EdgeBox の全画面で固定しました ($hotkey で解除)"
                     Log "左画面の見張り役: $hotkey により固定に戻しました。"
                     $notCover = 3; $lastFs = [datetime]::MinValue
+                    if ($how -eq "立ち上げ直し") {
+                        Log "左画面の見張り役: コンソール窓が無いため、左画面の表示を立ち上げ直します (この見張り役も入れ替わります)。"
+                        Start-Sleep -Seconds 20
+                    }
                 }
                 # キーが離されるまで待つ (押しっぱなしで何度も切り替わらないように)
                 Wait-KeysUp $vkeys 5000
