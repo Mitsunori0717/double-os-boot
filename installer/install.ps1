@@ -106,6 +106,17 @@ Invoke-Setup "設定"                "08-settings-console.ps1"     @("-Setup")
 Invoke-Setup "全部シャットダウン"  "05-shutdown-all.ps1"         @("-Setup")
 Invoke-Setup "EdgeBox 再起動/画面" "10-restart-edgebox.ps1"      @("-Setup")
 
+# Windows Update の自動更新・自動再起動を止める (収集が勝手に止まらないように)
+try {
+    $wuScript = Join-Path $hostDir "12-windows-update.ps1"
+    if (Test-Path $wuScript) {
+        & $wuScript -Quiet *>&1 | Out-Null
+        # 見張り役は -Quiet では登録しないため、ここで一度だけ通常実行して登録する
+        & $wuScript *>&1 | Out-Null
+        $ok += "Windows Update の自動更新を停止"
+    }
+} catch { $ng += "Windows Update の停止" }
+
 # CPU 割り当て・監視のアイコン (Hyper-V が無くても作れる)
 try {
     $cpuSetup = Join-Path $cpuDir "cpu-console.ps1"
@@ -126,6 +137,11 @@ if ($ng.Count -gt 0) {
     Write-Host "  Hyper-V がまだ有効でない可能性があります。有効にして再起動したあと、"
     Write-Host "  この EXE をもう一度実行すると作られます。"
 }
+Write-Host ""
+Write-Host ""
+Write-Host "Windows Update は自動更新・自動再起動を止めてあります (収集が止まらないように)。" -ForegroundColor Yellow
+Write-Host "  更新を当てる: $hostDir\12-windows-update.ps1 -UpdateNow"
+Write-Host "  元に戻す    : $hostDir\12-windows-update.ps1 -Restore"
 Write-Host ""
 Write-Host "次の手順:" -ForegroundColor Cyan
 Write-Host "  $hostDir\SETUP-STEPS.md の①から順に進めてください。"

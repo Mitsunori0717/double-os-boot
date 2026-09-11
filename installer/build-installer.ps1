@@ -48,7 +48,8 @@ try {
         "windows-host\display-config.json", "windows-host\display-log.txt",
         "windows-host\display-error.txt", "windows-host\display-status.txt",
         "windows-host\field-boot-entry.conf", "windows-host\kiosk-login.xml",
-        "windows-cpu-partition\cpu-partition.json", "windows-cpu-partition\cpu-apps.json"
+        "windows-cpu-partition\cpu-partition.json", "windows-cpu-partition\cpu-apps.json",
+        "windows-host\windows-update-lock.log"
     )
     foreach ($e in $exclude) { Remove-Item (Join-Path $payloadDir $e) -Force -ErrorAction SilentlyContinue }
     Get-ChildItem $payloadDir -Recurse -Include "*.flag", "*.log", "*.bak" -File -ErrorAction SilentlyContinue |
