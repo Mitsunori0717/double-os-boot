@@ -714,6 +714,11 @@ $grpApps.Controls.Add($script:lblApps)
 $form.Controls.Add($grpApps)
 
 # --- 操作ボタン ---
+$script:btnUndo = New-Object System.Windows.Forms.Button
+$script:btnUndo.Text = "分割を解除"
+$script:btnUndo.Location = New-Object System.Drawing.Point(12, 834)
+$script:btnUndo.Size = New-Object System.Drawing.Size(140, 32)
+
 $script:btnFix = New-Object System.Windows.Forms.Button
 $script:btnFix.Text = "完全分離用に並べ直す"
 $script:btnFix.Location = New-Object System.Drawing.Point(308, 834)
@@ -738,7 +743,7 @@ $btnClose.Location = New-Object System.Drawing.Point(838, 834)
 $btnClose.Size = New-Object System.Drawing.Size(114, 32)
 $btnClose.DialogResult = "Cancel"
 $form.CancelButton = $btnClose
-$form.Controls.AddRange(@($script:btnFix, $script:chkTools, $script:btnApply, $btnClose))
+$form.Controls.AddRange(@($script:btnUndo, $script:btnFix, $script:chkTools, $script:btnApply, $btnClose))
 
 # ============================================================
 #  アプリの割り当て (cpu-apps.json / cpu-apps.ps1)
@@ -1132,6 +1137,21 @@ $script:btnApply.Add_Click({
     } else {
     Show-Info ("適用しました。`n`n  Windows            : CPU $hostText`n  $($script:VmNameSel) : CPU $guestText`n`n" +
         "『EdgeBox 監視』の「分離の状態」で、実際にどのコアで動いているか確認できます。")
+    }
+})
+
+$script:btnUndo.Add_Click({
+    $r = [System.Windows.Forms.MessageBox]::Show(
+        "CPU コア分割の設定をすべて解除して、元の状態に戻します。`nよろしいですか?", "CPU コア割り当て",
+        [System.Windows.Forms.MessageBoxButtons]::YesNo, [System.Windows.Forms.MessageBoxIcon]::Question)
+    if ($r -ne [System.Windows.Forms.DialogResult]::Yes) { return }
+    $form.Enabled = $false
+    try { $code = Invoke-Engine @("-Undo", "-VMName", "`"$($script:VmNameSel)`"", "-NoConfirm") } finally { $form.Enabled = $true }
+    Refresh-All
+    if ($code -eq 0) {
+        Show-Info "解除しました。`n(PC の再起動で完全に元へ戻ります)"
+    } else {
+        Show-Info "解除の途中で問題が起きました (終了コード $code)。表示されたウィンドウの内容をご確認ください。" "Warning"
     }
 })
 
