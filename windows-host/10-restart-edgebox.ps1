@@ -92,7 +92,10 @@ if ($Setup) {
         # UAC 確認なしで実行できるよう、管理者権限付きタスク + wscript 経由のショートカット (黒い窓を出さない)
         $arg = ("-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$PSCommandPath`" -VMName `"$VMName`" " + $d.Args).Trim()
         $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument $arg
-        $ts = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -ExecutionTimeLimit (New-TimeSpan -Hours 1)
+        # 時間制限なし + 多重起動可。表示処理は見張り役などの常駐プロセスを残すため、タスクは「実行中」のまま
+        # になる。時間制限があると 1 時間後にタスクごと (常駐プロセスも) 止められ、多重起動不可だと
+        # 「実行中」の間はアイコンを押しても何も起きない (以前の設定で『EdgeBox 再起動』が効かなくなっていた原因)
+        $ts = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -MultipleInstances Parallel -ExecutionTimeLimit (New-TimeSpan -Seconds 0)
         Register-ScheduledTask -TaskName $d.Task -Action $action -Settings $ts -RunLevel Highest -Force | Out-Null
         $taskName = $d.Task
         $vbs = Join-Path $PSScriptRoot $d.Vbs
