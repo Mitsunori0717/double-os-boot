@@ -4,11 +4,9 @@ display-config.json
 display-error.txt
 display-log.txt
 display-status.txt
-edgebox-memory.csv
 field-boot-entry.conf
 field-disk.conf
 kiosk-login.xml
 launch-console-view.vbs
 launch-restart.vbs
-memory-pending.json
 windows-update-lock.log
