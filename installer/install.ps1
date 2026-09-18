@@ -1,4 +1,4 @@
-﻿<#
+<#
 .SYNOPSIS
     EdgeBox 一式を新しい PC に配置し、デスクトップのアイコンを作ります。
     EdgeBox-Setup.exe の中から呼ばれます (単体でも実行できます)。
@@ -116,6 +116,12 @@ try {
         $ok += "Windows Update の自動更新を停止"
     }
 } catch { $ng += "Windows Update の停止" }
+
+# 「PC のセットアップを完了しましょう」などの勧誘画面を止める (EdgeBox の画面の前に出ないように)
+try {
+    $qScript = Join-Path $hostDir "13-quiet-windows.ps1"
+    if (Test-Path $qScript) { & $qScript *>&1 | Out-Null; $ok += "Windows の勧誘画面を停止" }
+} catch { $ng += "Windows の勧誘画面の停止" }
 
 # CPU 割り当て・監視のアイコン (Hyper-V が無くても作れる)
 try {

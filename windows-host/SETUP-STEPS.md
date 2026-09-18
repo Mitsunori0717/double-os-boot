@@ -199,6 +199,18 @@ fix-black-screen.cmd をダブルクリック   ※管理者にしないこと
 起動中スプラッシュ・黒背景の残骸を閉じ、デスクトップ (explorer.exe) が止まっていれば
 起動し直す。EdgeBox や CPU 割り当てには触れないため、いつ実行しても安全。
 
+### 「PC のセットアップを完了しましょう」などの勧誘画面を止める (13-quiet-windows.ps1)
+
+```powershell
+.\13-quiet-windows.ps1            # 止める (サインアウト → サインインで反映)
+.\13-quiet-windows.ps1 -Status    # 今の状態
+.\13-quiet-windows.ps1 -Disable   # 元に戻す
+```
+
+サインイン直後や更新のあとに全画面で出る「PC のセットアップを完了しましょう」、更新後の「ようこそ」、
+「ヒントと提案」、機能更新後の「プライバシー設定」画面を止める。いまのアカウントと、
+この PC に読み込まれている全アカウントに入れる。
+
 ### Windows Update の自動更新・自動再起動を止める (12-windows-update.ps1)
 
 ```powershell
