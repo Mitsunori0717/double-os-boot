@@ -551,28 +551,34 @@ function Draw-Memory($g, [int]$x, [int]$y, [int]$w, [int]$h) {
     $barY = $y + 22; $barH = 18
     $g.FillRectangle($BrFree, (Rect $x $barY $w $barH))
     if ($tot -gt 0) {
-        $wWin = [int]($w * [double]$m.WinGB / $tot)
-        $wVm  = [int]($w * [double]$m.VmGB / $tot)
+        # EdgeBox の取り分は、渡している量 (割り当て) で数える。
+        # vmmem として見えない構成があるため、見えない場合も割り当て量で色分けする
+        $vmGB = [double]$m.VmGB
+        if ($vmGB -le 0.1 -and $m.VmState -eq "Running") { $vmGB = [double]$m.VmAssignedGB }
+        # 使用中の合計から EdgeBox の分を引いたものが Windows の分
+        $winGB = [Math]::Max(0.0, ($tot - $m.FreeGB) - $vmGB)
+        $wWin = [int]($w * $winGB / $tot)
+        $wVm  = [int]($w * $vmGB / $tot)
         $g.FillRectangle($BrWin, (Rect $x $barY $wWin $barH))
         $g.FillRectangle($BrVm,  (Rect ($x + $wWin) $barY $wVm $barH))
         $g.DrawRectangle($PenNone, (Rect $x $barY $w $barH))
-        # 1 行目: Windows 側の負荷 (物理メモリの使用率・コミット率・ページング)
+        # 1 行目: PC 全体の内訳 (Windows / EdgeBox / 空き) とメモリの逼迫具合
         $winPct = if ($tot -gt 0) { 100.0 * ($tot - $m.FreeGB) / $tot } else { 0.0 }
-        $l1 = "PC 全体 {0:N1} GB    Windows 使用中 {1:N1} GB    空き {2:N1} GB (物理 {3:N0}% 使用)    コミット率 {4:N0}%    ページング {5:N0} /秒" -f `
-            $tot, $m.WinGB, $m.FreeGB, $winPct, $m.WinCommitPct, $m.WinPagesPerSec
+        $l1 = "PC 全体 {0:N1} GB    Windows {1:N1} GB    {2} {3:N1} GB    空き {4:N1} GB (物理 {5:N0}% 使用)    コミット率 {6:N0}%    ページング {7:N0} /秒" -f `
+            $tot, $winGB, $VMName, $vmGB, $m.FreeGB, $winPct, $m.WinCommitPct, $m.WinPagesPerSec
         $brL1 = $BrText
         if ($m.WinCommitPct -ge 90 -or $m.WinPagesPerSec -ge 1000) { $brL1 = $BrBad }
         $g.DrawString($l1, $FontBody, $brL1, (PointF $x ($barY + $barH + 4)))
-        # 2 行目: EdgeBox 内部 (統合サービスの報告があるときだけ数字が出る)
+        # 2 行目: EdgeBox 内部 (統合サービスの報告があるときだけ表示する。報告が無ければ割り当てだけ)
         if ($m.VmReported) {
             $usedIn = [Math]::Max(0.0, $m.VmVisibleGB - $m.VmAvailGB)
             $inPct = if ($m.VmVisibleGB -gt 0) { 100.0 * $usedIn / $m.VmVisibleGB } else { 0.0 }
-            $l2 = "{0} 割り当て {1:N1} GB (実メモリ {2:N1} GB)    内部で使用中 {3:N1} GB / 内部の空き {4:N1} GB ({5:N0}% 使用)    要求 {6:N1} GB    圧力 {7:N0}%    状態 {8}" -f `
-                $VMName, $m.VmAssignedGB, $m.VmGB, $usedIn, $m.VmAvailGB, $inPct, $m.VmDemandGB, $m.VmPressure, $(if ($m.VmMemStatus) { $m.VmMemStatus } else { "-" })
+            $l2 = "{0} 割り当て {1:N1} GB    内部で使用中 {2:N1} GB / 内部の空き {3:N1} GB ({4:N0}% 使用)    要求 {5:N1} GB    圧力 {6:N0}%    状態 {7}" -f `
+                $VMName, $m.VmAssignedGB, $usedIn, $m.VmAvailGB, $inPct, $m.VmDemandGB, $m.VmPressure, $(if ($m.VmMemStatus) { $m.VmMemStatus } else { "-" })
             $brL2 = if ($m.VmPressure -ge 90 -or $m.VmMemStatus -match 'Low|Warning') { $BrBad } else { $BrText }
         } else {
-            $l2 = "{0} 割り当て {1:N1} GB (実メモリ {2:N1} GB)    内部の使用量: 取得不可 — {0} が Hyper-V の統合サービス (メモリの報告) を持たないため、外からは見えません" -f `
-                $VMName, $m.VmAssignedGB, $m.VmGB
+            $l2 = "{0} 割り当て {1:N1} GB    (量の変更は『CPU コア割り当て』画面の「メモリの割り当て」から)" -f `
+                $VMName, $m.VmAssignedGB
             $brL2 = $BrGray
         }
         $g.DrawString($l2, $FontBody, $brL2, (PointF $x ($barY + $barH + 22)))
@@ -666,13 +672,51 @@ function Draw-All($g, [int]$W, [int]$H) {
 
 # ============================================================ ウィンドウ
 
+# --- 普通のアプリらしく見せる: 専用のアイコンと、タスクバーでの独立 ---
+# これを入れないと、PowerShell のアイコンで PowerShell と同じ束にまとめられてしまう
+if (-not ("Win.AppShell" -as [type])) {
+    Add-Type -Namespace Win -Name AppShell -MemberDefinition @'
+[DllImport("shell32.dll", CharSet = CharSet.Unicode)]
+public static extern int SetCurrentProcessExplicitAppUserModelID(string AppID);
+'@ -ErrorAction SilentlyContinue
+}
+try { [Win.AppShell]::SetCurrentProcessExplicitAppUserModelID("EdgeBox.Monitor") | Out-Null } catch { }
+
+function Get-AppIcon([string]$Style) {
+    try {
+        Add-Type -AssemblyName System.Drawing -ErrorAction Stop
+        $bmp = New-Object System.Drawing.Bitmap 32, 32
+        $g = [System.Drawing.Graphics]::FromImage($bmp)
+        $g.Clear([System.Drawing.Color]::Transparent)
+        $body = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb(38, 62, 110))
+        $win  = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb(80, 148, 232))
+        $vm   = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb(104, 196, 138))
+        $g.FillRectangle($body, 3, 3, 26, 26)
+        switch ($Style) {
+            "monitor" {
+                $g.FillRectangle($win, 8, 17, 5, 7); $g.FillRectangle($vm, 14, 10, 5, 14); $g.FillRectangle($win, 20, 19, 5, 5)
+            }
+            "settings" {
+                $g.FillRectangle($win, 8, 9, 16, 4); $g.FillRectangle($vm, 8, 16, 16, 4); $g.FillRectangle($win, 8, 23, 10, 3)
+            }
+            default {
+                $g.FillRectangle($win, 8, 8, 6, 16); $g.FillRectangle($vm, 18, 8, 6, 16)
+            }
+        }
+        $g.Dispose()
+        $ico = [System.Drawing.Icon]::FromHandle($bmp.GetHicon())
+        return $ico
+    } catch { return $null }
+}
+
 $form = New-Object System.Windows.Forms.Form
+$appIcon = Get-AppIcon "monitor"
+if ($appIcon) { $form.Icon = $appIcon }
 $form.Text = "$VMName 監視 — 各コアの負荷とメモリ"
-$form.ClientSize = New-Object System.Drawing.Size(1120, 620)
-$form.MinimumSize = New-Object System.Drawing.Size(640, 440)
+$form.ClientSize = New-Object System.Drawing.Size(1120, 600)
 $form.StartPosition = "CenterScreen"
-$form.FormBorderStyle = "Sizable"      # 大きさは自由に変えられる
-$form.MaximizeBox = $true
+$form.FormBorderStyle = "FixedDialog"   # 大きさは固定
+$form.MaximizeBox = $false
 $form.MinimizeBox = $true              # 最小化してしまっておける
 $form.TopMost = [bool]$TopMost
 $form.Font = New-Object System.Drawing.Font -ArgumentList @("Meiryo UI", [float]9)

@@ -90,7 +90,8 @@ if ($Setup) {
     if (-not (Test-Admin)) { Write-Error "管理者権限で実行してください。"; exit 1 }
     $action = New-ScheduledTaskAction -Execute "powershell.exe" `
         -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" -NoConfirm -VMName `"$VMName`""
-    $ts = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -ExecutionTimeLimit (New-TimeSpan -Hours 1)
+    # 時間制限なし + 多重起動可 (表示処理が常駐プロセスを残すため。理由は 10-restart-edgebox.ps1 の -Setup を参照)
+    $ts = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -MultipleInstances Parallel -ExecutionTimeLimit (New-TimeSpan -Seconds 0)
     Register-ScheduledTask -TaskName $TaskName -Action $action -Settings $ts -RunLevel Highest -Force | Out-Null
 
     $lnkPath = Join-Path ([Environment]::GetFolderPath("Desktop")) "EdgeBox 起動.lnk"

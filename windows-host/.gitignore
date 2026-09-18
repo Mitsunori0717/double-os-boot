@@ -1,11 +1,12 @@
 # 端末固有の設定・暗号化ログイン情報はリポジトリに含めない
+*.flag
 display-config.json
-kiosk-login.xml
-field-boot-entry.conf
+display-error.txt
 display-log.txt
 display-status.txt
-display-error.txt
-*.flag
+field-boot-entry.conf
 field-disk.conf
-launch-restart.vbs
+kiosk-login.xml
 launch-console-view.vbs
+launch-restart.vbs
+windows-update-lock.log
