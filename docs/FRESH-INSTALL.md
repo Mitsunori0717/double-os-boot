@@ -160,6 +160,7 @@ powercfg /h off                          # 高速スタートアップ無効 (�
 .\06-auto-logon.ps1 -Setup               # サインイン画面を省略 (電源 ON で直接デスクトップへ)
 .\04-reboot-to-field-native.ps1 -Setup   # 『EdgeBox 単独起動』アイコン (切り分け用。UEFI の起動項目を選ぶ)
 .\07-boot-appearance.ps1                 # 起動時の見た目を黒でそろえる
+.\12-quiet-windows.ps1                   # 「PC のセットアップを完了しましょう」などの勧誘画面を止める
 ```
 
 **確認**: `.\03-field-display-kiosk.ps1` を引数なしで実行すると、今すぐ左画面に EdgeBox の全画面が出る。
