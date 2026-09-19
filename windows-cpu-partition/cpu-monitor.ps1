@@ -355,9 +355,9 @@ function Sample {
                 $new[$i] = @{ Vm = [Math]::Max(0.0, $guest - $win); Win = [Math]::Min($guest, $win); Hv = [Math]::Max(0.0, $total - $guest); G = $guest }
             }
             # --- 分離の判定は「合計」で行う ---
-            # LP ごとの「guest − ルート VP」は、ルート VP がその番号の LP で動く前提 (root スケジューラ) でしか正しくない。
-            # minroot + classic/core では Windows のルート VP が Windows 用 LP の中を動き回るため、LP ごとの差し引きに
-            # 見かけ上の「EdgeBox 実行」が出る。そこで、EdgeBox の VP の合計実行時間と EdgeBox 用 LP の guest 合計を
+            # LP ごとの「guest − 同じ番号のルート VP」は、ルート VP が LP と 1:1 で固定されていても正確にならない。
+            # LP の帳簿とルート VP の帳簿は別々に読むため読み取り時刻がずれ、毎秒の差を 0 で切ると正の偏りが残り、
+            # 見かけ上の「EdgeBox 実行」が出るため。そこで、EdgeBox の VP の合計実行時間と EdgeBox 用 LP の guest 合計を
             # 突き合わせる: EdgeBox 用 LP には (minroot で) Windows は載れないので、
             #   EdgeBox が EdgeBox 用コアの外で動いた量 = EdgeBox VP 合計 − EdgeBox 用 LP の guest 合計
             #   Windows が EdgeBox 用コアで動いた量     = EdgeBox 用 LP の guest 合計 − EdgeBox VP 合計

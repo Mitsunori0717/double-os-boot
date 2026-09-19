@@ -234,8 +234,8 @@ CPU 番号の対応を仮定しないため、full (minroot + classic/core) で�
 - 混成 CPU では `-HostCores` (コア数指定) は曖昧になるため、論理 CPU 番号での明示指定 (`-HostLps` / `-GuestLps`) を求めます
 - full の minroot は「先頭から N 個」方式のため、Windows 側は必ず論理 0 始まりの連番です
 - `-Verify` は「CPU ごとの実行時間 − 同じ番号のルート VP の実行時間」で EdgeBox の実行を推定します。
-  この方法は runtime (root スケジューラ) では正確ですが、full ではルート VP が Windows 用 CPU の中を移動するため
-  見かけの値が出ます。full の確認は『EdgeBox 監視』の「分離の状態」(VP 合計で判定) を使ってください
+  この方法は 2 つの帳簿を別々の時刻に読んで毎秒 0 で切るため、正の偏り (見かけの値) が残ります。
+  full の確認は『EdgeBox 監視』の「分離の状態」(VP 合計で判定) を使ってください
 
 ## 自動タスク・常駐の一覧
 
