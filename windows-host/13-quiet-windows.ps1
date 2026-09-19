@@ -124,21 +124,31 @@ $hives = Get-UserHives
 $BackupFile = Join-Path $PSScriptRoot "quiet-windows-backup.json"
 $SchemeName = "EdgeBox 常時稼働"
 $GuidRe = '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}'
+# powercfg を呼ぶ。エラー出力は文字列として受け取り、例外にはしない
+# ($ErrorActionPreference = Stop のまま 2> を使うと、標準エラー出力が例外扱いになるため)
+function Invoke-Pc([string[]]$ArgList) {
+    $prev = $ErrorActionPreference; $ErrorActionPreference = "Continue"
+    try {
+        $out = @(& powercfg.exe @ArgList 2>&1 | ForEach-Object { "$_" })
+        $script:PcExit = $LASTEXITCODE
+        return ,$out
+    } finally { $ErrorActionPreference = $prev }
+}
 function Get-Guid1($text) {
     $m = [regex]::Match((@($text) -join "`n"), $GuidRe)
     if ($m.Success) { return $m.Value } else { return "" }
 }
-function Get-ActiveScheme { return (Get-Guid1 (powercfg /getactivescheme 2>$null)) }
+function Get-ActiveScheme { return (Get-Guid1 (Invoke-Pc @("/getactivescheme"))) }
 function Get-ActiveSchemeName {
-    $t = (@(powercfg /getactivescheme 2>$null) -join " ")
+    $t = ((Invoke-Pc @("/getactivescheme")) -join " ")
     $m = [regex]::Match($t, '\(([^)]+)\)\s*$'); if ($m.Success) { return $m.Groups[1].Value } else { return $t }
 }
 function Find-OurScheme {
-    foreach ($l in @(powercfg /list 2>$null)) { if ($l -like "*$SchemeName*") { return (Get-Guid1 $l) } }
+    foreach ($l in (Invoke-Pc @("/list"))) { if ($l -like "*$SchemeName*") { return (Get-Guid1 $l) } }
     return ""
 }
 function Get-PowerIndex([string]$sub, [string]$setting) {
-    $out = (@(powercfg /query SCHEME_CURRENT $sub $setting 2>$null) -join "`n")
+    $out = ((Invoke-Pc @("/query", "SCHEME_CURRENT", $sub, $setting)) -join "`n")
     $m = [regex]::Match($out, 'AC[^\n]*?0x([0-9a-fA-F]+)')
     if ($m.Success) { return [Convert]::ToInt32($m.Groups[1].Value, 16) } else { return -1 }
 }
@@ -166,31 +176,38 @@ function Set-PowerQuiet {
             @{ OriginalScheme = $orig; HibernateEnabled = (Get-HibernateEnabled); Saved = (Get-Date).ToString("s") } |
                 ConvertTo-Json | Set-Content -Path $BackupFile -Encoding UTF8
         }
-        $ours = Get-Guid1 (powercfg /duplicatescheme $orig 2>$null)
+        $ours = Get-Guid1 (Invoke-Pc @("/duplicatescheme", $orig))
         if (-not $ours) { throw "電源プランを複製できませんでした" }
-        powercfg /changename $ours $SchemeName "再起動・スリープ・休止をしない (EdgeBox の収集を止めない)" | Out-Null
+        Invoke-Pc @("/changename", $ours, $SchemeName, "再起動・スリープ・休止をしない (EdgeBox の収集を止めない)") | Out-Null
     }
-    powercfg /setactive $ours | Out-Null
-    powercfg /change standby-timeout-ac 0   | Out-Null
-    powercfg /change standby-timeout-dc 0   | Out-Null
-    powercfg /change hibernate-timeout-ac 0 | Out-Null
-    powercfg /change hibernate-timeout-dc 0 | Out-Null
+    Invoke-Pc @("/setactive", $ours) | Out-Null
+    if ($script:PcExit -ne 0) { throw "電源プランを切り替えられませんでした" }
+    $warn = @()
+    foreach ($a in @(@("/change", "standby-timeout-ac", "0"), @("/change", "standby-timeout-dc", "0"),
+                     @("/change", "hibernate-timeout-ac", "0"), @("/change", "hibernate-timeout-dc", "0"))) {
+        Invoke-Pc $a | Out-Null
+        if ($script:PcExit -ne 0) { $warn += ($a[1]) }
+    }
+    # ボタン類: 電源ボタン / スリープボタン / ふた。機種に無い項目 (デスクトップのふた等) は失敗しても構わない
     foreach ($st in @("PBUTTONACTION", "SLEEPBUTTONACTION", "LIDACTION")) {
-        powercfg /setacvalueindex SCHEME_CURRENT SUB_BUTTONS $st 0 2>$null | Out-Null
-        powercfg /setdcvalueindex SCHEME_CURRENT SUB_BUTTONS $st 0 2>$null | Out-Null
+        Invoke-Pc @("/setacvalueindex", "SCHEME_CURRENT", "SUB_BUTTONS", $st, "0") | Out-Null
+        if ($script:PcExit -ne 0 -and $st -eq "PBUTTONACTION") { $warn += "電源ボタン" }
+        Invoke-Pc @("/setdcvalueindex", "SCHEME_CURRENT", "SUB_BUTTONS", $st, "0") | Out-Null
     }
-    powercfg /setacvalueindex SCHEME_CURRENT SUB_SLEEP HYBRIDSLEEP 0 2>$null | Out-Null
-    powercfg /setactive SCHEME_CURRENT | Out-Null
-    powercfg /hibernate off 2>$null | Out-Null
+    Invoke-Pc @("/setacvalueindex", "SCHEME_CURRENT", "SUB_SLEEP", "HYBRIDSLEEP", "0") | Out-Null
+    Invoke-Pc @("/setactive", "SCHEME_CURRENT") | Out-Null
+    Invoke-Pc @("/hibernate", "off") | Out-Null
+    if ($script:PcExit -ne 0) { $warn += "休止状態の無効化" }
+    return $warn
 }
 function Restore-Power {
     $b = $null
     if (Test-Path $BackupFile) { try { $b = Get-Content $BackupFile -Raw -Encoding UTF8 | ConvertFrom-Json } catch { } }
-    if ($b -and $b.OriginalScheme) { powercfg /setactive $b.OriginalScheme 2>$null | Out-Null }
-    else { powercfg /setactive SCHEME_BALANCED 2>$null | Out-Null }
+    if ($b -and $b.OriginalScheme) { Invoke-Pc @("/setactive", $b.OriginalScheme) | Out-Null }
+    else { Invoke-Pc @("/setactive", "SCHEME_BALANCED") | Out-Null }
     $ours = Find-OurScheme
-    if ($ours) { powercfg /delete $ours 2>$null | Out-Null }
-    if ($b -and [int]$b.HibernateEnabled -eq 1) { powercfg /hibernate on 2>$null | Out-Null }
+    if ($ours) { Invoke-Pc @("/delete", $ours) | Out-Null }
+    if ($b -and [int]$b.HibernateEnabled -eq 1) { Invoke-Pc @("/hibernate", "on") | Out-Null }
     Remove-Item $BackupFile -Force -ErrorAction SilentlyContinue
 }
 
@@ -229,7 +246,11 @@ foreach ($it in $MachineItems) {
 }
 Write-Host ("この PC 全体: {0}" -f $(if ($turnOff) { "勧誘画面を止めました" } else { "元に戻しました" })) -ForegroundColor Green
 try {
-    if ($turnOff) { Set-PowerQuiet; Write-Host "電源: スリープ・休止・電源ボタンを止めました (電源プラン「$SchemeName」)。" -ForegroundColor Green }
+    if ($turnOff) {
+        $w = @(Set-PowerQuiet)
+        Write-Host "電源: スリープ・休止・電源ボタンを止めました (電源プラン「$SchemeName」)。" -ForegroundColor Green
+        if ($w.Count -gt 0) { Write-Host ("  警告: 一部の電源設定が入りませんでした: " + ($w -join ", ") + "  (-Status で確認してください)") -ForegroundColor Yellow }
+    }
     else { Restore-Power; Write-Host "電源: 元のプランに戻しました。" -ForegroundColor Green }
 } catch { Write-Host ("  警告: 電源の設定に失敗: " + $_.Exception.Message) -ForegroundColor Yellow }
 Write-Host ""
