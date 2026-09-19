@@ -1,14 +1,19 @@
 ﻿<#
 .SYNOPSIS
-    「PC のセットアップを完了しましょう」などの Windows の勧誘画面を出さないようにします。
+    「PC のセットアップを完了しましょう」などの勧誘画面と、右下の通知 (トースト) を出さないようにします。
 
 .DESCRIPTION
     Windows 11 は、サインイン直後や更新のあとに、次のような画面を全画面で出すことがあります:
       - 「PC のセットアップを完了しましょう」(Microsoft アカウント・OneDrive・Edge などの勧め)
       - 更新後の「ようこそ」画面、「ヒントと提案」の通知
       - 機能更新後の「プライバシー設定を確認」画面
+    また、右下に出る通知 (トースト) も、アプリ・Windows セキュリティ・Windows Update の再起動の予告まで
+    含めてすべて止めます (通知センターも無効にします)。
     工場の表示用 PC ではどれも不要で、EdgeBox の画面の前に出てくると邪魔になるため、まとめて止めます。
     設定は、このアカウントと、この PC に読み込まれている全ユーザーのアカウントに入れます。
+
+    再起動そのもの (Windows Update による自動再起動) は 12-windows-update.ps1 が止めます。
+    両方を実行すると「再起動も通知も出ない」状態になります。
 
     元に戻すには -Disable を付けて実行します。
 
@@ -47,12 +52,33 @@ $UserItems = @(
     @{ Key = "Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager"; Name = "SubscribedContent-353696Enabled"; Off = 0; Default = 1
        Label = "タイムラインなどの提案" },
     @{ Key = "Software\Policies\Microsoft\Windows\CloudContent"; Name = "DisableWindowsSpotlightWindowsWelcomeExperience"; Off = 1; Default = $null
-       Label = "ポリシー: 「ようこそ」画面を無効" }
+       Label = "ポリシー: 「ようこそ」画面を無効" },
+    # --- 右下の通知 (トースト) ---
+    @{ Key = "Software\Microsoft\Windows\CurrentVersion\PushNotifications"; Name = "ToastEnabled"; Off = 0; Default = 1
+       Label = "通知: 右下の通知 (アプリやシステムからの通知) 全体" },
+    @{ Key = "Software\Microsoft\Windows\CurrentVersion\Notifications\Settings"; Name = "NOC_GLOBAL_SETTING_TOASTS_ENABLED"; Off = 0; Default = 1
+       Label = "通知: 設定アプリの「通知」スイッチ" },
+    @{ Key = "Software\Microsoft\Windows\CurrentVersion\Notifications\Settings\Windows.SystemToast.SecurityAndMaintenance"; Name = "Enabled"; Off = 0; Default = $null
+       Label = "通知: セキュリティとメンテナンス" },
+    @{ Key = "Software\Policies\Microsoft\Windows\CurrentVersion\PushNotifications"; Name = "NoToastApplicationNotification"; Off = 1; Default = $null
+       Label = "ポリシー: アプリの通知を出さない" },
+    @{ Key = "Software\Policies\Microsoft\Windows\CurrentVersion\PushNotifications"; Name = "NoToastApplicationNotificationOnLockScreen"; Off = 1; Default = $null
+       Label = "ポリシー: ロック画面にも通知を出さない" },
+    @{ Key = "Software\Policies\Microsoft\Windows\Explorer"; Name = "DisableNotificationCenter"; Off = 1; Default = $null
+       Label = "ポリシー: 通知センターを無効" }
 )
 # PC 全体の設定
 $MachineItems = @(
     @{ Key = "HKLM:\SOFTWARE\Policies\Microsoft\Windows\OOBE"; Name = "DisablePrivacyExperience"; Off = 1; Default = $null
-       Label = "ポリシー: 機能更新後の「プライバシー設定」画面を出さない" }
+       Label = "ポリシー: 機能更新後の「プライバシー設定」画面を出さない" },
+    @{ Key = "HKLM:\SOFTWARE\Policies\Microsoft\Windows Defender Security Center\Notifications"; Name = "DisableNotifications"; Off = 1; Default = $null
+       Label = "通知: Windows セキュリティの通知" },
+    @{ Key = "HKLM:\SOFTWARE\Policies\Microsoft\Windows Defender Security Center\Notifications"; Name = "DisableEnhancedNotifications"; Off = 1; Default = $null
+       Label = "通知: Windows セキュリティの追加の通知" },
+    @{ Key = "HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate"; Name = "SetUpdateNotificationLevel"; Off = 2; Default = $null
+       Label = "通知: Windows Update の通知 (再起動の予告を含む) を出さない" },
+    @{ Key = "HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate"; Name = "SetAutoRestartNotificationDisable"; Off = 1; Default = $null
+       Label = "通知: 自動再起動の通知を出さない" }
 )
 
 # 設定を入れる先: いまのユーザー + この PC に読み込まれている全ユーザー (自動サインインのアカウントなど)
@@ -124,4 +150,12 @@ Write-Host ("この PC 全体: {0}" -f $(if ($turnOff) { "勧誘画面を止め�
 Write-Host ""
 Write-Host "反映には、いちど サインアウト → サインイン (または PC の再起動) が必要です。" -ForegroundColor Cyan
 Write-Host "もし今、画面に出ている場合は、その画面の「今はスキップ」(または右上の ×) で閉じてください。次回からは出ません。" -ForegroundColor Cyan
+if ($turnOff) {
+    $wu = Join-Path $PSScriptRoot "12-windows-update.ps1"
+    $wuOn = $false
+    try { $wuOn = ((Get-ItemProperty "HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU" -Name NoAutoUpdate -ErrorAction SilentlyContinue).NoAutoUpdate -eq 1) } catch { }
+    if (-not $wuOn -and (Test-Path $wu)) {
+        Write-Host "再起動そのもの (Windows Update の自動再起動) はまだ止まっていません。次も実行してください:  .\12-windows-update.ps1" -ForegroundColor Yellow
+    }
+}
 exit 0
