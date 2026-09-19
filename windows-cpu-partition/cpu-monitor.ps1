@@ -329,9 +329,17 @@ $script:TickNo  = 0
 function Sample {
     $script:TickNo++
     if ($script:lpName) {
+        # LP と EdgeBox の VP は続けて読む (2 つの帳簿の読み取り時刻のずれを最小にする)。ルート側はその後
         $lp = Get-CounterMap $script:lpName
-        $rv = Get-CounterMap $script:rvName
         $vp = Get-VpCounterMap $script:vpName $VMName
+        $rv = Get-CounterMap $script:rvName
+        # EdgeBox の再起動などで VP の帳簿がリセット (減少・入れ替わり) した区間は、突き合わせに使わない
+        $reset = $false
+        if ($script:prevVp) {
+            $pk = (@($script:prevVp.Keys) | Sort-Object) -join ","; $ck = (@($vp.Keys) | Sort-Object) -join ","
+            if ($pk -ne $ck) { $reset = $true }
+            else { foreach ($k in @($vp.Keys)) { if ([double]$vp[$k].PercentGuestRunTime -lt [double]$script:prevVp[$k].PercentGuestRunTime) { $reset = $true } } }
+        }
         if ($script:prevLp) {
             $new = @{}
             foreach ($i in @($lp.Keys)) {
@@ -382,8 +390,10 @@ function Sample {
                 $rawWin = 0.0; foreach ($l in $guestLps) { if ($new.ContainsKey([int]$l)) { $rawWin += [double]$new[[int]$l].Win } }
                 # 直近 60 秒分を符号付きで足してから 0 で切る (読み取り時刻のずれによる揺れは打ち消し合う)
                 # 注意: 配列に数値を足すときは両方を @() で包む (1 要素だとスカラーになり、数値の足し算になってしまう)
-                $script:LeakVmHist  = @(@($script:LeakVmHist)  + @([double]$leakVmTot)  | Select-Object -Last $script:LeakWindow)
-                $script:LeakWinHist = @(@($script:LeakWinHist) + @([double]$leakWinTot) | Select-Object -Last $script:LeakWindow)
+                if (-not $reset) {
+                    $script:LeakVmHist  = @(@($script:LeakVmHist)  + @([double]$leakVmTot)  | Select-Object -Last $script:LeakWindow)
+                    $script:LeakWinHist = @(@($script:LeakWinHist) + @([double]$leakWinTot) | Select-Object -Last $script:LeakWindow)
+                }
                 $n = [Math]::Max(1, $script:LeakVmHist.Count)
                 $script:LeakVm  = [Math]::Max(0.0, [double](($script:LeakVmHist  | Measure-Object -Sum).Sum) / $n / $hostLps.Count)
                 $script:LeakWin = [Math]::Max(0.0, [double](($script:LeakWinHist | Measure-Object -Sum).Sum) / $n / $guestLps.Count)
