@@ -1,14 +1,25 @@
 ﻿<#
 .SYNOPSIS
-    「PC のセットアップを完了しましょう」などの Windows の勧誘画面を出さないようにします。
+    「PC のセットアップを完了しましょう」などの勧誘画面と、右下の通知 (トースト) を出さないようにします。
 
 .DESCRIPTION
     Windows 11 は、サインイン直後や更新のあとに、次のような画面を全画面で出すことがあります:
       - 「PC のセットアップを完了しましょう」(Microsoft アカウント・OneDrive・Edge などの勧め)
       - 更新後の「ようこそ」画面、「ヒントと提案」の通知
       - 機能更新後の「プライバシー設定を確認」画面
+    また、右下に出る通知 (トースト) も、アプリ・Windows セキュリティ・Windows Update の再起動の予告まで
+    含めてすべて止めます (通知センターも無効にします)。
     工場の表示用 PC ではどれも不要で、EdgeBox の画面の前に出てくると邪魔になるため、まとめて止めます。
     設定は、このアカウントと、この PC に読み込まれている全ユーザーのアカウントに入れます。
+
+    さらに、PC が勝手に止まる原因になるスリープ・休止状態・電源ボタンも止めます:
+      - 電源プラン「EdgeBox 常時稼働」を作って切り替え、スリープ/休止に入る時間を「なし」にする
+      - 休止状態そのものを無効にする (高速スタートアップも一緒に無効になる)
+      - 電源ボタン/スリープボタンを押しても何もしないようにする (4 秒以上の長押しによる強制電源断は残る)
+    元のプランと休止の設定は quiet-windows-backup.json に控え、-Disable で戻します。
+
+    再起動そのもの (Windows Update による自動再起動) は 12-windows-update.ps1 が止めます。
+    両方を実行すると「再起動も通知も出ず、スリープもしない」状態になります。
 
     元に戻すには -Disable を付けて実行します。
 
@@ -47,12 +58,33 @@ $UserItems = @(
     @{ Key = "Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager"; Name = "SubscribedContent-353696Enabled"; Off = 0; Default = 1
        Label = "タイムラインなどの提案" },
     @{ Key = "Software\Policies\Microsoft\Windows\CloudContent"; Name = "DisableWindowsSpotlightWindowsWelcomeExperience"; Off = 1; Default = $null
-       Label = "ポリシー: 「ようこそ」画面を無効" }
+       Label = "ポリシー: 「ようこそ」画面を無効" },
+    # --- 右下の通知 (トースト) ---
+    @{ Key = "Software\Microsoft\Windows\CurrentVersion\PushNotifications"; Name = "ToastEnabled"; Off = 0; Default = 1
+       Label = "通知: 右下の通知 (アプリやシステムからの通知) 全体" },
+    @{ Key = "Software\Microsoft\Windows\CurrentVersion\Notifications\Settings"; Name = "NOC_GLOBAL_SETTING_TOASTS_ENABLED"; Off = 0; Default = 1
+       Label = "通知: 設定アプリの「通知」スイッチ" },
+    @{ Key = "Software\Microsoft\Windows\CurrentVersion\Notifications\Settings\Windows.SystemToast.SecurityAndMaintenance"; Name = "Enabled"; Off = 0; Default = $null
+       Label = "通知: セキュリティとメンテナンス" },
+    @{ Key = "Software\Policies\Microsoft\Windows\CurrentVersion\PushNotifications"; Name = "NoToastApplicationNotification"; Off = 1; Default = $null
+       Label = "ポリシー: アプリの通知を出さない" },
+    @{ Key = "Software\Policies\Microsoft\Windows\CurrentVersion\PushNotifications"; Name = "NoToastApplicationNotificationOnLockScreen"; Off = 1; Default = $null
+       Label = "ポリシー: ロック画面にも通知を出さない" },
+    @{ Key = "Software\Policies\Microsoft\Windows\Explorer"; Name = "DisableNotificationCenter"; Off = 1; Default = $null
+       Label = "ポリシー: 通知センターを無効" }
 )
 # PC 全体の設定
 $MachineItems = @(
     @{ Key = "HKLM:\SOFTWARE\Policies\Microsoft\Windows\OOBE"; Name = "DisablePrivacyExperience"; Off = 1; Default = $null
-       Label = "ポリシー: 機能更新後の「プライバシー設定」画面を出さない" }
+       Label = "ポリシー: 機能更新後の「プライバシー設定」画面を出さない" },
+    @{ Key = "HKLM:\SOFTWARE\Policies\Microsoft\Windows Defender Security Center\Notifications"; Name = "DisableNotifications"; Off = 1; Default = $null
+       Label = "通知: Windows セキュリティの通知" },
+    @{ Key = "HKLM:\SOFTWARE\Policies\Microsoft\Windows Defender Security Center\Notifications"; Name = "DisableEnhancedNotifications"; Off = 1; Default = $null
+       Label = "通知: Windows セキュリティの追加の通知" },
+    @{ Key = "HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate"; Name = "SetUpdateNotificationLevel"; Off = 2; Default = $null
+       Label = "通知: Windows Update の通知 (再起動の予告を含む) を出さない" },
+    @{ Key = "HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate"; Name = "SetAutoRestartNotificationDisable"; Off = 1; Default = $null
+       Label = "通知: 自動再起動の通知を出さない" }
 )
 
 # 設定を入れる先: いまのユーザー + この PC に読み込まれている全ユーザー (自動サインインのアカウントなど)
@@ -88,6 +120,80 @@ function Get-Item2([string]$Path, [hashtable]$Item) {
 
 $hives = Get-UserHives
 
+# ------------------------------------------------------------ 電源 (スリープ・休止・電源ボタン)
+$BackupFile = Join-Path $PSScriptRoot "quiet-windows-backup.json"
+$SchemeName = "EdgeBox 常時稼働"
+$GuidRe = '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}'
+function Get-Guid1($text) {
+    $m = [regex]::Match((@($text) -join "`n"), $GuidRe)
+    if ($m.Success) { return $m.Value } else { return "" }
+}
+function Get-ActiveScheme { return (Get-Guid1 (powercfg /getactivescheme 2>$null)) }
+function Get-ActiveSchemeName {
+    $t = (@(powercfg /getactivescheme 2>$null) -join " ")
+    $m = [regex]::Match($t, '\(([^)]+)\)\s*$'); if ($m.Success) { return $m.Groups[1].Value } else { return $t }
+}
+function Find-OurScheme {
+    foreach ($l in @(powercfg /list 2>$null)) { if ($l -like "*$SchemeName*") { return (Get-Guid1 $l) } }
+    return ""
+}
+function Get-PowerIndex([string]$sub, [string]$setting) {
+    $out = (@(powercfg /query SCHEME_CURRENT $sub $setting 2>$null) -join "`n")
+    $m = [regex]::Match($out, 'AC[^\n]*?0x([0-9a-fA-F]+)')
+    if ($m.Success) { return [Convert]::ToInt32($m.Groups[1].Value, 16) } else { return -1 }
+}
+function Get-HibernateEnabled {
+    try { return ([int](Get-ItemProperty "HKLM:\SYSTEM\CurrentControlSet\Control\Power" -Name HibernateEnabled -ErrorAction Stop).HibernateEnabled) } catch { return 1 }
+}
+function Show-PowerStatus {
+    Write-Host "[電源]" -ForegroundColor White
+    $name = Get-ActiveSchemeName
+    $ours = ($name -eq $SchemeName)
+    Write-Host ("  {0} 電源プラン: {1}" -f $(if ($ours) { "○" } else { "×" }), $name) -ForegroundColor $(if ($ours) { "Green" } else { "Yellow" })
+    $sb = Get-PowerIndex SUB_SLEEP STANDBYIDLE
+    Write-Host ("  {0} スリープに入る: {1}" -f $(if ($sb -eq 0) { "○" } else { "×" }), $(if ($sb -eq 0) { "しない" } elseif ($sb -gt 0) { "{0} 分後" -f [int]($sb / 60) } else { "不明" })) -ForegroundColor $(if ($sb -eq 0) { "Green" } else { "Yellow" })
+    $hb = Get-PowerIndex SUB_SLEEP HIBERNATEIDLE
+    $hibOn = (Get-HibernateEnabled) -eq 1
+    Write-Host ("  {0} 休止状態: {1}" -f $(if (-not $hibOn) { "○" } else { "×" }), $(if (-not $hibOn) { "無効" } elseif ($hb -eq 0) { "有効 (自動では入らない)" } else { "有効 ({0} 分後に入る)" -f [int]($hb / 60) })) -ForegroundColor $(if (-not $hibOn) { "Green" } else { "Yellow" })
+    $pb = Get-PowerIndex SUB_BUTTONS PBUTTONACTION
+    Write-Host ("  {0} 電源ボタンを押したとき: {1}" -f $(if ($pb -eq 0) { "○" } else { "×" }), $(switch ($pb) { 0 { "何もしない" } 1 { "スリープ" } 2 { "休止状態" } 3 { "シャットダウン" } default { "不明" } })) -ForegroundColor $(if ($pb -eq 0) { "Green" } else { "Yellow" })
+}
+function Set-PowerQuiet {
+    $orig = Get-ActiveScheme
+    $ours = Find-OurScheme
+    if (-not $ours) {
+        if (-not (Test-Path $BackupFile)) {
+            @{ OriginalScheme = $orig; HibernateEnabled = (Get-HibernateEnabled); Saved = (Get-Date).ToString("s") } |
+                ConvertTo-Json | Set-Content -Path $BackupFile -Encoding UTF8
+        }
+        $ours = Get-Guid1 (powercfg /duplicatescheme $orig 2>$null)
+        if (-not $ours) { throw "電源プランを複製できませんでした" }
+        powercfg /changename $ours $SchemeName "再起動・スリープ・休止をしない (EdgeBox の収集を止めない)" | Out-Null
+    }
+    powercfg /setactive $ours | Out-Null
+    powercfg /change standby-timeout-ac 0   | Out-Null
+    powercfg /change standby-timeout-dc 0   | Out-Null
+    powercfg /change hibernate-timeout-ac 0 | Out-Null
+    powercfg /change hibernate-timeout-dc 0 | Out-Null
+    foreach ($st in @("PBUTTONACTION", "SLEEPBUTTONACTION", "LIDACTION")) {
+        powercfg /setacvalueindex SCHEME_CURRENT SUB_BUTTONS $st 0 2>$null | Out-Null
+        powercfg /setdcvalueindex SCHEME_CURRENT SUB_BUTTONS $st 0 2>$null | Out-Null
+    }
+    powercfg /setacvalueindex SCHEME_CURRENT SUB_SLEEP HYBRIDSLEEP 0 2>$null | Out-Null
+    powercfg /setactive SCHEME_CURRENT | Out-Null
+    powercfg /hibernate off 2>$null | Out-Null
+}
+function Restore-Power {
+    $b = $null
+    if (Test-Path $BackupFile) { try { $b = Get-Content $BackupFile -Raw -Encoding UTF8 | ConvertFrom-Json } catch { } }
+    if ($b -and $b.OriginalScheme) { powercfg /setactive $b.OriginalScheme 2>$null | Out-Null }
+    else { powercfg /setactive SCHEME_BALANCED 2>$null | Out-Null }
+    $ours = Find-OurScheme
+    if ($ours) { powercfg /delete $ours 2>$null | Out-Null }
+    if ($b -and [int]$b.HibernateEnabled -eq 1) { powercfg /hibernate on 2>$null | Out-Null }
+    Remove-Item $BackupFile -Force -ErrorAction SilentlyContinue
+}
+
 if ($Status) {
     Write-Host ""
     foreach ($h in $hives.Keys) {
@@ -104,6 +210,7 @@ if ($Status) {
         $off = ($null -ne $v -and $v -eq $it.Off)
         Write-Host ("  {0} {1}" -f $(if ($off) { "○ 止めている" } else { "× 出る    " }), $it.Label) -ForegroundColor $(if ($off) { "Green" } else { "Yellow" })
     }
+    Show-PowerStatus
     Write-Host ""
     exit 0
 }
@@ -121,7 +228,19 @@ foreach ($it in $MachineItems) {
     catch { Write-Host ("  警告: {0}: {1}" -f $it.Label, $_.Exception.Message) -ForegroundColor Yellow }
 }
 Write-Host ("この PC 全体: {0}" -f $(if ($turnOff) { "勧誘画面を止めました" } else { "元に戻しました" })) -ForegroundColor Green
+try {
+    if ($turnOff) { Set-PowerQuiet; Write-Host "電源: スリープ・休止・電源ボタンを止めました (電源プラン「$SchemeName」)。" -ForegroundColor Green }
+    else { Restore-Power; Write-Host "電源: 元のプランに戻しました。" -ForegroundColor Green }
+} catch { Write-Host ("  警告: 電源の設定に失敗: " + $_.Exception.Message) -ForegroundColor Yellow }
 Write-Host ""
 Write-Host "反映には、いちど サインアウト → サインイン (または PC の再起動) が必要です。" -ForegroundColor Cyan
 Write-Host "もし今、画面に出ている場合は、その画面の「今はスキップ」(または右上の ×) で閉じてください。次回からは出ません。" -ForegroundColor Cyan
+if ($turnOff) {
+    $wu = Join-Path $PSScriptRoot "12-windows-update.ps1"
+    $wuOn = $false
+    try { $wuOn = ((Get-ItemProperty "HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU" -Name NoAutoUpdate -ErrorAction SilentlyContinue).NoAutoUpdate -eq 1) } catch { }
+    if (-not $wuOn -and (Test-Path $wu)) {
+        Write-Host "再起動そのもの (Windows Update の自動再起動) はまだ止まっていません。次も実行してください:  .\12-windows-update.ps1" -ForegroundColor Yellow
+    }
+}
 exit 0

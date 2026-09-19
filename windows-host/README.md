@@ -210,7 +210,7 @@ Git は不要)。端末ごとの設定ファイル (display-config.json / cpu-pa
 | `09-rename-to-edgebox.ps1` | 旧名称の登録を EdgeBox に改名 (CPU 分割の設定も追従) |
 | `10-restart-edgebox.ps1` | 『EdgeBox 再起動』『EdgeBox 画面』 |
 | `11-io-passthrough.ps1` | 入出力の素通し: メモリの固定 + LAN の直結 (SR-IOV)。引数なし = 確認のみ / `-Apply` = 適用 |
-| `13-quiet-windows.ps1` | 「PC のセットアップを完了しましょう」など Windows の勧誘画面を止める (`-Status` / `-Disable`) |
+| `13-quiet-windows.ps1` | 勧誘画面・右下の通知をすべて止め、スリープ/休止/電源ボタンも止める (`-Status` / `-Disable`)。自動再起動は `12-windows-update.ps1` と組で止める |
 | `99-fix-black-screen.ps1` / `fix-black-screen.cmd` | 黒画面の復旧 |
 | `SETUP-STEPS.md` | 手順書 (①〜⑩・運用ルール・切り分けフロー) |
 
