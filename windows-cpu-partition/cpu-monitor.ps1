@@ -325,6 +325,8 @@ $script:dmName = $null
 if ($dmCls) { $script:dmName = $dmCls.CimClassName }
 $script:LastErr = ""
 $script:TickNo  = 0
+# この画面自身の負荷 (自プロセスの CPU 時間の増分 / 経過時間。Windows が使える CPU 全体に対する %)
+$script:SelfCpu = $null; $script:SelfAt = $null; $script:SelfPct = -1.0
 
 function Sample {
     $script:TickNo++
@@ -431,7 +433,7 @@ function Sample {
         $totGB  = [double]$os.TotalVisibleMemorySize / 1MB      # KB → GB
         $freeGB = [double]$os.FreePhysicalMemory / 1MB
         $vmWs = 0.0
-        foreach ($p in @(Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.ProcessName -like "vmmem*" })) {
+        foreach ($p in @(Get-Process -Name "vmmem*" -ErrorAction SilentlyContinue)) {
             $vmWs += [double]$p.WorkingSet64
         }
         $vmGB = $vmWs / 1GB
@@ -472,6 +474,17 @@ function Sample {
             $script:Mem.VmReported  = (($vis -gt 0 -and $avail -gt 0) -or $script:Mem.VmDemandGB -gt 0)
         } catch { $script:Mem.VmState = "取得不可 (" + $(if ($script:VmLookupError) { $script:VmLookupError } else { $_.Exception.Message }) + ")" }
     }
+    # この画面自身の負荷
+    try {
+        $me = [System.Diagnostics.Process]::GetCurrentProcess()
+        $cpu = $me.TotalProcessorTime; $now = Get-Date
+        if ($script:SelfAt) {
+            $dt = ($now - $script:SelfAt).TotalSeconds
+            if ($dt -gt 0) { $script:SelfPct = 100.0 * ($cpu - $script:SelfCpu).TotalSeconds / $dt / [Math]::Max(1, [Environment]::ProcessorCount) }
+        }
+        $script:SelfCpu = $cpu; $script:SelfAt = $now
+    } catch { }
+
 }
 
 function Get-Avg($Lps, [string]$Key) {
@@ -809,7 +822,10 @@ $timer.Add_Tick({
     if ($form.WindowState -eq [System.Windows.Forms.FormWindowState]::Minimized) { return }   # しまっている間は休む
     try { Sample; $script:LastErr = "" } catch { $script:LastErr = $_.Exception.Message }
     if ($script:LastErr) { $lblStatus.Text = "エラー: $($script:LastErr)" }
-    else { $lblStatus.Text = "更新 " + (Get-Date -Format "HH:mm:ss") + "   (数値は直前の更新間隔での平均。枠の色 = 割り当ての計画)" }
+    else {
+        $selfTxt = if ($script:SelfPct -ge 0) { "   この画面自身の負荷 {0:N1}%" -f $script:SelfPct } else { "" }
+        $lblStatus.Text = "更新 " + (Get-Date -Format "HH:mm:ss") + $selfTxt + "   (数値は直前の更新間隔での平均。枠の色 = 割り当ての計画)"
+    }
     $panel.Invalidate()
 })
 $cmbIv.Add_SelectedIndexChanged({
