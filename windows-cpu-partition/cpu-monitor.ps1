@@ -256,11 +256,23 @@ if ($vpCls) { $script:vpName = $vpCls.CimClassName }
 # 仮想プロセッサ (VP) のカウンター: インスタンス名 "EdgeBox:Hv VP 0" のように登録名が付く
 function Get-VpCounterMap([string]$ClassName, [string]$Name) {
     $map = @{}
+    $script:OtherVpCount = 0
     if (-not $ClassName) { return $map }
     foreach ($x in @(Get-CimInstance -ClassName $ClassName -ErrorAction SilentlyContinue)) {
-        if ([string]$x.Name -like ($Name + ":*")) { $map[[string]$x.Name] = $x }
+        $n = [string]$x.Name
+        if ($n -like ($Name + ":*")) { $map[$n] = $x }
+        elseif ($n -and $n -ne "_Total" -and $n -match ':') { $script:OtherVpCount++ }   # 他の登録 (別の VM) の実行単位
     }
     return $map
+}
+# full モードで EdgeBox が EdgeBox 用 CPU に固定済みか (起動タスクの記録)
+function Test-FullBound {
+    try {
+        if (-not $script:Plan -or $script:Plan.Mode -ne "full") { return $false }
+        if (-not (Test-Path $FullFile)) { return $false }
+        $fs = Get-Content $FullFile -Raw -Encoding UTF8 | ConvertFrom-Json
+        return [bool]$fs.Bound
+    } catch { return $false }
 }
 
 function Get-CounterMap($ClassName) {
@@ -296,6 +308,14 @@ $script:VmTotal = 0.0; $script:RootTotal = 0.0; $script:VpOk = $false
 $script:LeakVmHist = @(); $script:LeakWinHist = @()
 $script:LeakWindow = 60
 $script:LeakVm = 0.0; $script:LeakWin = 0.0
+$script:LeakVmRaw = 0.0; $script:LeakWinRaw = 0.0
+# 2 つの帳簿の読み取り時刻のずれは 60 秒の足し合わせでも完全には消えず、0.1% 程度の見かけの値が残ることがある。
+# 構造上その向きの混ざりが起こり得ない状態 (下の 2 つ) では、この値未満を測定のゆらぎとみなして 0.0 にする。
+# 構造上の保証が無いときは生の値をそのまま出す (真の漏れを隠さない)
+$script:LeakDeadband = 0.3
+$script:WinStructOk = $false   # Windows 側の実行単位が EdgeBox 用 CPU に 1 つも無く、他の登録 (別の VM) も無い
+$script:VmStructOk  = $false   # EdgeBox が EdgeBox 用 CPU に固定済み
+$script:OtherVpCount = 0
 $script:Mem    = @{ TotalGB = 0.0; WinGB = 0.0; VmGB = 0.0; FreeGB = 0.0; VmAssignedGB = 0.0; VmState = "?"
                     WinCommitPct = 0.0; WinPagesPerSec = 0.0                    # Windows のメモリ負荷 (コミット率・ページング)
                     VmReported = $false; VmVisibleGB = 0.0; VmAvailGB = 0.0    # EdgeBox 内部 (統合サービスの報告)
@@ -309,9 +329,17 @@ $script:TickNo  = 0
 function Sample {
     $script:TickNo++
     if ($script:lpName) {
+        # LP と EdgeBox の VP は続けて読む (2 つの帳簿の読み取り時刻のずれを最小にする)。ルート側はその後
         $lp = Get-CounterMap $script:lpName
-        $rv = Get-CounterMap $script:rvName
         $vp = Get-VpCounterMap $script:vpName $VMName
+        $rv = Get-CounterMap $script:rvName
+        # EdgeBox の再起動などで VP の帳簿がリセット (減少・入れ替わり) した区間は、突き合わせに使わない
+        $reset = $false
+        if ($script:prevVp) {
+            $pk = (@($script:prevVp.Keys) | Sort-Object) -join ","; $ck = (@($vp.Keys) | Sort-Object) -join ","
+            if ($pk -ne $ck) { $reset = $true }
+            else { foreach ($k in @($vp.Keys)) { if ([double]$vp[$k].PercentGuestRunTime -lt [double]$script:prevVp[$k].PercentGuestRunTime) { $reset = $true } } }
+        }
         if ($script:prevLp) {
             $new = @{}
             foreach ($i in @($lp.Keys)) {
@@ -343,6 +371,10 @@ function Sample {
             $script:VmTotal = $vmTot; $script:RootTotal = $rootTot; $script:VpOk = $vpOk
             $hostLps = @($script:Plan.Host); $guestLps = @($script:Plan.Guest)
             if ($hostLps.Count -gt 0 -and $guestLps.Count -gt 0) {
+                # 構造上の確認: Windows 側の実行単位は Windows 用 CPU の分しか無いか / 他の登録 (別の VM) は無いか / EdgeBox は固定済みか
+                $rootOnGuest = 0; foreach ($i in @($rv.Keys)) { if ($guestLps -contains [int]$i) { $rootOnGuest++ } }
+                $script:WinStructOk = ($rv.Count -gt 0 -and $rootOnGuest -eq 0 -and $script:OtherVpCount -eq 0)
+                $script:VmStructOk  = (Test-FullBound)
                 $gOnGuest = 0.0; foreach ($l in $guestLps) { if ($new.ContainsKey([int]$l)) { $gOnGuest += [double]$new[[int]$l].G } }
                 $gOnHost  = 0.0; foreach ($l in $hostLps)  { if ($new.ContainsKey([int]$l)) { $gOnHost  += [double]$new[[int]$l].G } }
                 if ($vpOk) {
@@ -358,11 +390,17 @@ function Sample {
                 $rawWin = 0.0; foreach ($l in $guestLps) { if ($new.ContainsKey([int]$l)) { $rawWin += [double]$new[[int]$l].Win } }
                 # 直近 60 秒分を符号付きで足してから 0 で切る (読み取り時刻のずれによる揺れは打ち消し合う)
                 # 注意: 配列に数値を足すときは両方を @() で包む (1 要素だとスカラーになり、数値の足し算になってしまう)
-                $script:LeakVmHist  = @(@($script:LeakVmHist)  + @([double]$leakVmTot)  | Select-Object -Last $script:LeakWindow)
-                $script:LeakWinHist = @(@($script:LeakWinHist) + @([double]$leakWinTot) | Select-Object -Last $script:LeakWindow)
+                if (-not $reset) {
+                    $script:LeakVmHist  = @(@($script:LeakVmHist)  + @([double]$leakVmTot)  | Select-Object -Last $script:LeakWindow)
+                    $script:LeakWinHist = @(@($script:LeakWinHist) + @([double]$leakWinTot) | Select-Object -Last $script:LeakWindow)
+                }
                 $n = [Math]::Max(1, $script:LeakVmHist.Count)
                 $script:LeakVm  = [Math]::Max(0.0, [double](($script:LeakVmHist  | Measure-Object -Sum).Sum) / $n / $hostLps.Count)
                 $script:LeakWin = [Math]::Max(0.0, [double](($script:LeakWinHist | Measure-Object -Sum).Sum) / $n / $guestLps.Count)
+                $script:LeakVmRaw = $script:LeakVm; $script:LeakWinRaw = $script:LeakWin
+                # 構造上 0 が保証される向きは、ゆらぎの上限未満を 0.0 にする (帳簿の読み取り時刻のずれによる見かけの値)
+                if ($script:VmStructOk  -and $script:LeakVm  -lt $script:LeakDeadband) { $script:LeakVm  = 0.0 }
+                if ($script:WinStructOk -and $script:LeakWin -lt $script:LeakDeadband) { $script:LeakWin = 0.0 }
                 # 表示用: LP ごとの色分けは、この 60 秒平均の漏れ量に合わせて按分する (漏れ 0 なら Windows 用 LP の guest は全部 Windows)
                 $leakVmNow  = $script:LeakVm  * $hostLps.Count
                 $leakWinNow = $script:LeakWin * $guestLps.Count
