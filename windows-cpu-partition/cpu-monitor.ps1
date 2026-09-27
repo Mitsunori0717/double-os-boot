@@ -310,8 +310,8 @@ $script:LeakWindow = 60
 $script:LeakVm = 0.0; $script:LeakWin = 0.0
 $script:LeakVmRaw = 0.0; $script:LeakWinRaw = 0.0
 # 2 つの帳簿の読み取り時刻のずれは 60 秒の足し合わせでも完全には消えず、0.1% 程度の見かけの値が残ることがある。
-# 構造上その向きの混ざりが起こり得ない状態 (下の 2 つ) では、この値未満を測定のゆらぎとみなして 0.0 にする。
-# 構造上の保証が無いときは生の値をそのまま出す (真の漏れを隠さない)
+# この値以下は測定のゆらぎとみなして 0.0 にする。真の漏れは桁が違う (固定が外れると数 % 出る) ので隠れない。
+# 判定 (△ 混ざっています) は従来どおり 0.5% 超
 $script:LeakDeadband = 0.3
 $script:WinStructOk = $false   # Windows 側の実行単位が EdgeBox 用 CPU に 1 つも無く、他の登録 (別の VM) も無い
 $script:VmStructOk  = $false   # EdgeBox が EdgeBox 用 CPU に固定済み
@@ -400,9 +400,9 @@ function Sample {
                 $script:LeakVm  = [Math]::Max(0.0, [double](($script:LeakVmHist  | Measure-Object -Sum).Sum) / $n / $hostLps.Count)
                 $script:LeakWin = [Math]::Max(0.0, [double](($script:LeakWinHist | Measure-Object -Sum).Sum) / $n / $guestLps.Count)
                 $script:LeakVmRaw = $script:LeakVm; $script:LeakWinRaw = $script:LeakWin
-                # 構造上 0 が保証される向きは、ゆらぎの上限未満を 0.0 にする (帳簿の読み取り時刻のずれによる見かけの値)
-                if ($script:VmStructOk  -and $script:LeakVm  -lt $script:LeakDeadband) { $script:LeakVm  = 0.0 }
-                if ($script:WinStructOk -and $script:LeakWin -lt $script:LeakDeadband) { $script:LeakWin = 0.0 }
+                # ゆらぎの上限以下は 0.0 にする (帳簿の読み取り時刻のずれによる見かけの値)
+                if ($script:LeakVm  -le $script:LeakDeadband) { $script:LeakVm  = 0.0 }
+                if ($script:LeakWin -le $script:LeakDeadband) { $script:LeakWin = 0.0 }
                 # 表示用: LP ごとの色分けは、この 60 秒平均の漏れ量に合わせて按分する (漏れ 0 なら Windows 用 LP の guest は全部 Windows)
                 $leakVmNow  = $script:LeakVm  * $hostLps.Count
                 $leakWinNow = $script:LeakWin * $guestLps.Count
