@@ -205,24 +205,23 @@ if ($Repair) {
 
 $wasOff = ($vm.State -ne "Running")
 if ($vm.State -ne "Running") {
-    # 『EdgeBox表示設定』で指定されたコンソール解像度を、起動前に反映する
-    $cfgFile = Join-Path $PSScriptRoot "display-config.json"
-    if (Test-Path $cfgFile) {
-        try {
-            $resText = [string](Get-Content $cfgFile -Raw -Encoding UTF8 | ConvertFrom-Json).ConsoleResolution
-            if ($resText -match '^(auto|自動)') {
-                Add-Type -AssemblyName System.Windows.Forms
-                $b = (@([System.Windows.Forms.Screen]::AllScreens | Sort-Object { $_.Bounds.X })[0]).Bounds
-                $rw = $b.Width; $rh = $b.Height
-            } elseif ($resText -match '^(\d{3,5})\s*[xX×*]\s*(\d{3,5})$') {
-                $rw = [int]$Matches[1]; $rh = [int]$Matches[2]
-            }
-            if ($rw) {
-                Set-VMVideo -VMName $VMName -ResolutionType Single `
-                    -HorizontalResolution $rw -VerticalResolution $rh -ErrorAction SilentlyContinue
-                Write-Host "コンソールの解像度: ${rw}x${rh}"
-            }
-        } catch { }
+    # 『設定』の [画面表示] で指定されたコンソール解像度 (既定: 左のモニターに合わせる) を、起動前に反映する。
+    # 判定は表示処理 (03) と共通 (モニターの大きさは拡大率に関係なく実ピクセルで測る)
+    $s03 = Join-Path $PSScriptRoot "03-field-display-kiosk.ps1"
+    if (Test-Path $s03) {
+        try { & $s03 -VMName $VMName -ApplyResolution } catch { }
+    } else {
+        $cfgFile = Join-Path $PSScriptRoot "display-config.json"
+        if (Test-Path $cfgFile) {
+            try {
+                $resText = [string](Get-Content $cfgFile -Raw -Encoding UTF8 | ConvertFrom-Json).ConsoleResolution
+                if ($resText -match '^(\d{3,5})\s*[xX×*]\s*(\d{3,5})$') {
+                    Set-VMVideo -VMName $VMName -ResolutionType Single `
+                        -HorizontalResolution ([int]$Matches[1]) -VerticalResolution ([int]$Matches[2]) -ErrorAction SilentlyContinue
+                    Write-Host "コンソールの解像度: $($Matches[1])x$($Matches[2])"
+                }
+            } catch { }
+        }
     }
     Write-Host "EdgeBox を起動しています..." -ForegroundColor Cyan
     $s11 = Join-Path $PSScriptRoot "11-io-passthrough.ps1"   # 予約された設定 (メモリの固定など) を停止中に反映

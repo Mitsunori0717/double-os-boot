@@ -10,6 +10,7 @@
     .\03-field-display-kiosk.ps1 -Install     # ログオン時の自動表示を登録
     .\03-field-display-kiosk.ps1 -Uninstall   # 自動表示を解除
     .\03-field-display-kiosk.ps1 -ConsoleResolution auto   # コンソールの解像度をモニターに合わせる (EdgeBox 停止中)
+    .\03-field-display-kiosk.ps1 -ApplyResolution         # 設定済みの解像度を EdgeBox に反映 (停止中のみ。起動前に 02/10 が呼ぶ)
 
 .NOTES
     動作の記録は display-log.txt に残ります (うまく表示されないときはこれを確認)。
@@ -40,6 +41,7 @@ param(
     [int]$CloserDelaySec = 30,
     [string]$CloserWaitUrl = "",
     [string]$ConsoleResolution,
+    [switch]$ApplyResolution,   # 内部用: 『設定』の解像度を、EdgeBox が停止中なら反映して終わる (起動前に呼ぶ)
     [int]$TimeoutSec  = 420,
     [int]$UrlTimeoutSec = 900   # 管理画面 (右画面の URL) の応答を待つ上限。左のコンソールは待たずに先に出す
 )
@@ -118,6 +120,72 @@ function Test-UrlOnce([string]$u) {
     } catch { return $false }
 }
 $SplashLeftOffFile = Join-Path $PSScriptRoot "display-splash-leftoff.flag"   # 起動中画面 (左画面) を閉じる合図
+$SplashReadyFile   = Join-Path $PSScriptRoot "display-splash-ready.flag"     # 起動中画面が「表示できた」合図 (1 秒ごとに書き直す)
+
+# ============================================================
+#  モニターの座標を実ピクセルで扱う
+#  powershell.exe は拡大率 (DPI) を知らないため、拡大率 125% などの環境では、モニターの大きさや窓の位置が
+#  縮めた値で見える (1920x1080 が 1536x864 に見える)。EdgeBox に渡す解像度や全画面の判定がずれるため、
+#  表示処理のプロセスは最初に DPI 対応にし、以後の座標はすべて実ピクセルにそろえる。
+#  起動中画面と設定画面は見た目を変えないよう従来のまま (必要な値は Get-PhysicalScreens で実ピクセルを測る)
+# ============================================================
+$DpiSource = @'
+using System;
+using System.Collections.Generic;
+using System.Runtime.InteropServices;
+public class FieldDpi {
+    [DllImport("user32.dll")] static extern bool SetProcessDpiAwarenessContext(IntPtr ctx);
+    [DllImport("user32.dll")] static extern bool SetProcessDPIAware();
+    [DllImport("user32.dll")] static extern IntPtr SetThreadDpiAwarenessContext(IntPtr ctx);
+    [DllImport("user32.dll")] static extern bool EnumDisplayMonitors(IntPtr hdc, IntPtr clip, MonitorEnumProc cb, IntPtr data);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern bool GetMonitorInfo(IntPtr hMon, ref MONITORINFO mi);
+    delegate bool MonitorEnumProc(IntPtr hMon, IntPtr hdc, ref RECT rc, IntPtr data);
+    [StructLayout(LayoutKind.Sequential)] public struct RECT { public int Left, Top, Right, Bottom; }
+    [StructLayout(LayoutKind.Sequential)] struct MONITORINFO { public int cbSize; public RECT rcMonitor; public RECT rcWork; public uint dwFlags; }
+    public class Mon { public int X, Y, Width, Height; public bool Primary; }
+    static readonly IntPtr PerMonitorV2 = new IntPtr(-4);   // DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2
+    // このプロセス全体を DPI 対応にする (以後の窓の座標・大きさは実ピクセル)。成功したら true
+    public static bool EnableProcess() {
+        try { if (SetProcessDpiAwarenessContext(PerMonitorV2)) return true; } catch { }
+        try { return SetProcessDPIAware(); } catch { return false; }
+    }
+    // モニターの実ピクセルの範囲。プロセスの DPI 設定に関係なく、このスレッドだけ一時的に DPI 対応にして測る
+    public static List<Mon> GetMonitors() {
+        List<Mon> list = new List<Mon>();
+        IntPtr prev = IntPtr.Zero; bool switched = false;
+        try { prev = SetThreadDpiAwarenessContext(PerMonitorV2); switched = (prev != IntPtr.Zero); } catch { }
+        try {
+            EnumDisplayMonitors(IntPtr.Zero, IntPtr.Zero, delegate(IntPtr h, IntPtr dc, ref RECT rc, IntPtr d) {
+                MONITORINFO mi = new MONITORINFO(); mi.cbSize = Marshal.SizeOf(typeof(MONITORINFO));
+                if (GetMonitorInfo(h, ref mi)) {
+                    Mon m = new Mon();
+                    m.X = mi.rcMonitor.Left; m.Y = mi.rcMonitor.Top;
+                    m.Width = mi.rcMonitor.Right - mi.rcMonitor.Left; m.Height = mi.rcMonitor.Bottom - mi.rcMonitor.Top;
+                    m.Primary = (mi.dwFlags & 1) != 0;
+                    list.Add(m);
+                }
+                return true;
+            }, IntPtr.Zero);
+        } finally { if (switched) { try { SetThreadDpiAwarenessContext(prev); } catch { } } }
+        return list;
+    }
+}
+'@
+function Import-DpiApi {
+    if ("FieldDpi" -as [type]) { return $true }
+    try { Add-Type -TypeDefinition $DpiSource -ErrorAction Stop; return $true } catch { return $false }
+}
+# モニターの実ピクセルの範囲 (X の小さい順)。測れなければ空
+function Get-PhysicalScreens {
+    try {
+        if (-not (Import-DpiApi)) { return @() }
+        return @([FieldDpi]::GetMonitors() | Sort-Object X)
+    } catch { return @() }
+}
+# 表示処理 (窓を動かす側) だけ DPI 対応にする。起動中画面・設定画面・登録系は従来のまま
+if (-not ($Splash -or $Settings -or $Setup -or $Install -or $Uninstall -or $ApplyResolution -or $ConsoleResolution)) {
+    try { if (Import-DpiApi) { [FieldDpi]::EnableProcess() | Out-Null } } catch { }
+}
 
 # ============================================================
 #  接続バー探し (共通): vmconnect の窓 (トップレベルと、その子孫) を列挙する
@@ -249,11 +317,40 @@ function Get-ConsoleTopWindowDiag {
 }
 
 # ============================================================
-#  起動中画面: 表示準備が終わるまで、全モニターを黒い画面で覆う
+#  起動中画面: 表示準備が終わるまで、左端のモニター (EdgeBox のコンソールが出る画面) を黒い画面で覆う
+#
+#  覆いは「最前面」かつ「フォーカスを取らない」窓にする (SplashCover):
+#    - 最前面: コンソールの窓を開いて最大化し、全画面に切り替えるまでの途中の窓は、覆いの下に隠れて見えない。
+#      0.5 秒ごとに最前面に置き直すので、あとから出た窓に追い越されない
+#    - フォーカスを取らない: 覆いが前面 (キー入力の宛先) になることがないため、表示処理の本体が送る
+#      全画面の切り替えキー (Ctrl+Alt+Break) を横取りせず、コンソールの前面化の邪魔もしない
+#  覆いを外す合図 (display-splash-leftoff.flag) は、本体が全画面になったのを確かめてから出す。
+#  表示できたことは display-splash-ready.flag に 1 秒ごとに書き (本体はこれを待ってからコンソールを開く)
 # ============================================================
+$SplashCoverSource = @'
+using System;
+using System.Runtime.InteropServices;
+using System.Windows.Forms;
+public class SplashCover : Form {
+    [DllImport("user32.dll")] static extern bool SetWindowPos(IntPtr h, IntPtr after, int x, int y, int cx, int cy, uint flags);
+    [DllImport("user32.dll")] public static extern short GetAsyncKeyState(int vk);
+    // 表示してもフォーカス (前面) を取らない
+    protected override bool ShowWithoutActivation { get { return true; } }
+    protected override CreateParams CreateParams {
+        get {
+            CreateParams cp = base.CreateParams;
+            cp.ExStyle |= 0x08000000 | 0x00000008;   // WS_EX_NOACTIVATE | WS_EX_TOPMOST
+            return cp;
+        }
+    }
+    // 最前面に置き直す (前面にはしない)。0x0013 = SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE / -1 = HWND_TOPMOST
+    public void KeepOnTop() { try { SetWindowPos(this.Handle, new IntPtr(-1), 0, 0, 0, 0, 0x0013); } catch { } }
+}
+'@
 if ($Splash) {
     # サインイン直後はデスクトップの準備中で失敗することがあるため、読み込みを再試行する
     $loaded = $false
+    $script:CoverTypeOk = $false
     for ($i = 0; $i -lt 10 -and -not $loaded; $i++) {
         try {
             Add-Type -AssemblyName System.Windows.Forms
@@ -266,7 +363,8 @@ if ($Splash) {
     $script:SplashStart = Get-Date
     $script:SplashForms = @()
     $script:SplashDots = 0
-    $script:SplashCheck = 0
+    $script:SplashTick = 0
+    $script:EscSince = $null
     # 覆いに出す文字。電源 ON のときは「EdgeBox 起動中」、
     # 表示だけ戻すとき (Ctrl+Alt+K など) は呼び出し側が「画面を戻しています」などを渡す
     $script:SplashMsg = if ($CoverText) { $CoverText } else { "EdgeBox 起動中" }
@@ -275,22 +373,21 @@ if ($Splash) {
     function Test-MainRunning {
         $procs = @(Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" -ErrorAction SilentlyContinue |
             Where-Object { $_.CommandLine -match '03-field-display-kiosk' -and
-                           $_.CommandLine -notmatch '-(Splash|Backdrop|Notice|EscWatcher|ConsoleCloser|LeftGuard)' })
+                           $_.CommandLine -notmatch '-(Splash|Backdrop|Notice|EscWatcher|ConsoleCloser|LeftGuard|ApplyResolution)' })
         return ($procs.Count -gt 0)
+    }
+    function Write-SplashReady {
+        try { Set-Content -Path $SplashReadyFile -Value "1" -Encoding ASCII -ErrorAction SilentlyContinue } catch { }
     }
 
     function New-SplashForm($bounds) {
-        $f = New-Object System.Windows.Forms.Form
+        $f = if ($script:CoverTypeOk) { New-Object SplashCover } else { New-Object System.Windows.Forms.Form }
         $f.FormBorderStyle = "None"
         $f.StartPosition = "Manual"
         $f.Bounds = $bounds
         $f.BackColor = [System.Drawing.Color]::Black
         $f.TopMost = $true
         $f.ShowInTaskbar = $false
-        $f.KeyPreview = $true
-        $f.Add_KeyDown({ param($s, $e)
-            if ($e.KeyCode -eq [System.Windows.Forms.Keys]::Escape) { [System.Windows.Forms.Application]::Exit() }
-        })
         $main = New-Object System.Windows.Forms.Label
         $main.Name = "main"
         $main.Dock = "Fill"
@@ -327,37 +424,77 @@ if ($Splash) {
     }
 
     $timer = New-Object System.Windows.Forms.Timer
-    $timer.Interval = 1000
+    $timer.Interval = 500
     $timer.Add_Tick({
         if ((Get-Date) -gt $script:SplashDeadline) { [System.Windows.Forms.Application]::Exit(); return }
-        # 開始から 60 秒たっても本体が動いていない (起動しなかった / 途中で止まった) なら、
-        # 黒い画面を残さず普通の Windows の画面に戻す。10 秒ごとに確認
-        $script:SplashCheck++
-        if (($script:SplashCheck % 20) -eq 0 -and ((Get-Date) - $script:SplashStart).TotalSeconds -gt 60) {
+        $script:SplashTick++
+        # 開始から 90 秒たっても本体が動いていない (起動しなかった / 途中で止まった) なら、
+        # 黒い画面を残さず普通の Windows の画面に戻す。20 秒ごとに確認
+        if (($script:SplashTick % 40) -eq 0 -and ((Get-Date) - $script:SplashStart).TotalSeconds -gt 90) {
             if (-not (Test-MainRunning)) {
                 try { Add-Content -Path $LogFile -Encoding UTF8 -Value ((Get-Date -Format "yyyy-MM-dd HH:mm:ss") + "  起動中画面: 表示処理の本体が動いていないため、画面を閉じて Windows に戻します。") } catch { }
                 [System.Windows.Forms.Application]::Exit(); return
             }
         }
-        $script:SplashDots = ($script:SplashDots + 1) % 4
-        # 本体から「左のコンソールを全画面にする」の合図が来たら、覆いを外して終わる
-        # (覆ったままだと全画面の切り替えが効かないことがあるため、切り替えの直前に外す)
+        # 本体から「左のコンソールを全画面にした」の合図が来たら、覆いを外して終わる
         if (-not $script:LeftOff -and (Test-Path $SplashLeftOffFile)) {
             $script:LeftOff = $true
             [System.Windows.Forms.Application]::Exit(); return
         }
+        # 覆いはフォーカスを取らないのでキー入力は届かない。手で閉じたいときは ESC を 1 秒長押し
+        # (見張り役の ESC 長押しと同じ合図。本体が動いていれば、そのあと本体が表示を仕上げる)
+        if ($script:CoverTypeOk) {
+            if (([SplashCover]::GetAsyncKeyState(0x1B) -band 0x8000) -ne 0) {
+                if (-not $script:EscSince) { $script:EscSince = Get-Date }
+                elseif (((Get-Date) - $script:EscSince).TotalMilliseconds -ge 1000) {
+                    try { Add-Content -Path $LogFile -Encoding UTF8 -Value ((Get-Date -Format "yyyy-MM-dd HH:mm:ss") + "  起動中画面: ESC 長押しにより閉じました。") } catch { }
+                    [System.Windows.Forms.Application]::Exit(); return
+                }
+            } else { $script:EscSince = $null }
+        }
+        if (($script:SplashTick % 2) -eq 0) { $script:SplashDots = ($script:SplashDots + 1) % 4 }
         foreach ($f in $script:SplashForms) {
             if ($f.IsDisposed) { continue }
             foreach ($c in $f.Controls) {
                 if ($c.Name -eq "main") { $c.Text = $script:SplashMsg + ("." * $script:SplashDots) }
             }
+            # あとから出た窓 (コンソールなど) に追い越されないよう、最前面に置き直す
+            if ($script:CoverTypeOk) { $f.KeepOnTop() }
         }
         Sync-SplashScreens
+        if (($script:SplashTick % 2) -eq 0) { Write-SplashReady }
     })
 
-    Sync-SplashScreens
+    # まず普通の最前面の窓で覆う (準備なしですぐ出る)。デスクトップの準備中で出せなかった場合は少し待って出し直す
+    $shown = $false
+    for ($i = 0; $i -lt 10 -and -not $shown; $i++) {
+        try { Sync-SplashScreens; $shown = ($script:SplashForms.Count -gt 0) } catch { Start-Sleep -Seconds 1 }
+    }
+    if (-not $shown) { exit 1 }
+    try { [System.Windows.Forms.Application]::DoEvents() } catch { }   # 文字まで描かせてから次へ
+    Write-SplashReady
+    # 覆い用の窓 (最前面・フォーカスを取らない) を用意できたら、同じ範囲に出してから仮の窓を閉じて差し替える
+    # (用意に 1〜2 秒かかるため、先に仮の窓で覆っておく)。作れない環境では仮の窓のまま続ける
+    try {
+        if (-not ("SplashCover" -as [type])) {
+            Add-Type -TypeDefinition $SplashCoverSource -ReferencedAssemblies System.Windows.Forms, System.Drawing -ErrorAction Stop
+        }
+        $script:CoverTypeOk = $true
+        $old = @($script:SplashForms | Where-Object { -not $_.IsDisposed })
+        $script:SplashForms = @()
+        foreach ($o in $old) { $f = New-SplashForm $o.Bounds; $f.Show(); $script:SplashForms += $f }
+        try { [System.Windows.Forms.Application]::DoEvents() } catch { }
+        foreach ($o in $old) { try { $o.Close() } catch { } }
+    } catch {
+        $script:CoverTypeOk = $false
+        try { Add-Content -Path $LogFile -Encoding UTF8 -Value ((Get-Date -Format "yyyy-MM-dd HH:mm:ss") + "  起動中画面: フォーカスを取らない覆いを作れないため、普通の最前面の窓のまま続けます: " + $_.Exception.Message) } catch { }
+    }
     $timer.Start()
-    [System.Windows.Forms.Application]::Run((New-Object System.Windows.Forms.ApplicationContext))
+    try {
+        [System.Windows.Forms.Application]::Run((New-Object System.Windows.Forms.ApplicationContext))
+    } finally {
+        Remove-Item $SplashReadyFile -Force -ErrorAction SilentlyContinue
+    }
     exit 0
 }
 
@@ -1186,6 +1323,9 @@ function Resolve-ResolutionText([string]$text) {
     $t = ([string]$text).Trim()
     if (-not $t) { return $null }
     if ($t -match '^(auto|自動)') {
+        # 左端のモニターの実ピクセル (拡大率 125% などの環境でも、縮めた値にならないように測る)
+        $mons = @(Get-PhysicalScreens)
+        if ($mons.Count -gt 0) { return [pscustomobject]@{ W = [int]$mons[0].Width; H = [int]$mons[0].Height } }
         Add-Type -AssemblyName System.Windows.Forms
         $b = (@([System.Windows.Forms.Screen]::AllScreens | Sort-Object { $_.Bounds.X })[0]).Bounds
         return [pscustomobject]@{ W = $b.Width; H = $b.Height }
@@ -1231,6 +1371,25 @@ function Set-ConsoleResolution([int]$w, [int]$h, [string]$OnRunning = "skip") {
     Set-VMVideo -VMName $VMName -ResolutionType Single -HorizontalResolution $w -VerticalResolution $h
     Start-VM -Name $VMName
     return "解像度を ${w}x${h} にして EdgeBox を起動し直しました。"
+}
+
+# 『設定』の [画面表示] で指定されたコンソール解像度 (未設定なら「自動 = 左のモニターに合わせる」) を、
+# EdgeBox が停止中なら反映する (起動前に呼ぶ。実行中は何もしない)。同じ値ならそのまま。
+# 戻り値: 反映した内容の文字列 (何もしなければ "")
+function Set-SavedConsoleResolution {
+    try {
+        $vmR = Get-VM -Name $VMName -ErrorAction SilentlyContinue
+        if (-not $vmR -or [string]$vmR.State -ne "Off") { return "" }
+        $txt = [string]$cfg.ConsoleResolution
+        if (-not $txt.Trim()) { $txt = "auto" }
+        $res = Resolve-ResolutionText $txt
+        if (-not $res -or [int]$res.W -le 0 -or [int]$res.H -le 0) { return "" }
+        $cur = Get-VMVideo -VMName $VMName -ErrorAction SilentlyContinue
+        if ($cur -and [string]$cur.ResolutionType -eq "Single" -and
+            [int]$cur.HorizontalResolution -eq [int]$res.W -and [int]$cur.VerticalResolution -eq [int]$res.H) { return "" }
+        Set-VMVideo -VMName $VMName -ResolutionType Single -HorizontalResolution $res.W -VerticalResolution $res.H -ErrorAction Stop
+        return ("コンソールの解像度を {0}x{1} にしました (設定: {2})。" -f $res.W, $res.H, $txt)
+    } catch { return ("コンソールの解像度を反映できませんでした: " + $_.Exception.Message) }
 }
 
 # ============================================================
@@ -1475,6 +1634,26 @@ if ($ConsoleResolution) {
 }
 
 # ============================================================
+#  設定済みの解像度を EdgeBox に反映する (停止中のみ。02 / 10 が起動の直前に呼ぶ内部用)
+# ============================================================
+if ($ApplyResolution) {
+    $rmsg = Set-SavedConsoleResolution
+    if ($rmsg) { Write-Host "  $rmsg" }
+    exit 0
+}
+
+# 起動中画面 (左画面の覆い) のログオンタスクを登録する。遅延なし = サインインと同時に覆う。
+# 以前は 5 秒遅らせていたが、その間は普通のデスクトップが見えてしまう (読み込みの再試行は起動中画面の側で行う)
+function Register-SplashTask([string]$User) {
+    if (-not $User) { $User = $env:USERNAME }
+    $ts = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -MultipleInstances Parallel -ExecutionTimeLimit (New-TimeSpan -Seconds 0)
+    $a = New-ScheduledTaskAction -Execute "powershell.exe" `
+        -Argument "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$PSCommandPath`" -Splash"
+    $tr = New-ScheduledTaskTrigger -AtLogOn -User $User
+    Register-ScheduledTask -TaskName "$TaskName-Splash" -Action $a -Trigger $tr -Settings $ts -RunLevel Highest -Force | Out-Null
+}
+
+# ============================================================
 #  ログオン時自動実行の登録 / 解除
 # ============================================================
 if ($Install) {
@@ -1488,14 +1667,9 @@ if ($Install) {
     # 時間制限があると、その時間が来たときにタスクごと (常駐プロセスも) 止められてしまう
     $taskSettings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -MultipleInstances Parallel -ExecutionTimeLimit (New-TimeSpan -Seconds 0)
 
-    # 起動中画面 (スプラッシュ) は独立のタスクとして先に走らせる。
-    # サインイン直後の数秒はデスクトップの準備中で不安定なため、少しだけ遅らせる
-    $sAction = New-ScheduledTaskAction -Execute "powershell.exe" `
-        -Argument "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$PSCommandPath`" -Splash"
-    $sTrigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
-    try { $sTrigger.Delay = "PT5S" } catch { }
-    Register-ScheduledTask -TaskName "$TaskName-Splash" -Action $sAction -Trigger $sTrigger `
-        -Settings $taskSettings -RunLevel Highest -Force | Out-Null
+    # 起動中画面 (左画面の覆い) は独立のタスクとして、サインインと同時に (遅延なしで) 走らせる。
+    # 本体 (下) は 15 秒遅らせる: サインイン直後の数秒はデスクトップの準備中で不安定なため
+    Register-SplashTask $env:USERNAME
 
     $arg = "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$PSCommandPath`" -VMName `"$VMName`""
     $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument $arg
@@ -1521,7 +1695,7 @@ if ($Install) {
     } else {
         Write-Host "登録 '$VMName' が見つからないため、EdgeBox の自動起動は設定していません。" -ForegroundColor Yellow
     }
-    Write-Host "登録しました。次回ログオンから自動で表示されます (起動中は黒い画面で覆います)。" -ForegroundColor Green
+    Write-Host "登録しました。次回ログオンから自動で表示されます (サインインと同時に左画面を「EdgeBox 起動中」で覆い、全画面になったら外れます)。" -ForegroundColor Green
     Write-Host "  表示内容の変更: 『EdgeBox表示設定』アイコン (再登録不要)"
     exit 0
 }
@@ -1549,6 +1723,44 @@ if (-not $RightUrl -and -not $LeftUrl) {
 if ((Test-Path $LogFile) -and ((Get-Item $LogFile).Length -gt 200KB)) { Remove-Item $LogFile -Force }
 Log "===== 表示処理を開始 (左=$LeftUrl / 右=$RightUrl) ====="
 
+# --- 起動中画面: 表示がそろうまで左画面を黒い画面で覆う ---
+# (何より先に出す。ログオンタスク EdgeBox-Display-Kiosk-Splash が先に出していればそれを使い、無ければここで出す)
+function Stop-Splash {
+    Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" -ErrorAction SilentlyContinue |
+        Where-Object { $_.CommandLine -match '-Splash' -and $_.ProcessId -ne $PID } |
+        ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+    Remove-Item $SplashLeftOffFile -Force -ErrorAction SilentlyContinue
+    Remove-Item $SplashReadyFile -Force -ErrorAction SilentlyContinue
+}
+function Test-SplashRunning {
+    $procs = @(Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" -ErrorAction SilentlyContinue |
+        Where-Object { $_.CommandLine -match '-Splash' -and $_.ProcessId -ne $PID })
+    return ($procs.Count -gt 0)
+}
+# 起動中画面が左画面に出るまで待つ (出ていれば 1 秒ごとに合図のファイルを書き直している)。出たら $true
+function Wait-SplashReady([int]$maxSec) {
+    $wsw = [System.Diagnostics.Stopwatch]::StartNew()
+    while ($wsw.Elapsed.TotalSeconds -lt $maxSec) {
+        try {
+            $fi = Get-Item $SplashReadyFile -ErrorAction SilentlyContinue
+            if ($fi -and ((Get-Date) - $fi.LastWriteTime).TotalSeconds -lt 5) { return $true }
+        } catch { }
+        if (-not (Test-SplashRunning)) { return $false }   # 出す役が居ない (起動に失敗した) なら待たない
+        Start-Sleep -Milliseconds 300
+    }
+    return $false
+}
+if (-not $NoSplash) {
+    if (-not (Test-SplashRunning)) {
+        $stArg = if ($CoverText) { " -CoverText `"$CoverText`"" } else { "" }
+        Start-Process powershell.exe -WindowStyle Hidden `
+            -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" -Splash -TimeoutSec $TimeoutSec$stArg"
+        Log "起動中画面 (左画面の覆い) を出しました。"
+    } else {
+        Log "起動中画面 (左画面の覆い) はログオンタスクが先に出しています。それを使います。"
+    }
+}
+
 # アイコン用のタスク (『EdgeBox 再起動』『EdgeBox 画面』『設定』『EdgeBox 起動』とログオン時の表示) の設定を直す。
 # 表示処理は見張り役などの常駐プロセスを残すため、タスクは「実行中」のままになる。旧設定 (時間制限 1 時間・
 # 多重起動不可) のままだと、1 時間後にタスクごと常駐プロセスが止められ、「実行中」の間はアイコンを押しても
@@ -1574,23 +1786,26 @@ function Repair-LauncherTasks {
 }
 Repair-LauncherTasks
 
-# --- 起動中画面: 表示がそろうまでデスクトップを黒い画面で覆う ---
-function Stop-Splash {
-    Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" -ErrorAction SilentlyContinue |
-        Where-Object { $_.CommandLine -match '-Splash' -and $_.ProcessId -ne $PID } |
-        ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
-    Remove-Item $SplashLeftOffFile -Force -ErrorAction SilentlyContinue
+# 起動中画面のログオンタスクが無い (旧版で登録した) か、遅延付き (旧設定: 5 秒) なら、遅延なしで登録し直す。
+# ログオン時の表示 (本体のタスク) が登録されている PC だけ (登録していない PC に覆いだけ出さない)。
+# 動いている起動中画面を巻き込まないよう、表示処理の最後 (覆いを閉じたあと) に呼ぶ
+function Repair-SplashTask {
+    try {
+        $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
+            ).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+        if (-not $isAdmin) { return }
+        $mainT = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+        if (-not $mainT) { return }
+        $sT = Get-ScheduledTask -TaskName "$TaskName-Splash" -ErrorAction SilentlyContinue
+        $delay = ""
+        if ($sT) { $first = @($sT.Triggers) | Select-Object -First 1; $delay = [string]$first.Delay }
+        if ($sT -and (-not $delay -or $delay -eq "PT0S")) { return }
+        $mt = @($mainT.Triggers | Where-Object { $_.UserId }) | Select-Object -First 1
+        Register-SplashTask ([string]$mt.UserId)
+        Log ("起動中画面のログオンタスクを遅延なしで登録し直しました (" + $(if ($sT) { "旧設定の遅延: $delay" } else { "未登録でした" }) + ")。次回のサインインから、覆いがすぐに出ます。")
+    } catch { Log ("起動中画面のログオンタスクを登録し直せませんでした: " + $_.Exception.Message) }
 }
-if (-not $NoSplash) {
-    # ログオンタスク (EdgeBox-Display-Kiosk-Splash) が先に出していればそれを使い、無ければここで出す
-    $existing = @(Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" -ErrorAction SilentlyContinue |
-        Where-Object { $_.CommandLine -match '-Splash' -and $_.ProcessId -ne $PID })
-    if ($existing.Count -eq 0) {
-        $stArg = if ($CoverText) { " -CoverText `"$CoverText`"" } else { "" }
-        Start-Process powershell.exe -WindowStyle Hidden `
-            -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" -Splash -TimeoutSec $TimeoutSec$stArg"
-    }
-}
+
 $leftIsConsole = ($LeftUrl -match '^(console|コンソール)$')
 if ($leftIsConsole) {
     # 前回の黒背景が残っていれば片付ける (コンソールを置き直すときだけ)
@@ -1608,6 +1823,9 @@ try {
 # --- EdgeBox の起動を待つ (止まっていれば起動する: 自動起動が働かなかった場合の保険) ---
 $vm = Get-VM -Name $VMName -ErrorAction SilentlyContinue
 if ($vm -and $vm.State -eq "Off") {
+    # 『設定』の解像度 (既定: 左のモニターに合わせる) を、停止中のいまのうちに反映する
+    $rm = Set-SavedConsoleResolution
+    if ($rm) { Log $rm }
     # 予約された入出力の設定 (メモリの固定など) があれば、停止中のいまのうちに反映する
     $s11 = Join-Path $PSScriptRoot "11-io-passthrough.ps1"
     if (Test-Path $s11) { try { $r11 = & $s11 -VMName $VMName -ApplyPending -Quiet; if ($r11) { Log ([string]$r11) } } catch { } }
@@ -1986,36 +2204,52 @@ function Set-ConsoleInputFocus([IntPtr]$main) {
 #   方法3: メニュー『表示 → 全画面モード』の UI 操作 (環境によっては項目が見えない)
 # 成否は「枠なしの窓がモニターを覆っているか」(Test-ConsoleFullScreenOn) で確かめる。
 # 最大化しただけの窓を全画面と誤判定していたため、大きさだけの判定はやめた
+# 方法2 の本体: 前面化 → 映像の入力窓へフォーカス → Ctrl+Alt+Break (keybd_event と SendKeys を交互に) を
+# 全画面になるまで最大 $count 回繰り返す。$label は記録用の前置き (「覆いなし」など)
+function Send-ConsoleFullScreenKeys($b, [int]$count, [string]$label) {
+    $hwnd = Get-ConsoleHwnd
+    for ($try = 1; $try -le $count; $try++) {
+        $h2 = Get-ConsoleHwnd; if ($h2 -ne [IntPtr]::Zero) { $hwnd = $h2 }
+        if ($hwnd -eq [IntPtr]::Zero) { Log "コンソール: 窓が見つからないためキー送信を打ち切ります (${label}試行 $try)"; return $false }
+        if (-not (Force-Foreground $hwnd)) { Log "コンソール: 前面化に失敗 (${label}キー送信 試行 $try)" }
+        $focus = Set-ConsoleInputFocus $hwnd
+        if ($try -eq 1 -or $try -eq 5) { Log "コンソール: キー送信の準備 (${label}試行 ${try}): $focus" }
+        if ($try % 2 -eq 1) { Send-CtrlAltBreak } else { [System.Windows.Forms.SendKeys]::SendWait("^%{BREAK}") }
+        Start-Sleep -Milliseconds 1500
+        if (Test-ConsoleFullScreenOn $b) { Log "コンソール: 全画面モードになりました (${label}キー送信 試行 $try)"; return $true }
+        if ($try -eq 4) { Log ("コンソール: キー送信 4 回で全画面になりません (${label}続けます)。窓: " + (Get-ConsoleTopWindowDiag)) }
+        Start-Sleep -Milliseconds 1500
+    }
+    return $false
+}
+
 function Enter-ConsoleFullScreen($screen) {
     $b = $screen.Bounds
     $hwnd = Get-ConsoleHwnd
     if ($hwnd -eq [IntPtr]::Zero) { return $false }
-    $diagDone = $false
+
+    # 接続が確立して映像の入力窓 (IHWindowClass) が出るまで待つ (最大 20 秒)。
+    # 入力窓が無いうちはキーを送っても受け付けられない (EdgeBox を起動した直後に効かなかった原因のひとつ)
+    $isw = [System.Diagnostics.Stopwatch]::StartNew()
+    while ($isw.Elapsed.TotalSeconds -lt 20 -and (Get-ConsoleInputWindow) -eq [IntPtr]::Zero) { Start-Sleep -Milliseconds 500 }
+    if ((Get-ConsoleInputWindow) -ne [IntPtr]::Zero) {
+        Log ("コンソール: 映像の入力窓を確認しました ({0:N1} 秒)。" -f $isw.Elapsed.TotalSeconds)
+    } else {
+        Log ("コンソール: 映像の入力窓が 20 秒たっても見つかりません (そのまま切り替えを試します)。窓: " + (Get-ConsoleTopWindowDiag))
+    }
+    $h2 = Get-ConsoleHwnd; if ($h2 -ne [IntPtr]::Zero) { $hwnd = $h2 }
 
     # 方法1
     $hit = Invoke-ConsoleMenuCommand $hwnd '全画面|Full'
     if ($hit) {
         Start-Sleep -Milliseconds 1000
         if (Test-ConsoleFullScreenOn $b) { Log "コンソール: 全画面モードになりました (メニューコマンド『$hit』)"; return $true }
-        Log ("コンソール: メニューコマンド『$hit』を実行しましたが全画面になりませんでした。窓: " + (Get-ConsoleTopWindowDiag)); $diagDone = $true
+        Log ("コンソール: メニューコマンド『$hit』を実行しましたが全画面になりませんでした。窓: " + (Get-ConsoleTopWindowDiag))
     }
 
-    # 方法2 (実機ではこの方法で成功した実績あり。起動直後は効かないことがあるため長めに繰り返す)
-    for ($try = 1; $try -le 10; $try++) {
-        $h2 = Get-ConsoleHwnd; if ($h2 -ne [IntPtr]::Zero) { $hwnd = $h2 }
-        if (-not (Force-Foreground $hwnd)) { Log "コンソール: 前面化に失敗 (キー送信 試行 $try)" }
-        $focus = Set-ConsoleInputFocus $hwnd
-        if ($try -eq 1 -or $try -eq 5) { Log "コンソール: キー送信の準備 (試行 ${try}): $focus" }
-        if ($try % 2 -eq 1) { Send-CtrlAltBreak } else { [System.Windows.Forms.SendKeys]::SendWait("^%{BREAK}") }
-        Start-Sleep -Milliseconds 1500
-        if (Test-ConsoleFullScreenOn $b) { Log "コンソール: 全画面モードになりました (キー送信 試行 $try)"; return $true }
-        if ($try -eq 4) {
-            if (-not $diagDone) { Log ("コンソール: キー送信 4 回で全画面になりません。窓: " + (Get-ConsoleTopWindowDiag)); $diagDone = $true }
-            try { Set-Content -Path $SplashLeftOffFile -Value "1" -Encoding ASCII } catch { }   # 覆いを外して続ける
-            Start-Sleep -Milliseconds 1000
-        }
-        Start-Sleep -Milliseconds 1500
-    }
+    # 方法2 (実機ではこの方法で成功した実績あり。起動直後は効かないことがあるため長めに繰り返す)。
+    # 起動中画面の覆いは掛けたまま (覆いはフォーカスを取らない窓なので、キーの宛先にはならない)
+    if (Send-ConsoleFullScreenKeys $b 12 "") { return $true }
 
     # 方法3
     $h2 = Get-ConsoleHwnd; if ($h2 -ne [IntPtr]::Zero) { $hwnd = $h2 }
@@ -2026,6 +2260,15 @@ function Enter-ConsoleFullScreen($screen) {
         Log "コンソール: メニューを操作しましたが全画面になりませんでした ($script:MenuDiag)"
     } else {
         Log "コンソール: メニュー操作に失敗: $script:MenuDiag"
+    }
+
+    # 最後の手段: 覆いを外してから、もう一度だけキー送信を試す (覆いが残っていると効かない環境への備え。
+    # ここからは途中の窓が見えてしまうが、代替表示 (黒背景 + 枠なし) より本当の全画面のほうがよい)
+    if (-not $NoSplash -and (Test-SplashRunning)) {
+        Log "コンソール: 覆いを掛けたままでは全画面になりませんでした。覆いを外して、もう一度試します。"
+        try { Set-Content -Path $SplashLeftOffFile -Value "1" -Encoding ASCII } catch { }
+        Start-Sleep -Milliseconds 1500
+        if (Send-ConsoleFullScreenKeys $b 4 "覆いなし ") { return $true }
     }
     Log ("コンソール: 全画面モードにできませんでした。窓: " + (Get-ConsoleTopWindowDiag))
     return $false
@@ -2179,6 +2422,30 @@ function Set-ConsoleSavedBar([bool]$hide) {
     } catch { return $false }
 }
 
+# 表示の拡大率 (ZoomLevel) を指定の値 (通常 100%) に戻す。100% 以外が保存されていると、全画面にしても
+# 映像が拡大・縮小されてモニターに合わない (以前に [表示 → 拡大] を触った設定が残っている場合)。
+# 書き換えたら $true
+function Set-ConsoleSavedZoom([int]$percent) {
+    try {
+        $file = Get-ConsoleConfigFile
+        if (-not $file) { return $false }
+        [xml]$x = Get-Content $file.FullName -Raw -Encoding UTF8
+        $nodes = @($x.SelectNodes("//setting") | Where-Object { $_.GetAttribute("name") -eq 'ZoomLevel' })
+        if ($nodes.Count -eq 0) { return $false }
+        $changed = $false
+        foreach ($n in $nodes) {
+            $valNode = $n.SelectSingleNode("value")
+            $old = if ($valNode) { $valNode.InnerText } else { $n.InnerText }
+            if (([string]$old).Trim() -eq [string]$percent) { continue }
+            if ($valNode) { $valNode.InnerText = [string]$percent } else { $n.InnerText = [string]$percent }
+            $changed = $true
+            Log "コンソール: 保存されていた拡大率 '$old' を $percent に戻します (全画面で映像がモニターに合うように)。"
+        }
+        if ($changed) { $x.Save($file.FullName) }
+        return $changed
+    } catch { return $false }
+}
+
 # vmconnect の「今の」メインウィンドウを取り直す
 # (接続の途中でウィンドウが作り直されることがあり、古いハンドルへの操作は空振りするため)
 function Get-ConsoleHwnd {
@@ -2220,8 +2487,8 @@ function Hide-ConsoleBar($screen) {
                     Log ("コンソール: 上部の接続バーを隠しました (" + (Format-ConsoleWindow $w) + ")。")
                 }
             }
-            if ($hidden.Count -gt 0 -and $try -ge 3) { break }   # 隠せたあとも 2 回は探し直す (出直してくる場合)
-            Start-Sleep -Milliseconds 750
+            if ($hidden.Count -gt 0 -and $try -ge 2) { break }   # 隠せたあとも 1 回は探し直す (出直してくる場合)
+            Start-Sleep -Milliseconds 600
         }
         if ($hidden.Count -eq 0) {
             Log ("コンソール: [診断] 接続バーが見つかりません。vmconnect の見えている窓: " + (Get-ConsoleWindowDiag $b))
@@ -2275,6 +2542,8 @@ function Open-Console($screen, [bool]$fullScreen) {
     }
     # 窓は最初から左画面に出す (右画面でちらつかせない)
     Set-ConsoleSavedPosition $screen.Bounds.X $screen.Bounds.Y | Out-Null
+    # 拡大率は 100% (100% 以外が残っていると、全画面でも映像がモニターに合わない)
+    Set-ConsoleSavedZoom 100 | Out-Null
 
     $hwnd = Start-ConsoleWindow
     if ($hwnd -eq [IntPtr]::Zero) { Log "警告: コンソール画面のウィンドウが見つかりませんでした。"; return }
@@ -2314,10 +2583,9 @@ function Open-Console($screen, [bool]$fullScreen) {
     if (-not $fullScreen) { Log "コンソール: 最大化ウィンドウで表示します (全画面の指定なし)。"; return }
 
     # 全画面モード (メニューバーなし・余白は黒)。解除/再開は Ctrl+Alt+Break
-    # 起動中画面 (左画面の黒い覆い) は、全画面になるまで掛けたままにする (最大化 → 全画面 の途中経過を見せない)。
-    # キー送信が 4 回効かなければ、覆いが邪魔をしている可能性に備えて途中で外す (Enter-ConsoleFullScreen 内)
+    # 起動中画面 (左画面の黒い覆い) は、全画面になる (か、代替表示まで組み上がる) まで掛けたままにする
+    # (最大化 → 全画面 の途中経過を見せない)。覆いを外す合図は、呼び出し側がこの関数から戻ったあとに出す
     $done = Enter-ConsoleFullScreen $screen
-    try { Set-Content -Path $SplashLeftOffFile -Value "1" -Encoding ASCII } catch { }
 
     if ($done) { Start-Sleep -Milliseconds 800; Hide-ConsoleBar $screen | Out-Null }
 
@@ -2414,8 +2682,13 @@ function Open-Display([string]$val, $screen, [string]$profile, [bool]$fullScreen
 # 左 = コンソールなら先に出して起動中画面を閉じる (EdgeBox は起動済みなのですぐ出せる)。
 # 管理画面の応答待ちはそのあとに行う (長くかかっても左は見えている)
 if ($leftIsConsole) {
+    # 覆い (起動中画面) が左画面に出てから、コンソールの窓を開く (覆いの下で組み立てて、途中の窓を見せない)
+    if (-not $NoSplash) {
+        if (Wait-SplashReady 15) { Log "起動中画面が左画面を覆っているのを確認しました。この下でコンソールを組み立てます。" }
+        else { Log "警告: 起動中画面の表示を確認できませんでした (覆いなしで続けます)。" }
+    }
     Open-Display $LeftUrl $leftScreen "FieldKioskL" $LeftFull
-    # 左は出たので、起動中画面 (左画面の黒い覆い) を閉じる合図を出す (既に閉じていれば何もしない)
+    # 左は全画面になった (か、代替表示まで組み上がった) ので、起動中画面 (左画面の黒い覆い) を閉じる合図を出す
     try { Set-Content -Path $SplashLeftOffFile -Value "1" -Encoding ASCII } catch { }
     if ($RightUrl) { Set-Status "管理画面の応答を待っています" } else { Set-Status "左画面の表示を仕上げています" }
 }
@@ -2496,4 +2769,6 @@ Log "===== 表示処理を完了 ====="
     # 表示がそろったので起動中画面を閉じる (エラーで中断した場合も必ず閉じる)
     Start-Sleep -Milliseconds 500
     Stop-Splash
+    # 旧版で登録した起動中画面のタスク (無い / 5 秒遅れ) を、次回のサインインに備えて直しておく
+    Repair-SplashTask
 }
