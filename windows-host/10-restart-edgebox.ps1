@@ -130,6 +130,7 @@ if (-not (Test-Path $Script03)) { Show-Msg "03-field-display-kiosk.ps1 が見つ
 # --- 『EdgeBox 画面』: 左画面にコンソールを表示するだけ ---
 if ($ShowOnly) {
     if ([string]$vm.State -ne "Running") {
+        try { & $Script03 -VMName $VMName -ApplyResolution | Out-Null } catch { }   # 『設定』の解像度を停止中に反映
         $s11 = Join-Path $PSScriptRoot "11-io-passthrough.ps1"   # 予約された設定 (メモリの固定など) を停止中に反映
         if (Test-Path $s11) { try { & $s11 -VMName $VMName -ApplyPending | Out-Null } catch { } }
         Invoke-CpuPartitionBoot | Out-Null   # full モードなら CPU グループに固定してから起動
@@ -163,6 +164,7 @@ if ([string]$vm.State -ne "Off") {
         Start-Sleep -Seconds 3
     }
 }
+try { & $Script03 -VMName $VMName -ApplyResolution | Out-Null } catch { }   # 『設定』の解像度を停止中に反映
 $s11 = Join-Path $PSScriptRoot "11-io-passthrough.ps1"   # 予約された設定 (メモリの固定など) を停止中に反映
 if (Test-Path $s11) { try { & $s11 -VMName $VMName -ApplyPending | Out-Null } catch { } }
 Invoke-CpuPartitionBoot | Out-Null   # full モードなら、停止中のいまのうちに CPU グループへ固定してから起動
