@@ -9,11 +9,11 @@
       - 機能更新後の「プライバシー設定を確認」画面
     また、右下に出る通知 (トースト) も、アプリ・Windows セキュリティ・Windows Update の再起動の予告まで
     含めてすべて止めます (通知センターも無効にします)。
-    工場の表示用 PC ではどれも不要で、EdgeBox の画面の前に出てくると邪魔になるため、まとめて止めます。
+    工場の表示用 PC ではどれも不要で、Edge Box の画面の前に出てくると邪魔になるため、まとめて止めます。
     設定は、このアカウントと、この PC に読み込まれている全ユーザーのアカウントに入れます。
 
     さらに、PC が勝手に止まる原因になるスリープ・休止状態・電源ボタンも止めます:
-      - 電源プラン「EdgeBox 常時稼働」を作って切り替え、スリープ/休止に入る時間を「なし」にする
+      - 電源プラン「Edge Box 常時稼働」を作って切り替え、スリープ/休止に入る時間を「なし」にする
       - 休止状態そのものを無効にする (高速スタートアップも一緒に無効になる)
       - 電源ボタン/スリープボタンを押しても何もしないようにする (4 秒以上の長押しによる強制電源断は残る)
     元のプランと休止の設定は quiet-windows-backup.json に控え、-Disable で戻します。
@@ -122,7 +122,7 @@ $hives = Get-UserHives
 
 # ------------------------------------------------------------ 電源 (スリープ・休止・電源ボタン)
 $BackupFile = Join-Path $PSScriptRoot "quiet-windows-backup.json"
-$SchemeName = "EdgeBox 常時稼働"
+$SchemeName = "Edge Box 常時稼働"
 $GuidRe = '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}'
 # powercfg を呼ぶ。エラー出力は文字列として受け取り、例外にはしない
 # ($ErrorActionPreference = Stop のまま 2> を使うと、標準エラー出力が例外扱いになるため)
@@ -178,7 +178,7 @@ function Set-PowerQuiet {
         }
         $ours = Get-Guid1 (Invoke-Pc @("/duplicatescheme", $orig))
         if (-not $ours) { throw "電源プランを複製できませんでした" }
-        Invoke-Pc @("/changename", $ours, $SchemeName, "再起動・スリープ・休止をしない (EdgeBox の収集を止めない)") | Out-Null
+        Invoke-Pc @("/changename", $ours, $SchemeName, "再起動・スリープ・休止をしない (Edge Box の収集を止めない)") | Out-Null
     }
     Invoke-Pc @("/setactive", $ours) | Out-Null
     if ($script:PcExit -ne 0) { throw "電源プランを切り替えられませんでした" }

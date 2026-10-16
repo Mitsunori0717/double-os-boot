@@ -1,7 +1,7 @@
 @echo off
 chcp 932 >nul
 setlocal
-title EdgeBox セットアップ EXE の作成
+title Edge Box セットアップ EXE の作成
 
 echo ==============================================
 echo  EdgeBox-Setup.exe を作ります

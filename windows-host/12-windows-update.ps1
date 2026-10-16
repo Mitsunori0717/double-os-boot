@@ -25,7 +25,7 @@
 .NOTES
     - 管理者権限が必要です。
     - 止めているのは「自動」更新です。更新そのものを当てない運用は安全ではありません。
-      月に一度など、EdgeBox を止めてよい時間を決めて -UpdateNow で当ててください。
+      月に一度など、Edge Box を止めてよい時間を決めて -UpdateNow で当ててください。
     - 更新サービスを止めるため、Microsoft Store の更新も止まります。
 #>
 [CmdletBinding()]
@@ -180,7 +180,7 @@ if ($UpdateNow) {
     Write-Host ""
     Write-Host "Windows Update の画面を開きました。" -ForegroundColor Green
     Write-Host "  1. 『更新プログラムのチェック』で更新を当てる"
-    Write-Host "  2. EdgeBox を止めてよい時間に再起動する"
+    Write-Host "  2. Edge Box を止めてよい時間に再起動する"
     Write-Host "  3. 落ち着いたら、もう一度このスクリプトを引数なしで実行して止め直す:"
     Write-Host "       .\12-windows-update.ps1" -ForegroundColor Yellow
     Write-Host ""

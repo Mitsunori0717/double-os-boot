@@ -12,11 +12,11 @@
       3. デスクトップ本体 (explorer.exe) が動いていない
          … アイコンもタスクバーも無く、右クリックも効かない状態
 
-    1・2 は閉じ、3 は起動し直します。EdgeBox や CPU の割り当てには触れません。
+    1・2 は閉じ、3 は起動し直します。Edge Box や CPU の割り当てには触れません。
 
 .EXAMPLE
     .\99-fix-black-screen.ps1                # 確認して直す
-    .\99-fix-black-screen.ps1 -CloseConsole  # EdgeBox のコンソール窓も閉じる
+    .\99-fix-black-screen.ps1 -CloseConsole  # Edge Box のコンソール窓も閉じる
 
 .NOTES
     管理者権限は不要です (必要な場面では自動で昇格を求めます)。
@@ -24,7 +24,7 @@
 #>
 [CmdletBinding()]
 param(
-    [switch]$CloseConsole,   # EdgeBox のコンソール窓 (vmconnect) も閉じる
+    [switch]$CloseConsole,   # Edge Box のコンソール窓 (vmconnect) も閉じる
     [switch]$KillOnly        # 内部用: 昇格して黒い窓を閉じるだけの再実行
 )
 
@@ -90,21 +90,21 @@ if ($exp.Count -eq 0) {
     Write-Host "  デスクトップ (explorer) は動いています。"
 }
 
-# --- 3. EdgeBox のコンソール窓 ---
+# --- 3. Edge Box のコンソール窓 ---
 $vc = @(Get-Process vmconnect -ErrorAction SilentlyContinue)
 if ($vc.Count -gt 0) {
     if ($CloseConsole) {
         foreach ($p in $vc) { [void]$p.CloseMainWindow() }
         Start-Sleep -Seconds 2
         Get-Process vmconnect -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-        Write-Host "  EdgeBox のコンソール窓を閉じました (EdgeBox は動いたままです)。" -ForegroundColor Green
+        Write-Host "  Edge Box のコンソール窓を閉じました (Edge Box は動いたままです)。" -ForegroundColor Green
     } else {
-        Write-Host "  EdgeBox のコンソール窓が開いています (画面が真っ黒に見える原因になります)。"
+        Write-Host "  Edge Box のコンソール窓が開いています (画面が真っ黒に見える原因になります)。"
         Write-Host "    閉じる場合: .\99-fix-black-screen.ps1 -CloseConsole" -ForegroundColor Cyan
-        Write-Host "    (EdgeBox は動いたままです。再表示は .\02-start-field-vm.ps1)"
+        Write-Host "    (Edge Box は動いたままです。再表示は .\02-start-field-vm.ps1)"
     }
 } else {
-    Write-Host "  EdgeBox のコンソール窓は開いていません。"
+    Write-Host "  Edge Box のコンソール窓は開いていません。"
 }
 
 Write-Host ""

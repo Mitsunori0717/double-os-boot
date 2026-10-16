@@ -1,31 +1,31 @@
 ﻿<#
 .SYNOPSIS
-    EdgeBox をワンクリックで起動します。
-    EdgeBox があればそのまま起動し、無ければ作成してから起動します。
+    Edge Box をワンクリックで起動します。
+    Edge Box があればそのまま起動し、無ければ作成してから起動します。
 
 .DESCRIPTION
     これ 1 本で、毎回つまずきがちな段取りを全部自動でやります。
 
-      1. 既存 EdgeBox を探す
-         - 指定名の EdgeBox があればそれを使う
-         - 名前が違っても、EdgeBox のディスクを使っている EdgeBox があればそれを使う
-           (旧構成の EdgeBox がそのまま活きるので、作り直す必要がありません)
+      1. 既存 Edge Box を探す
+         - 指定名の Edge Box があればそれを使う
+         - 名前が違っても、Edge Box のディスクを使っている Edge Box があればそれを使う
+           (旧構成の Edge Box がそのまま活きるので、作り直す必要がありません)
       2. 対象ディスクを決める
-         - 既存 EdgeBox が使っているディスク / 前回の記録 / 指定 / 自動検出 の順
+         - 既存 Edge Box が使っているディスク / 前回の記録 / 指定 / 自動検出 の順
       3. 起動できない原因を先に片付ける
          - 同じディスクの二重接続を外す
-         - 他の EdgeBox が同じディスクを掴んでいれば、その接続だけ外す (停止中のみ)
+         - 他の Edge Box が同じディスクを掴んでいれば、その接続だけ外す (停止中のみ)
          - ディスクが Windows でオンラインならオフラインにする
-      4. EdgeBox が無ければ作成する (01-create-field-vm.ps1 を呼ぶ)
+      4. Edge Box が無ければ作成する (01-create-field-vm.ps1 を呼ぶ)
       5. 起動してコンソールを表示する (02-start-field-vm.ps1 を呼ぶ)
 
-    ディスクの中身には一切触れません。EdgeBox を消したり作り直したりもしません
-    (作成は「EdgeBox がまったく無い場合」だけです)。
+    ディスクの中身には一切触れません。Edge Box を消したり作り直したりもしません
+    (作成は「Edge Box がまったく無い場合」だけです)。
 
 .EXAMPLE
     .\00-field-launcher.ps1              # おまかせ起動
     .\00-field-launcher.ps1 -Status      # 何が使われるかだけ確認 (変更しない)
-    .\00-field-launcher.ps1 -Setup       # デスクトップに『EdgeBox 起動』アイコンを作成
+    .\00-field-launcher.ps1 -Setup       # デスクトップに『Edge Box 起動』アイコンを作成
     .\00-field-launcher.ps1 -DiskNumber 0 -SwitchName "EdgeBox-External"
     .\00-field-launcher.ps1 -NetAdapterName "イーサネット 2"   # 新規 PC (外部スイッチがまだ無い) の初回
 
@@ -35,7 +35,7 @@
 [CmdletBinding()]
 param(
     [string]$VMName    = "EdgeBox",
-    [int]$DiskNumber   = -1,      # 省略時: 既存 EdgeBox / 記録 / 自動検出 から決める
+    [int]$DiskNumber   = -1,      # 省略時: 既存 Edge Box / 記録 / 自動検出 から決める
     [string]$SwitchName = "",     # 省略時: 既存の外部スイッチを自動選択
     [string]$NetAdapterName = "", # 外部スイッチがまだ無い PC で、ライン側 LAN ポートの Name (Get-NetAdapter)。IP でも可
     [int]$MemoryGB     = 8,
@@ -69,7 +69,7 @@ function Fail([string]$Text) {
     if ($NoConfirm) {
         try {
             Add-Type -AssemblyName System.Windows.Forms
-            [System.Windows.Forms.MessageBox]::Show($Text, "EdgeBox 起動",
+            [System.Windows.Forms.MessageBox]::Show($Text, "Edge Box 起動",
                 [System.Windows.Forms.MessageBoxButtons]::OK,
                 [System.Windows.Forms.MessageBoxIcon]::Warning) | Out-Null
         } catch { }
@@ -94,7 +94,9 @@ if ($Setup) {
     $ts = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -MultipleInstances Parallel -ExecutionTimeLimit (New-TimeSpan -Seconds 0)
     Register-ScheduledTask -TaskName $TaskName -Action $action -Settings $ts -RunLevel Highest -Force | Out-Null
 
-    $lnkPath = Join-Path ([Environment]::GetFolderPath("Desktop")) "EdgeBox 起動.lnk"
+    # 旧名のアイコンは消して、新しい名前で作り直す
+    Remove-Item (Join-Path ([Environment]::GetFolderPath("Desktop")) "EdgeBox 起動.lnk") -Force -ErrorAction SilentlyContinue
+    $lnkPath = Join-Path ([Environment]::GetFolderPath("Desktop")) "Edge Box 起動.lnk"
     $shell = New-Object -ComObject WScript.Shell
     $lnk = $shell.CreateShortcut($lnkPath)
     $lnk.TargetPath = "schtasks.exe"
@@ -102,14 +104,14 @@ if ($Setup) {
     $lnk.WorkingDirectory = $PSScriptRoot
     $lnk.WindowStyle  = 7
     $lnk.IconLocation = "shell32.dll,15"
-    $lnk.Description  = "EdgeBox を起動する (EdgeBox が無ければ作成してから起動)"
+    $lnk.Description  = "Edge Box を起動する (Edge Box が無ければ作成してから起動)"
     $lnk.Save()
-    Write-Host "デスクトップに『EdgeBox 起動』アイコンを作成しました (UAC 確認なしで起動できます)。" -ForegroundColor Green
+    Write-Host "デスクトップに『Edge Box 起動』アイコンを作成しました (UAC 確認なしで起動できます)。" -ForegroundColor Green
     exit 0
 }
 
 if (-not (Test-Admin)) {
-    Write-Error "管理者権限の PowerShell で実行してください (またはデスクトップの『EdgeBox 起動』アイコンから)。"
+    Write-Error "管理者権限の PowerShell で実行してください (またはデスクトップの『Edge Box 起動』アイコンから)。"
     exit 1
 }
 if (-not (Get-Command Get-VM -ErrorAction SilentlyContinue)) {
@@ -118,24 +120,24 @@ if (-not (Get-Command Get-VM -ErrorAction SilentlyContinue)) {
 }
 
 Write-Host ""
-Write-Host "===== EdgeBox 起動 =====" -ForegroundColor White
+Write-Host "===== Edge Box 起動 =====" -ForegroundColor White
 
 # ============================================================
-#  1. 既存 EdgeBox とディスクを探す
+#  1. 既存 Edge Box とディスクを探す
 # ============================================================
 function Get-PassthroughDisks([string]$Name) {
     @(Get-VMHardDiskDrive -VMName $Name -ErrorAction SilentlyContinue |
         Where-Object { $null -ne $_.DiskNumber })
 }
 
-Step "既存の EdgeBox を確認"
+Step "既存の Edge Box を確認"
 $sysDisk = (Get-Partition -DriveLetter C).DiskNumber
 $targetVm = Get-VM -Name $VMName -ErrorAction SilentlyContinue
 
 if ($targetVm) {
     Info "登録『$VMName』が見つかりました (状態: $($targetVm.State))"
 } else {
-    # 名前が違っても、物理ディスクを起動している EdgeBox があればそれが EdgeBox
+    # 名前が違っても、物理ディスクを起動している Edge Box があればそれが Edge Box
     $candidates = @()
     foreach ($vm in @(Get-VM)) {
         foreach ($d in (Get-PassthroughDisks $vm.Name)) {
@@ -148,13 +150,13 @@ if ($targetVm) {
     if ($candidates.Count -eq 1) {
         $targetVm = $candidates[0].EdgeBox
         $VMName = $targetVm.Name
-        Ok "名前は違いますが、EdgeBox のディスクを起動する 登録『$VMName』が見つかりました。これを使います。"
+        Ok "名前は違いますが、Edge Box のディスクを起動する 登録『$VMName』が見つかりました。これを使います。"
     } elseif ($candidates.Count -gt 1) {
         foreach ($c in $candidates) { Info "  $($c.EdgeBox.Name)  (ディスク $($c.Disk) / 状態 $($c.EdgeBox.State))" }
-        Fail ("物理ディスクを使う EdgeBox が複数あります。-VMName でどれを使うか指定してください:`n" +
+        Fail ("物理ディスクを使う Edge Box が複数あります。-VMName でどれを使うか指定してください:`n" +
             (($candidates | ForEach-Object { "  " + $_.EdgeBox.Name }) -join "`n"))
     } else {
-        Info "EdgeBox はまだありません (このあと作成します)"
+        Info "Edge Box はまだありません (このあと作成します)"
     }
 }
 
@@ -178,15 +180,15 @@ if ($diskNo -lt 0) {
     if ($others.Count -eq 1) {
         $diskNo = [int]$others[0].Number
         Info "システムディスク以外はディスク $diskNo だけでした: $($others[0].FriendlyName)"
-        if (-not (Confirm-Step "このディスクを EdgeBox のディスクとして使いますか?")) { exit 0 }
+        if (-not (Confirm-Step "このディスクを Edge Box のディスクとして使いますか?")) { exit 0 }
     } elseif ($others.Count -gt 1) {
         foreach ($o in $others) {
             Info ("  ディスク {0}: {1} ({2:N0} GB / オフライン={3})" -f $o.Number, $o.FriendlyName, ($o.Size / 1GB), $o.IsOffline)
         }
-        Fail ("EdgeBox のディスクを特定できません。-DiskNumber で指定してください:`n" +
+        Fail ("Edge Box のディスクを特定できません。-DiskNumber で指定してください:`n" +
             (($others | ForEach-Object { "  ディスク {0}: {1}" -f $_.Number, $_.FriendlyName }) -join "`n"))
     } else {
-        Write-Error "システムディスク以外の物理ディスクが見つかりません。EdgeBox のディスクが接続されているか確認してください。"
+        Write-Error "システムディスク以外の物理ディスクが見つかりません。Edge Box のディスクが接続されているか確認してください。"
         exit 1
     }
 }
@@ -218,21 +220,21 @@ if ($targetVm) {
     }
 }
 
-# 3-b. 他の EdgeBox が同じディスクを掴んでいないか (旧構成の EdgeBox が残っている場合)
+# 3-b. 他の Edge Box が同じディスクを掴んでいないか (旧構成の Edge Box が残っている場合)
 foreach ($other in @(Get-VM | Where-Object { -not $targetVm -or $_.Name -ne $targetVm.Name })) {
     foreach ($d in (Get-PassthroughDisks $other.Name)) {
         if ($d.DiskNumber -ne $diskNo) { continue }
         Warn "登録『$($other.Name)』が同じディスク $diskNo を掴んでいます (このままでは起動できません)"
         if ($Status) { $blocked = $true; continue }
         if ($other.State -ne "Off") {
-            # 起動中ということは、EdgeBox が既にその EdgeBox で動いている可能性が高い
-            Warn "  『$($other.Name)』は【起動中】です。EdgeBox は既にそちらで動いている可能性があります。"
+            # 起動中ということは、Edge Box が既にその Edge Box で動いている可能性が高い
+            Warn "  『$($other.Name)』は【起動中】です。Edge Box は既にそちらで動いている可能性があります。"
             Info "    そのまま使う場合   : .\00-field-launcher.ps1 -VMName `"$($other.Name)`""
             Info "    こちらに切り替える : Stop-VM '$($other.Name)' で停止してから、もう一度実行"
             $blocked = $true
             continue
         }
-        if (-not (Confirm-Step "『$($other.Name)』からディスクの接続だけを外しますか? (EdgeBox もデータも残ります)")) {
+        if (-not (Confirm-Step "『$($other.Name)』からディスクの接続だけを外しますか? (Edge Box もデータも残ります)")) {
             $blocked = $true
             continue
         }
@@ -240,11 +242,11 @@ foreach ($other in @(Get-VM | Where-Object { -not $targetVm -or $_.Name -ne $tar
             -ControllerType $d.ControllerType `
             -ControllerNumber $d.ControllerNumber `
             -ControllerLocation $d.ControllerLocation
-        Ok "『$($other.Name)』から接続を外しました (EdgeBox とディスクの中身はそのままです)"
+        Ok "『$($other.Name)』から接続を外しました (Edge Box とディスクの中身はそのままです)"
     }
 }
 
-# 3-c. Windows 側でオンラインのままだと EdgeBox から開けない
+# 3-c. Windows 側でオンラインのままだと Edge Box から開けない
 $diskInfo = Get-Disk -Number $diskNo
 if (-not $diskInfo.IsOffline) {
     Warn "ディスク $diskNo が Windows でオンラインです"
@@ -255,22 +257,22 @@ if (-not $diskInfo.IsOffline) {
         Ok "オフラインにしました (Windows からの誤アクセス防止)"
     }
 } else {
-    Ok "ディスク $diskNo はオフライン (EdgeBox 専有できる状態)"
+    Ok "ディスク $diskNo はオフライン (Edge Box 専有できる状態)"
 }
 
 if ($blocked -and -not $Status) {
-    Fail "解消できない問題が残っているため起動できません。`n動作中の EdgeBox がディスクを掴んでいる場合は、その EdgeBox を停止してから再実行してください。"
+    Fail "解消できない問題が残っているため起動できません。`n動作中の Edge Box がディスクを掴んでいる場合は、その Edge Box を停止してから再実行してください。"
 }
 
 # ============================================================
-#  4. EdgeBox が無ければ作成する
+#  4. Edge Box が無ければ作成する
 # ============================================================
 if ($Status) {
     Step "確認だけの実行のため、ここで終了します"
     if ($targetVm) {
-        Info "起動する EdgeBox   : $($targetVm.Name) (状態: $($targetVm.State))"
+        Info "起動する Edge Box   : $($targetVm.Name) (状態: $($targetVm.State))"
     } else {
-        Info "EdgeBox は未作成のため、実行時に新しく作成します (名前: $VMName)"
+        Info "Edge Box は未作成のため、実行時に新しく作成します (名前: $VMName)"
     }
     Info "使うディスク  : $diskNo"
     if ($blocked) { Warn "先に解消が必要な問題があります (上を参照)" }
@@ -299,14 +301,14 @@ function New-FieldVmHere {
             $sw = "EdgeBox-External"
             Ok "外部スイッチ『$sw』を LAN ポート『$($nic.Name)』に作成しました"
         } else {
-            # NAT (Default Switch) で作ると工作機械から到達できない EdgeBox ができてしまうため、黙って作らない
+            # NAT (Default Switch) で作ると工作機械から到達できない Edge Box ができてしまうため、黙って作らない
             Fail ("外部スイッチがありません。ライン側 LAN ポートを指定して実行してください:`n" +
                   "  .\00-field-launcher.ps1 -NetAdapterName `"<Get-NetAdapter の Name>`"`n" +
                   "(工作機械と通信するには、LAN ポートに直結した外部スイッチが必要です)")
         }
     }
     New-VM -Name $VMName -Generation 2 -MemoryStartupBytes ($MemoryGB * 1GB) -NoVHD -SwitchName $sw | Out-Null
-    Set-VMFirmware  -VMName $VMName -EnableSecureBoot Off        # EdgeBox は独自の署名チェーン
+    Set-VMFirmware  -VMName $VMName -EnableSecureBoot Off        # Edge Box は独自の署名チェーン
     Set-VMProcessor -VMName $VMName -Count $CpuCount
     Add-VMHardDiskDrive -VMName $VMName -DiskNumber $diskNo      # 物理ディスクを無改造のまま接続
     Set-VMFirmware  -VMName $VMName -FirstBootDevice (Get-VMHardDiskDrive -VMName $VMName)
@@ -314,7 +316,7 @@ function New-FieldVmHere {
 }
 
 if (-not $targetVm) {
-    Step "EdgeBox を作成"
+    Step "Edge Box を作成"
     if (-not (Confirm-Step "登録『$VMName』を作成します。よろしいですか?")) { exit 0 }
     $made = $false
     if (Test-Path $Script01) {
@@ -330,10 +332,10 @@ if (-not $targetVm) {
         Warn "01-create-field-vm.ps1 が見つからないため、この画面の中で作成します。"
     }
     if (-not $made) {
-        try { New-FieldVmHere } catch { Fail "EdgeBox を作成できませんでした: $($_.Exception.Message)" }
+        try { New-FieldVmHere } catch { Fail "Edge Box を作成できませんでした: $($_.Exception.Message)" }
     }
     $targetVm = Get-VM -Name $VMName -ErrorAction SilentlyContinue
-    if (-not $targetVm) { Fail "EdgeBox の作成に失敗しました。" }
+    if (-not $targetVm) { Fail "Edge Box の作成に失敗しました。" }
     Ok "登録『$VMName』を作成しました"
 }
 
@@ -355,5 +357,5 @@ if ($p.ExitCode -ne 0) {
 }
 
 Write-Host ""
-Write-Host "EdgeBox を起動しました。" -ForegroundColor Green
+Write-Host "Edge Box を起動しました。" -ForegroundColor Green
 Write-Host "  起動画面で Ctrl キーを押しっぱなしにしないでください (工場出荷リセットが選ばれる機種があります)" -ForegroundColor Yellow

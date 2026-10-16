@@ -1,6 +1,6 @@
-<#
+﻿<#
 .SYNOPSIS
-    EdgeBox 一式を新しい PC に配置し、デスクトップのアイコンを作ります。
+    Edge Box 一式を新しい PC に配置し、デスクトップのアイコンを作ります。
     EdgeBox-Setup.exe の中から呼ばれます (単体でも実行できます)。
 
 .DESCRIPTION
@@ -8,10 +8,10 @@
       1. 一式を C:\EdgeBox に配置する (既にあれば中身を入れ替え。設定と記録は残す)
       2. ダウンロードの印 (Mark of the Web) を外す
       3. デスクトップのアイコンを作る
-         ※ Hyper-V がまだ無効な PC では、EdgeBox に関わるアイコンは作れません。
+         ※ Hyper-V がまだ無効な PC では、Edge Box に関わるアイコンは作れません。
             その場合は Hyper-V を有効にして再起動したあと、もう一度この EXE を実行してください。
 
-    EdgeBox の作成や CPU の分離といった、この PC に固有の作業は行いません。
+    Edge Box の作成や CPU の分離といった、この PC に固有の作業は行いません。
     配置後、C:\EdgeBox\windows-host\SETUP-STEPS.md の①から順に進めてください。
 
 .EXAMPLE
@@ -43,7 +43,7 @@ if (-not $isAdmin) {
 function Write-Step([string]$t) { Write-Host $t -ForegroundColor Cyan }
 
 Write-Host "==============================================" -ForegroundColor Cyan
-Write-Host " EdgeBox 一式を導入します"
+Write-Host " Edge Box 一式を導入します"
 Write-Host "==============================================" -ForegroundColor Cyan
 Write-Host "配置先: $InstallDir"
 Write-Host ""
@@ -101,10 +101,10 @@ function Invoke-Setup([string]$label, [string]$script, [string[]]$argv) {
     }
 }
 
-Invoke-Setup "EdgeBox 起動"        "00-field-launcher.ps1"       @("-Setup")
+Invoke-Setup "Edge Box 起動"        "00-field-launcher.ps1"       @("-Setup")
 Invoke-Setup "設定"                "08-settings-console.ps1"     @("-Setup")
 Invoke-Setup "全部シャットダウン"  "05-shutdown-all.ps1"         @("-Setup")
-Invoke-Setup "EdgeBox 再起動/画面" "10-restart-edgebox.ps1"      @("-Setup")
+Invoke-Setup "Edge Box 再起動/画面" "10-restart-edgebox.ps1"      @("-Setup")
 
 # Windows Update の自動更新・自動再起動を止める (収集が勝手に止まらないように)
 try {
@@ -117,7 +117,7 @@ try {
     }
 } catch { $ng += "Windows Update の停止" }
 
-# 「PC のセットアップを完了しましょう」などの勧誘画面を止める (EdgeBox の画面の前に出ないように)
+# 「PC のセットアップを完了しましょう」などの勧誘画面を止める (Edge Box の画面の前に出ないように)
 try {
     $qScript = Join-Path $hostDir "13-quiet-windows.ps1"
     if (Test-Path $qScript) { & $qScript *>&1 | Out-Null; $ok += "Windows の勧誘画面を停止" }
@@ -128,9 +128,9 @@ try {
     $cpuSetup = Join-Path $cpuDir "cpu-console.ps1"
     if (Test-Path $cpuSetup) {
         & $cpuSetup -Setup *>&1 | Out-Null
-        $ok += "CPU割り当て / EdgeBox 監視"
+        $ok += "CPU割り当て / Edge Box 監視"
     }
-} catch { $ng += "CPU割り当て / EdgeBox 監視" }
+} catch { $ng += "CPU割り当て / Edge Box 監視" }
 
 Write-Host ""
 Write-Host "==============================================" -ForegroundColor Green
@@ -151,6 +151,6 @@ Write-Host "  元に戻す    : $hostDir\12-windows-update.ps1 -Restore"
 Write-Host ""
 Write-Host "次の手順:" -ForegroundColor Cyan
 Write-Host "  $hostDir\SETUP-STEPS.md の①から順に進めてください。"
-Write-Host "  (Hyper-V の有効化 → EdgeBox の作成 → CPU の完全分離)"
+Write-Host "  (Hyper-V の有効化 → Edge Box の作成 → CPU の完全分離)"
 Write-Host ""
 Read-Host "Enter キーで閉じます"

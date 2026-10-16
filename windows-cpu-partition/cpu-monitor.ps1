@@ -1,15 +1,15 @@
 ﻿<#
 .SYNOPSIS
-    EdgeBox 監視 — 各コアの負荷「誰が使っているか」と、メモリの使用量をリアルタイムで表示します。
+    Edge Box 監視 — 各コアの負荷「誰が使っているか」と、メモリの使用量をリアルタイムで表示します。
 
 .DESCRIPTION
     ハイパーバイザーの性能カウンターを毎秒読み、論理 CPU ごとに
-        EdgeBox の実行 (緑) / Windows 自身の実行 (青) / ハイパーバイザー内部 (灰)
-    を積み上げ棒で描きます。タスクマネージャーでは EdgeBox の分が「vmmem」という
+        Edge Box の実行 (緑) / Windows 自身の実行 (青) / ハイパーバイザー内部 (灰)
+    を積み上げ棒で描きます。タスクマネージャーでは Edge Box の分が「vmmem」という
     1 つのプロセスにしか見えませんが、ここではコア単位で分かります。
-    枠の色は CPU 割り当ての計画 (青 = Windows 用 / 緑 = EdgeBox 用) です。
+    枠の色は CPU 割り当ての計画 (青 = Windows 用 / 緑 = Edge Box 用) です。
 
-    メモリは PC 全体を「Windows 使用中 / EdgeBox 使用中 / 空き」に分けて表示します。
+    メモリは PC 全体を「Windows 使用中 / Edge Box 使用中 / 空き」に分けて表示します。
 
     ウィンドウの大きさは自由に変えられ、最小化してしまっておけます
     (最小化中は測定を休みます)。
@@ -20,7 +20,7 @@
     .\cpu-monitor.ps1 -TopMost           # 常に手前に表示
 
 .NOTES
-    CPU の表示は管理者でなくてもできます。EdgeBox の状態とメモリ割り当ての取得には
+    CPU の表示は管理者でなくてもできます。Edge Box の状態とメモリ割り当ての取得には
     Hyper-V の管理権限が要ります (無い場合はその部分だけ「取得不可」になります)。
 #>
 [CmdletBinding()]
@@ -46,7 +46,7 @@ if (-not $PSBoundParameters.ContainsKey("VMName") -and (Test-Path $ConfigFile)) 
         if ($c0.VMName) { $VMName = [string]$c0.VMName }
     } catch { }
 }
-# その名前の登録が無ければ (名前を変えた等)、EdgeBox の物理ディスクを持つ登録か 1 つしかない登録を使う
+# その名前の登録が無ければ (名前を変えた等)、Edge Box の物理ディスクを持つ登録か 1 つしかない登録を使う
 $script:VmLookupError = ""
 try {
     if (Get-Command Get-VM -ErrorAction SilentlyContinue) {
@@ -145,7 +145,7 @@ function Get-Cores {
             if ($lps.Count -gt 0) { $raw += [pscustomobject]@{ Eff = [int]$parts[0]; Lps = $lps; Kind = "C"; Label = "" } }
         }
     } catch { $raw = @() }
-    # minroot 適用中は Windows から EdgeBox 用の CPU が見えないため、設定コンソールが保存した
+    # minroot 適用中は Windows から Edge Box 用の CPU が見えないため、設定コンソールが保存した
     # 構成 (cpu-topology.json) の方が多ければそちらを使う
     $liveLps = 0; foreach ($r in $raw) { $liveLps += $r.Lps.Count }
     $snapRaw = @()
@@ -225,7 +225,7 @@ function Get-ContainState {
             if (-not $fs) { return @{ Text = "完全分離: 準備中 (再起動待ち)"; Ok = $false } }
             if ($fs.Bound) { return @{ Text = ("完全分離: ○ 成立   Windows は CPU {0} に固定 / {1} は CPU {2} に固定" -f $fs.HostLps, $VMName, $fs.GuestLps); Ok = $true } }
             if (-not $fs.MinrootOk) { return @{ Text = "完全分離: △ 未成立 (再起動待ち)"; Ok = $false } }
-            return @{ Text = "完全分離: △ 未成立 (『EdgeBox 再起動』で直ることがあります)"; Ok = $false }
+            return @{ Text = "完全分離: △ 未成立 (『Edge Box 再起動』で直ることがあります)"; Ok = $false }
         }
         return @{ Text = "分離: 設定なし (設定コンソールで割り当てを適用すると始まります)"; Ok = $false }
     }
@@ -243,7 +243,7 @@ function Get-ContainState {
 }
 
 # ハイパーバイザーの性能カウンター (-Verify と同じ考え方)
-#   LP の Guest = ルート VP (Windows 自身) + EdgeBox の VP なので、同番号のルート VP を引いて EdgeBox 分を出す
+#   LP の Guest = ルート VP (Windows 自身) + Edge Box の VP なので、同番号のルート VP を引いて Edge Box 分を出す
 $script:lpName = $null; $script:rvName = $null
 $lpCls = Get-CimClass -ClassName "Win32_PerfRawData_*HyperVHypervisorLogicalProcessor" -ErrorAction SilentlyContinue | Select-Object -First 1
 $rvCls = Get-CimClass -ClassName "Win32_PerfRawData_*HyperVHypervisorRootVirtualProcessor" -ErrorAction SilentlyContinue | Select-Object -First 1
@@ -265,7 +265,7 @@ function Get-VpCounterMap([string]$ClassName, [string]$Name) {
     }
     return $map
 }
-# full モードで EdgeBox が EdgeBox 用 CPU に固定済みか (起動タスクの記録)
+# full モードで Edge Box が Edge Box 用 CPU に固定済みか (起動タスクの記録)
 function Test-FullBound {
     try {
         if (-not $script:Plan -or $script:Plan.Mode -ne "full") { return $false }
@@ -313,12 +313,12 @@ $script:LeakVmRaw = 0.0; $script:LeakWinRaw = 0.0
 # この値以下は測定のゆらぎとみなして 0.0 にする。真の漏れは桁が違う (固定が外れると数 % 出る) ので隠れない。
 # 判定 (△ 混ざっています) は従来どおり 0.5% 超
 $script:LeakDeadband = 0.3
-$script:WinStructOk = $false   # Windows 側の実行単位が EdgeBox 用 CPU に 1 つも無く、他の登録 (別の VM) も無い
-$script:VmStructOk  = $false   # EdgeBox が EdgeBox 用 CPU に固定済み
+$script:WinStructOk = $false   # Windows 側の実行単位が Edge Box 用 CPU に 1 つも無く、他の登録 (別の VM) も無い
+$script:VmStructOk  = $false   # Edge Box が Edge Box 用 CPU に固定済み
 $script:OtherVpCount = 0
 $script:Mem    = @{ TotalGB = 0.0; WinGB = 0.0; VmGB = 0.0; FreeGB = 0.0; VmAssignedGB = 0.0; VmState = "?"
                     WinCommitPct = 0.0; WinPagesPerSec = 0.0                    # Windows のメモリ負荷 (コミット率・ページング)
-                    VmReported = $false; VmVisibleGB = 0.0; VmAvailGB = 0.0    # EdgeBox 内部 (統合サービスの報告)
+                    VmReported = $false; VmVisibleGB = 0.0; VmAvailGB = 0.0    # Edge Box 内部 (統合サービスの報告)
                     VmDemandGB = 0.0; VmPressure = 0.0; VmMemStatus = ""; VmDynamic = $false }
 $dmCls = Get-CimClass -ClassName "Win32_PerfFormattedData_*HyperVDynamicMemoryVM" -ErrorAction SilentlyContinue | Select-Object -First 1
 $script:dmName = $null
@@ -331,11 +331,11 @@ $script:SelfCpu = $null; $script:SelfAt = $null; $script:SelfPct = -1.0
 function Sample {
     $script:TickNo++
     if ($script:lpName) {
-        # LP と EdgeBox の VP は続けて読む (2 つの帳簿の読み取り時刻のずれを最小にする)。ルート側はその後
+        # LP と Edge Box の VP は続けて読む (2 つの帳簿の読み取り時刻のずれを最小にする)。ルート側はその後
         $lp = Get-CounterMap $script:lpName
         $vp = Get-VpCounterMap $script:vpName $VMName
         $rv = Get-CounterMap $script:rvName
-        # EdgeBox の再起動などで VP の帳簿がリセット (減少・入れ替わり) した区間は、突き合わせに使わない
+        # Edge Box の再起動などで VP の帳簿がリセット (減少・入れ替わり) した区間は、突き合わせに使わない
         $reset = $false
         if ($script:prevVp) {
             $pk = (@($script:prevVp.Keys) | Sort-Object) -join ","; $ck = (@($vp.Keys) | Sort-Object) -join ","
@@ -357,10 +357,10 @@ function Sample {
             # --- 分離の判定は「合計」で行う ---
             # LP ごとの「guest − 同じ番号のルート VP」は、ルート VP が LP と 1:1 で固定されていても正確にならない。
             # LP の帳簿とルート VP の帳簿は別々に読むため読み取り時刻がずれ、毎秒の差を 0 で切ると正の偏りが残り、
-            # 見かけ上の「EdgeBox 実行」が出るため。そこで、EdgeBox の VP の合計実行時間と EdgeBox 用 LP の guest 合計を
-            # 突き合わせる: EdgeBox 用 LP には (minroot で) Windows は載れないので、
-            #   EdgeBox が EdgeBox 用コアの外で動いた量 = EdgeBox VP 合計 − EdgeBox 用 LP の guest 合計
-            #   Windows が EdgeBox 用コアで動いた量     = EdgeBox 用 LP の guest 合計 − EdgeBox VP 合計
+            # 見かけ上の「Edge Box 実行」が出るため。そこで、Edge Box の VP の合計実行時間と Edge Box 用 LP の guest 合計を
+            # 突き合わせる: Edge Box 用 LP には (minroot で) Windows は載れないので、
+            #   Edge Box が Edge Box 用コアの外で動いた量 = Edge Box VP 合計 − Edge Box 用 LP の guest 合計
+            #   Windows が Edge Box 用コアで動いた量     = Edge Box 用 LP の guest 合計 − Edge Box VP 合計
             $vmTot = 0.0; $rootTot = 0.0; $vpOk = $false
             if ($script:prevVp -and $vp.Count -gt 0) {
                 foreach ($k in @($vp.Keys)) {
@@ -373,15 +373,15 @@ function Sample {
             $script:VmTotal = $vmTot; $script:RootTotal = $rootTot; $script:VpOk = $vpOk
             $hostLps = @($script:Plan.Host); $guestLps = @($script:Plan.Guest)
             if ($hostLps.Count -gt 0 -and $guestLps.Count -gt 0) {
-                # 構造上の確認: Windows 側の実行単位は Windows 用 CPU の分しか無いか / 他の登録 (別の VM) は無いか / EdgeBox は固定済みか
+                # 構造上の確認: Windows 側の実行単位は Windows 用 CPU の分しか無いか / 他の登録 (別の VM) は無いか / Edge Box は固定済みか
                 $rootOnGuest = 0; foreach ($i in @($rv.Keys)) { if ($guestLps -contains [int]$i) { $rootOnGuest++ } }
                 $script:WinStructOk = ($rv.Count -gt 0 -and $rootOnGuest -eq 0 -and $script:OtherVpCount -eq 0)
                 $script:VmStructOk  = (Test-FullBound)
                 $gOnGuest = 0.0; foreach ($l in $guestLps) { if ($new.ContainsKey([int]$l)) { $gOnGuest += [double]$new[[int]$l].G } }
                 $gOnHost  = 0.0; foreach ($l in $hostLps)  { if ($new.ContainsKey([int]$l)) { $gOnHost  += [double]$new[[int]$l].G } }
                 if ($vpOk) {
-                    $leakVmTot  = $vmTot - $gOnGuest      # EdgeBox が EdgeBox 用コアの外で動いた量 (LP% の合計。符号付き)
-                    $leakWinTot = $gOnGuest - $vmTot      # Windows (など EdgeBox 以外) が EdgeBox 用コアで動いた量 (符号付き)
+                    $leakVmTot  = $vmTot - $gOnGuest      # Edge Box が Edge Box 用コアの外で動いた量 (LP% の合計。符号付き)
+                    $leakWinTot = $gOnGuest - $vmTot      # Windows (など Edge Box 以外) が Edge Box 用コアで動いた量 (符号付き)
                 } else {
                     # VP カウンターが無い環境は従来どおり LP ごとの差し引きを合計する
                     $leakVmTot = 0.0;  foreach ($l in $hostLps)  { if ($new.ContainsKey([int]$l)) { $leakVmTot  += [double]$new[[int]$l].Vm } }
@@ -427,7 +427,7 @@ function Sample {
         $script:prevRv = $rv
         $script:prevVp = $vp
     }
-    # メモリ: PC 全体 = Windows 使用中 + EdgeBox 使用中 (vmmem の実メモリ) + 空き
+    # メモリ: PC 全体 = Windows 使用中 + Edge Box 使用中 (vmmem の実メモリ) + 空き
     try {
         $os = Get-CimInstance Win32_OperatingSystem
         $totGB  = [double]$os.TotalVisibleMemorySize / 1MB      # KB → GB
@@ -448,7 +448,7 @@ function Sample {
             $script:Mem.WinPagesPerSec = [double]$pm.PagesPersec
         } catch { }
     } catch { }
-    # EdgeBox の状態と割り当て (重いので 3 回に 1 回)
+    # Edge Box の状態と割り当て (重いので 3 回に 1 回)
     if (($script:TickNo % 3) -eq 1) {
         try {
             $vm = Get-VM -Name $VMName -ErrorAction Stop
@@ -456,8 +456,8 @@ function Sample {
             $asg = [double]$vm.MemoryAssigned / 1GB
             if ($asg -le 0) { try { $asg = [double](Get-VMMemory -VMName $VMName -ErrorAction Stop).Startup / 1GB } catch { } }
             $script:Mem.VmAssignedGB = $asg
-            # EdgeBox 内部のメモリ: EdgeBox が Hyper-V の統合サービス (動的メモリの報告) で知らせてくる値。
-            # 報告が無い EdgeBox (統合サービスの無い OS / 固定メモリ) では外からは見えないので、その旨を出す
+            # Edge Box 内部のメモリ: Edge Box が Hyper-V の統合サービス (動的メモリの報告) で知らせてくる値。
+            # 報告が無い Edge Box (統合サービスの無い OS / 固定メモリ) では外からは見えないので、その旨を出す
             $script:Mem.VmDynamic   = [bool]$vm.DynamicMemoryEnabled
             $script:Mem.VmDemandGB  = [double]$vm.MemoryDemand / 1GB
             $script:Mem.VmMemStatus = [string]$vm.MemoryStatus
@@ -543,8 +543,8 @@ function Get-LpList {
 
 # 論理 CPU を番号順に格子で描く: 上に「CPU 番号」と種類 (P0/E3)、縦棒、下に使用率 (%)
 # (以前はコアごとに P/E の行に分けていたため、番号順に追いにくく、細い棒では数字も出なかった)
-# $only = 表示する論理 CPU 番号の一覧 ($null = 全部)。$side = "host" (Windows 用) / "guest" (EdgeBox 用) / ""
-# Windows 用の区画で EdgeBox が動いた、または EdgeBox 用の区画で Windows が動いた論理 CPU は、使用率を赤で出す
+# $only = 表示する論理 CPU 番号の一覧 ($null = 全部)。$side = "host" (Windows 用) / "guest" (Edge Box 用) / ""
+# Windows 用の区画で Edge Box が動いた、または Edge Box 用の区画で Windows が動いた論理 CPU は、使用率を赤で出す
 function Draw-LpGrid($g, [int]$x, [int]$y, [int]$w, [int]$h, [string]$title, $only, [string]$side) {
     $lps = @(Get-LpList)
     if ($only) { $lps = @($lps | Where-Object { $only -contains $_.Lp }) }
@@ -571,7 +571,7 @@ function Draw-LpGrid($g, [int]$x, [int]$y, [int]$w, [int]$h, [string]$title, $on
         $g.DrawString(("CPU {0}" -f $e.Lp), $FontTitle, $BrText, (PointF ($sx + 2) $sy))
         $brKind = if ($e.Kind -eq "P") { $BrP } elseif ($e.Kind -eq "E") { $BrE } else { $BrGray }
         $g.DrawString($e.Core, $FontSmall, $brKind, (PointF ($sx + 3) ($sy + 16)))
-        # 縦棒 (枠の色 = 割り当ての計画: 青 = Windows 用 / 緑 = EdgeBox 用)
+        # 縦棒 (枠の色 = 割り当ての計画: 青 = Windows 用 / 緑 = Edge Box 用)
         $barTop = $sy + 30
         $barH = $rowH - 30 - 20
         if ($barH -lt 12) { $barH = 12 }
@@ -602,25 +602,25 @@ function Draw-Memory($g, [int]$x, [int]$y, [int]$w, [int]$h) {
     $barY = $y + 22; $barH = 18
     $g.FillRectangle($BrFree, (Rect $x $barY $w $barH))
     if ($tot -gt 0) {
-        # EdgeBox の取り分は、渡している量 (割り当て) で数える。
+        # Edge Box の取り分は、渡している量 (割り当て) で数える。
         # vmmem として見えない構成があるため、見えない場合も割り当て量で色分けする
         $vmGB = [double]$m.VmGB
         if ($vmGB -le 0.1 -and $m.VmState -eq "Running") { $vmGB = [double]$m.VmAssignedGB }
-        # 使用中の合計から EdgeBox の分を引いたものが Windows の分
+        # 使用中の合計から Edge Box の分を引いたものが Windows の分
         $winGB = [Math]::Max(0.0, ($tot - $m.FreeGB) - $vmGB)
         $wWin = [int]($w * $winGB / $tot)
         $wVm  = [int]($w * $vmGB / $tot)
         $g.FillRectangle($BrWin, (Rect $x $barY $wWin $barH))
         $g.FillRectangle($BrVm,  (Rect ($x + $wWin) $barY $wVm $barH))
         $g.DrawRectangle($PenNone, (Rect $x $barY $w $barH))
-        # 1 行目: PC 全体の内訳 (Windows / EdgeBox / 空き) とメモリの逼迫具合
+        # 1 行目: PC 全体の内訳 (Windows / Edge Box / 空き) とメモリの逼迫具合
         $winPct = if ($tot -gt 0) { 100.0 * ($tot - $m.FreeGB) / $tot } else { 0.0 }
         $l1 = "PC 全体 {0:N1} GB    Windows {1:N1} GB    {2} {3:N1} GB    空き {4:N1} GB (物理 {5:N0}% 使用)    コミット率 {6:N0}%    ページング {7:N0} /秒" -f `
             $tot, $winGB, $VMName, $vmGB, $m.FreeGB, $winPct, $m.WinCommitPct, $m.WinPagesPerSec
         $brL1 = $BrText
         if ($m.WinCommitPct -ge 90 -or $m.WinPagesPerSec -ge 1000) { $brL1 = $BrBad }
         $g.DrawString($l1, $FontBody, $brL1, (PointF $x ($barY + $barH + 4)))
-        # 2 行目: EdgeBox 内部 (統合サービスの報告があるときだけ表示する。報告が無ければ割り当てだけ)
+        # 2 行目: Edge Box 内部 (統合サービスの報告があるときだけ表示する。報告が無ければ割り当てだけ)
         if ($m.VmReported) {
             $usedIn = [Math]::Max(0.0, $m.VmVisibleGB - $m.VmAvailGB)
             $inPct = if ($m.VmVisibleGB -gt 0) { 100.0 * $usedIn / $m.VmVisibleGB } else { 0.0 }
@@ -679,14 +679,14 @@ function Draw-All($g, [int]$W, [int]$H) {
     }
     $g.DrawString($l3, $FontBody, $BrText, (PointF $pad 40))
 
-    # --- 分離の状態: 「EdgeBox が Windows 用コアで動いた割合」と「Windows が EdgeBox 用コアで動いた割合」 ---
+    # --- 分離の状態: 「Edge Box が Windows 用コアで動いた割合」と「Windows が Edge Box 用コアで動いた割合」 ---
     $memH = 90
     if ($hostLps.Count -gt 0 -and $guestLps.Count -gt 0) {
-        $leakVm  = $script:LeakVm    # EdgeBox が EdgeBox 用コアの外で動いた量 (VP 合計と LP 合計の突き合わせ。固定が効いていれば 0)
-        $leakWin = $script:LeakWin   # EdgeBox 用コアで動いた EdgeBox 以外 (minroot が効いていれば 0)
+        $leakVm  = $script:LeakVm    # Edge Box が Edge Box 用コアの外で動いた量 (VP 合計と LP 合計の突き合わせ。固定が効いていれば 0)
+        $leakWin = $script:LeakWin   # Edge Box 用コアで動いた Edge Box 以外 (minroot が効いていれば 0)
         $mixed = ($leakVm -gt 0.5 -or $leakWin -gt 0.5)
         $how = if ($script:VpOk) { "直近 {0} 秒" -f [Math]::Min($script:LeakWindow, [Math]::Max(1, $script:LeakVmHist.Count)) } else { "概算" }
-        $l4 = "分離の状態: {0}   EdgeBox が Windows 用コアで動いた割合 {1:N1}%  /  Windows が EdgeBox 用コアで動いた割合 {2:N1}%   ({3})" -f `
+        $l4 = "分離の状態: {0}   Edge Box が Windows 用コアで動いた割合 {1:N1}%  /  Windows が Edge Box 用コアで動いた割合 {2:N1}%   ({3})" -f `
               $(if ($mixed) { "△ 混ざっています" } else { "○ 混ざっていません" }), $leakVm, $leakWin, $how
         $g.DrawString($l4, $FontTitle, $(if ($mixed) { $BrBad } else { $BrGood }), (PointF $pad 58))
         $cs = Get-ContainState
@@ -731,7 +731,7 @@ if (-not ("Win.AppShell" -as [type])) {
 public static extern int SetCurrentProcessExplicitAppUserModelID(string AppID);
 '@ -ErrorAction SilentlyContinue
 }
-try { [Win.AppShell]::SetCurrentProcessExplicitAppUserModelID("EdgeBox.Monitor") | Out-Null } catch { }
+try { [Win.AppShell]::SetCurrentProcessExplicitAppUserModelID("Edge Box.Monitor") | Out-Null } catch { }
 
 function Get-AppIcon([string]$Style) {
     try {

@@ -1,13 +1,13 @@
 ﻿<#
 .SYNOPSIS
-    EdgeBox をワンクリックで再起動 / 左画面に表示します。
+    Edge Box をワンクリックで再起動 / 左画面に表示します。
 
 .DESCRIPTION
-    『EdgeBox 再起動』 : 正常シャットダウン → 起動 → 電源 ON のときと同じ画面表示
+    『Edge Box 再起動』 : 正常シャットダウン → 起動 → 電源 ON のときと同じ画面表示
                         (設定どおり: 左 = コンソール / 右 = 管理画面)。
                         強制電源断は行いません (収集中のデータやファイルシステムを壊しうるため)。
-    『EdgeBox 画面』   : 左画面にコンソールを最大化 (設定が全画面なら全画面) で表示します。
-                        自動では閉じません。EdgeBox が止まっていれば起動してから表示します。
+    『Edge Box 画面』   : 左画面にコンソールを最大化 (設定が全画面なら全画面) で表示します。
+                        自動では閉じません。Edge Box が止まっていれば起動してから表示します。
 
 .EXAMPLE
     .\10-restart-edgebox.ps1            # 再起動 (確認あり)
@@ -27,8 +27,8 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-# -VMName を明示していない場合、既定名の EdgeBox が無ければ、EdgeBox のディスク
-# (物理ディスクのパススルー) を持つ EdgeBox を探して使う。00-field-launcher.ps1 と
+# -VMName を明示していない場合、既定名の Edge Box が無ければ、Edge Box のディスク
+# (物理ディスクのパススルー) を持つ Edge Box を探して使う。00-field-launcher.ps1 と
 # 同じ考え方で、登録名が「EdgeBox」でなくても (旧名称のままでも) そのまま動くようにする
 if (-not $PSBoundParameters.ContainsKey("VMName") -and
     -not (Get-VM -Name $VMName -ErrorAction SilentlyContinue)) {
@@ -43,8 +43,8 @@ if (-not $PSBoundParameters.ContainsKey("VMName") -and
 
 $Script03 = Join-Path $PSScriptRoot "03-field-display-kiosk.ps1"
 
-# CPU コア分割ツール (別フォルダ windows-cpu-partition) が full モードなら、EdgeBox を起動する前に
-# 起動タスクと同じ処理を呼び、CPU グループに固定してから起動する (固定は EdgeBox 停止中に確実に効く)。
+# CPU コア分割ツール (別フォルダ windows-cpu-partition) が full モードなら、Edge Box を起動する前に
+# 起動タスクと同じ処理を呼び、CPU グループに固定してから起動する (固定は Edge Box 停止中に確実に効く)。
 # ツールが無ければ何もしない (互いに独立。あるときだけ順番を譲る)。戻り値: 呼んだか
 function Invoke-CpuPartitionBoot {
     try {
@@ -84,9 +84,9 @@ if ($Setup) {
     $shell = New-Object -ComObject WScript.Shell
     $defs = @(
         @{ Task = "EdgeBox-Restart"; Args = "";          Vbs = "launch-restart.vbs"
-           Lnk = "EdgeBox 再起動"; Desc = "EdgeBox を正常に再起動して画面を表示 (強制電源断はしない)"; Icon = "shell32.dll,27" },
+           Lnk = "Edge Box 再起動"; Desc = "Edge Box を正常に再起動して画面を表示 (強制電源断はしない)"; Icon = "shell32.dll,27" },
         @{ Task = "EdgeBox-Console"; Args = "-ShowOnly"; Vbs = "launch-console-view.vbs"
-           Lnk = "EdgeBox 画面";   Desc = "左画面に EdgeBox のコンソールを最大化で表示 (自動では閉じない)"; Icon = "shell32.dll,15" }
+           Lnk = "Edge Box 画面";   Desc = "左画面に Edge Box のコンソールを最大化で表示 (自動では閉じない)"; Icon = "shell32.dll,15" }
     )
     foreach ($d in $defs) {
         # UAC 確認なしで実行できるよう、管理者権限付きタスク + wscript 経由のショートカット (黒い窓を出さない)
@@ -94,7 +94,7 @@ if ($Setup) {
         $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument $arg
         # 時間制限なし + 多重起動可。表示処理は見張り役などの常駐プロセスを残すため、タスクは「実行中」のまま
         # になる。時間制限があると 1 時間後にタスクごと (常駐プロセスも) 止められ、多重起動不可だと
-        # 「実行中」の間はアイコンを押しても何も起きない (以前の設定で『EdgeBox 再起動』が効かなくなっていた原因)
+        # 「実行中」の間はアイコンを押しても何も起きない (以前の設定で『Edge Box 再起動』が効かなくなっていた原因)
         $ts = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -MultipleInstances Parallel -ExecutionTimeLimit (New-TimeSpan -Seconds 0)
         Register-ScheduledTask -TaskName $d.Task -Action $action -Settings $ts -RunLevel Highest -Force | Out-Null
         $taskName = $d.Task
@@ -102,6 +102,11 @@ if ($Setup) {
         Set-Content -Path $vbs -Encoding Default -Value @(
             "' " + $d.Lnk + " — 起動用ラッパー (黒い窓を出さない)",
             "CreateObject(""WScript.Shell"").Run ""schtasks.exe /run /tn """"$taskName"""""", 0, False")
+        # 旧名 (EdgeBox ...) のアイコンは消して、新しい名前で作り直す
+        $oldLnk = $d.Lnk -replace '^Edge Box', 'EdgeBox'
+        foreach ($dir in @([Environment]::GetFolderPath("Desktop"), [Environment]::GetFolderPath("Programs"))) {
+            Remove-Item (Join-Path $dir ($oldLnk + ".lnk")) -Force -ErrorAction SilentlyContinue
+        }
         foreach ($lnkPath in @((Join-Path ([Environment]::GetFolderPath("Desktop"))  ($d.Lnk + ".lnk")),
                                (Join-Path ([Environment]::GetFolderPath("Programs")) ($d.Lnk + ".lnk")))) {
             $lnk = $shell.CreateShortcut($lnkPath)
@@ -120,14 +125,14 @@ if ($Setup) {
 # ============================================================ 実行
 
 if (-not (Test-Admin)) {
-    Show-Msg "管理者権限が必要です。デスクトップの『EdgeBox 再起動』『EdgeBox 画面』アイコンから実行してください (自動で管理者になります)。" "EdgeBox" "Warning"
+    Show-Msg "管理者権限が必要です。デスクトップの『Edge Box 再起動』『Edge Box 画面』アイコンから実行してください (自動で管理者になります)。" "EdgeBox" "Warning"
     exit 1
 }
 $vm = Get-VM -Name $VMName -ErrorAction SilentlyContinue
 if (-not $vm) { Show-Msg "登録 '$VMName' が見つかりません。" "EdgeBox" "Warning"; exit 1 }
 if (-not (Test-Path $Script03)) { Show-Msg "03-field-display-kiosk.ps1 が見つかりません。update.cmd で更新してください。" "EdgeBox" "Warning"; exit 1 }
 
-# --- 『EdgeBox 画面』: 左画面にコンソールを表示するだけ ---
+# --- 『Edge Box 画面』: 左画面にコンソールを表示するだけ ---
 if ($ShowOnly) {
     if ([string]$vm.State -ne "Running") {
         try { & $Script03 -VMName $VMName -ApplyResolution | Out-Null } catch { }   # 『設定』の解像度を停止中に反映
@@ -135,7 +140,7 @@ if ($ShowOnly) {
         if (Test-Path $s11) { try { & $s11 -VMName $VMName -ApplyPending | Out-Null } catch { } }
         Invoke-CpuPartitionBoot | Out-Null   # full モードなら CPU グループに固定してから起動
         try { Start-VM -Name $VMName -ErrorAction Stop } catch {
-            Show-Msg "EdgeBox を起動できませんでした:`n$($_.Exception.Message)" "EdgeBox 画面" "Warning"; exit 1
+            Show-Msg "Edge Box を起動できませんでした:`n$($_.Exception.Message)" "Edge Box 画面" "Warning"; exit 1
         }
     }
     # 設定の全画面指定に従って左画面へ。-KeepConsole で自動クローズはしない
@@ -143,22 +148,22 @@ if ($ShowOnly) {
     exit 0
 }
 
-# --- 『EdgeBox 再起動』 ---
+# --- 『Edge Box 再起動』 ---
 if (-not $NoConfirm) {
-    $ok = Confirm-Msg ("EdgeBox ('$VMName') を再起動します。`n`n" +
-        "収集が数分止まります。`n正常にシャットダウンできない場合は、何もせずに中止します。`n`nよろしいですか?") "EdgeBox 再起動"
+    $ok = Confirm-Msg ("Edge Box ('$VMName') を再起動します。`n`n" +
+        "収集が数分止まります。`n正常にシャットダウンできない場合は、何もせずに中止します。`n`nよろしいですか?") "Edge Box 再起動"
     if (-not $ok) { exit 0 }
 }
 if ([string]$vm.State -ne "Off") {
     try { Stop-VM -Name $VMName -ErrorAction Stop } catch {
-        Show-Msg ("EdgeBox を停止できませんでした:`n$($_.Exception.Message)`n`n" +
-            "EdgeBox の管理画面からシャットダウンしてから、もう一度実行してください。`n(強制電源断は行いません)") "EdgeBox 再起動" "Warning"
+        Show-Msg ("Edge Box を停止できませんでした:`n$($_.Exception.Message)`n`n" +
+            "Edge Box の管理画面からシャットダウンしてから、もう一度実行してください。`n(強制電源断は行いません)") "Edge Box 再起動" "Warning"
         exit 1
     }
     $deadline = (Get-Date).AddSeconds(180)
     while ((Get-VM -Name $VMName).State -ne "Off") {
         if ((Get-Date) -gt $deadline) {
-            Show-Msg "EdgeBox が 180 秒以内に停止しませんでした。中止します (何も変更していません)。" "EdgeBox 再起動" "Warning"
+            Show-Msg "Edge Box が 180 秒以内に停止しませんでした。中止します (何も変更していません)。" "Edge Box 再起動" "Warning"
             exit 1
         }
         Start-Sleep -Seconds 3
@@ -169,7 +174,7 @@ $s11 = Join-Path $PSScriptRoot "11-io-passthrough.ps1"   # 予約された設定
 if (Test-Path $s11) { try { & $s11 -VMName $VMName -ApplyPending | Out-Null } catch { } }
 Invoke-CpuPartitionBoot | Out-Null   # full モードなら、停止中のいまのうちに CPU グループへ固定してから起動
 try { Start-VM -Name $VMName -ErrorAction Stop } catch {
-    Show-Msg "EdgeBox を起動できませんでした:`n$($_.Exception.Message)`n`n.\02-start-field-vm.ps1 -Repair で原因を確認できます。" "EdgeBox 再起動" "Warning"
+    Show-Msg "Edge Box を起動できませんでした:`n$($_.Exception.Message)`n`n.\02-start-field-vm.ps1 -Repair で原因を確認できます。" "Edge Box 再起動" "Warning"
     exit 1
 }
 # 起動後の画面は、電源 ON のときと同じ流れで出す (設定どおり: 左=コンソール / 右=管理画面)

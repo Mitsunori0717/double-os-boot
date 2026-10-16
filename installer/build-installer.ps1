@@ -68,7 +68,7 @@ try {
 
     # ---------- 3. IExpress の指示書 ----------
     Write-Host "[3/4] EXE を作っています (少し時間がかかります)..." -ForegroundColor Cyan
-    $sed = Join-Path $stage "EdgeBox.sed"
+    $sed = Join-Path $stage "Edge Box.sed"
     $lines = @(
         "[Version]", "Class=IEXPRESS", "SEDVersion=3",
         "[Options]",
@@ -95,7 +95,7 @@ try {
         "DisplayLicense=",
         "FinishMessage=",
         "TargetName=$OutFile",
-        "FriendlyName=EdgeBox セットアップ",
+        "FriendlyName=Edge Box セットアップ",
         "AppLaunched=cmd.exe /c install.cmd",
         "PostInstallCmd=<None>",
         'FILE0="payload.zip"',

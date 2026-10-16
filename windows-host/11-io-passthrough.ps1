@@ -1,19 +1,19 @@
 ﻿<#
 .SYNOPSIS
-    EdgeBox の入出力を素通しに近づけます: メモリの固定 + LAN の直結 (SR-IOV)。
+    Edge Box の入出力を素通しに近づけます: メモリの固定 + LAN の直結 (SR-IOV)。
 
 .DESCRIPTION
     -Check (既定) : 何も変えずに、現状と「あと何が必要か」を表示します。
-    -Apply        : メモリを固定にし、この PC で SR-IOV が使えるなら EdgeBox の LAN に適用します。
-                    変更には EdgeBox の停止が必要なため、正常シャットダウン → 適用 → 起動 の順に進みます
+    -Apply        : メモリを固定にし、この PC で SR-IOV が使えるなら Edge Box の LAN に適用します。
+                    変更には Edge Box の停止が必要なため、正常シャットダウン → 適用 → 起動 の順に進みます
                     (強制電源断は行いません)。
-    -Apply -AtNextStop : いま止めずに「予約」します。次に EdgeBox が止まったとき (『全部シャットダウン』・
-                    『EdgeBox 再起動』・電源 ON 直後の起動処理) に、停止中のすきまでメモリを固定にします。
+    -Apply -AtNextStop : いま止めずに「予約」します。次に Edge Box が止まったとき (『全部シャットダウン』・
+                    『Edge Box 再起動』・電源 ON 直後の起動処理) に、停止中のすきまでメモリを固定にします。
                     収集を余分に止めません。予約は io-pending.json に残ります (SR-IOV は予約の対象外)。
 
-    SR-IOV とは: LAN アダプターがハードウェアで持つ「分身」を EdgeBox に直接渡す仕組みです。
-    有効になると、EdgeBox の通信が Windows 側の CPU を経由しなくなります。
-    EdgeBox 側に対応ドライバーが無い場合は従来の経路のまま動き続けます (悪化はしません)。
+    SR-IOV とは: LAN アダプターがハードウェアで持つ「分身」を Edge Box に直接渡す仕組みです。
+    有効になると、Edge Box の通信が Windows 側の CPU を経由しなくなります。
+    Edge Box 側に対応ドライバーが無い場合は従来の経路のまま動き続けます (悪化はしません)。
 
 .EXAMPLE
     .\11-io-passthrough.ps1            # 現状の確認だけ (何も変えない)
@@ -21,7 +21,7 @@
     .\11-io-passthrough.ps1 -Apply -AtNextStop   # 今は止めず、次に止まったときにメモリを固定 (予約)
     .\11-io-passthrough.ps1 -Apply -MemoryGB 8   # 固定にするメモリ量を指定
     .\11-io-passthrough.ps1 -Apply -NetAdapterName "イーサネット 6"
-                                       # SR-IOV 対応の LAN カードを足したあと、EdgeBox のスイッチを
+                                       # SR-IOV 対応の LAN カードを足したあと、Edge Box のスイッチを
                                        # そのポートに付け替えて SR-IOV を有効にする (ケーブルも差し替えること)
 
 .NOTES
@@ -32,11 +32,11 @@ param(
     [string]$VMName = "EdgeBox",
     [switch]$Apply,
     [int]$MemoryGB = 0,       # 0 = 今の起動時メモリ量のまま固定にする
-    [string]$NetAdapterName = "",   # EdgeBox のスイッチをこの物理アダプターに付け替える (Get-NetAdapter の Name)
+    [string]$NetAdapterName = "",   # Edge Box のスイッチをこの物理アダプターに付け替える (Get-NetAdapter の Name)
     [switch]$NoConfirm,
-    [switch]$NoRestart,       # 適用後に EdgeBox を起動しない
-    [switch]$AtNextStop,      # 今は止めず、次に EdgeBox が止まったときに反映する (予約)
-    [switch]$ApplyPending,    # (内部用) 予約を反映する。EdgeBox が停止中のときだけ何かをする
+    [switch]$NoRestart,       # 適用後に Edge Box を起動しない
+    [switch]$AtNextStop,      # 今は止めず、次に Edge Box が止まったときに反映する (予約)
+    [switch]$ApplyPending,    # (内部用) 予約を反映する。Edge Box が停止中のときだけ何かをする
     [switch]$Quiet            # (内部用) -ApplyPending の結果を 1 行の文字列で返す
 )
 
@@ -48,7 +48,7 @@ function Test-Admin {
 }
 if (-not (Test-Admin)) { Write-Error "管理者権限で実行してください (管理者の PowerShell)。"; exit 1 }
 
-# 登録名が EdgeBox でなくても、EdgeBox のディスク (物理ディスク直結) を持つ登録を探す
+# 登録名が EdgeBox でなくても、Edge Box のディスク (物理ディスク直結) を持つ登録を探す
 if (-not $PSBoundParameters.ContainsKey("VMName") -and
     -not (Get-VM -Name $VMName -ErrorAction SilentlyContinue)) {
     $foundVms = @()
@@ -64,7 +64,7 @@ if (-not $vm) { Write-Error "登録 '$VMName' が見つかりません。"; exit
 $PendingFile = Join-Path $PSScriptRoot "io-pending.json"
 
 # ------------------------------------------------------------ -ApplyPending: 予約の反映 (停止中のときだけ)
-# 『全部シャットダウン』『EdgeBox 再起動』、電源 ON 直後の起動処理から呼ばれる。
+# 『全部シャットダウン』『Edge Box 再起動』、電源 ON 直後の起動処理から呼ばれる。
 if ($ApplyPending) {
     if (-not (Test-Path $PendingFile)) { exit 0 }
     if ([string]$vm.State -ne "Off") { exit 0 }    # 停止中にしか変えられない。次の機会まで持ち越す
@@ -137,7 +137,7 @@ if ($NetAdapterName) {
     if (-not $pfNew) {
         Write-Error ("物理アダプター '{0}' が見つかりません。Get-NetAdapter -Physical の Name を指定してください。" -f $NetAdapterName); exit 1
     }
-    if (-not $sw) { Write-Error "EdgeBox の LAN がスイッチに接続されていないため、付け替えできません。"; exit 1 }
+    if (-not $sw) { Write-Error "Edge Box の LAN がスイッチに接続されていないため、付け替えできません。"; exit 1 }
     $switchMove = ($pfNew.InterfaceDescription -ne $pfDesc)
     $pf = $pfNew; $pfDesc = [string]$pfNew.InterfaceDescription
 }
@@ -158,14 +158,14 @@ $vfActive   = ($null -ne $vmNic) -and [bool]$vmNic.VFDataPathActive
 # ------------------------------------------------------------ 表示
 
 Line ""
-Line ("==== EdgeBox ('{0}') の入出力: 現状 ====" -f $VMName) "Cyan"
+Line ("==== Edge Box ('{0}') の入出力: 現状 ====" -f $VMName) "Cyan"
 Line ""
 Line "[メモリ]" "White"
 $memText = if ($memFixed) { "固定 {0:N1} GB" -f ($mem.Startup / 1GB) }
            else { "動的 (起動 {0:N1} GB / 最小 {1:N1} GB / 最大 {2:N1} GB)" -f ($mem.Startup / 1GB), ($mem.Minimum / 1GB), ($mem.Maximum / 1GB) }
 Mark $memFixed ("メモリは " + $memText) "-Apply で固定にします (起動時の量で固定。-MemoryGB で変更可)。-Apply -AtNextStop なら次に止まったときに反映"
 if (-not $memFixed -and (Test-Path $PendingFile)) {
-    Line "  予約あり: 次に EdgeBox が止まったとき (全部シャットダウン / EdgeBox 再起動 / 電源 ON) に固定にします" "Cyan"
+    Line "  予約あり: 次に Edge Box が止まったとき (全部シャットダウン / Edge Box 再起動 / 電源 ON) に固定にします" "Cyan"
 }
 
 Line ""
@@ -176,16 +176,16 @@ if (-not $hostIov) {
     foreach ($h in (ConvertTo-BiosHint $hostWhy)) { Line ("      → " + $h) "Yellow" }
 }
 if (-not $vmNic) {
-    Mark $false "EdgeBox に LAN アダプターがありません" "01-create-field-vm.ps1 / 00-field-launcher.ps1 で作り直してください"
+    Mark $false "Edge Box に LAN アダプターがありません" "01-create-field-vm.ps1 / 00-field-launcher.ps1 で作り直してください"
 } elseif (-not $sw) {
-    Mark $false ("EdgeBox の LAN が接続されていません (スイッチ '{0}')" -f $vmNic.SwitchName)
+    Mark $false ("Edge Box の LAN が接続されていません (スイッチ '{0}')" -f $vmNic.SwitchName)
 } else {
-    Line ("  EdgeBox の LAN: スイッチ '{0}' ← 物理アダプター '{1}'" -f $sw.Name, $(if ($switchMove) { [string]$sw.NetAdapterInterfaceDescription } elseif ($pf) { $pf.Name } else { $pfDesc }))
+    Line ("  Edge Box の LAN: スイッチ '{0}' ← 物理アダプター '{1}'" -f $sw.Name, $(if ($switchMove) { [string]$sw.NetAdapterInterfaceDescription } elseif ($pf) { $pf.Name } else { $pfDesc }))
     if ($switchMove) { Line ("  付け替え先: 物理アダプター '{0}' ({1})" -f $pf.Name, $pf.InterfaceDescription) "White" }
     if ($pf) {
         if (-not $pfSriov) {
             Mark $false ("物理アダプター '{0}' は SR-IOV 非対応 (ドライバーが対応していません)" -f $pf.Name) `
-                "SR-IOV 対応の LAN カード (Intel I350 / X550 / I210 など) を足し、そのポートを EdgeBox 用にします"
+                "SR-IOV 対応の LAN カード (Intel I350 / X550 / I210 など) を足し、そのポートを Edge Box 用にします"
         } else {
             Mark $pfOk ("物理アダプター '{0}' の SR-IOV: {1}" -f $pf.Name, $pfSriov.SriovSupport) `
                 "SriovSupport が Supported 以外のときは BIOS の VT-d / SR-IOV、または PCIe スロットの位置が原因です"
@@ -195,9 +195,9 @@ if (-not $vmNic) {
     Mark $swIov ("スイッチ '{0}' の SR-IOV: {1}" -f $sw.Name, $(if ($swIov) { "有効" } else { "無効" })) `
         "スイッチは作り直しが必要です (-Apply が同じ名前・同じ設定で作り直します)"
     if (-not $swIov -and $swWhy.Count -gt 0) { foreach ($r in $swWhy) { Line ("      理由: " + $r) "DarkYellow" } }
-    Mark ($nicWeight -gt 0) ("EdgeBox 側の LAN の SR-IOV 要求 (IovWeight): " + $nicWeight) "-Apply で 100 にします"
-    Mark $vfActive ("EdgeBox が実際に直結で通信中 (VFDataPathActive): " + $(if ($vfActive) { "はい" } else { "いいえ" })) `
-        "上が全部 ○ でもここが × なら、EdgeBox 側に対応ドライバーが無いか、起動直後です (通信は従来経路で継続)"
+    Mark ($nicWeight -gt 0) ("Edge Box 側の LAN の SR-IOV 要求 (IovWeight): " + $nicWeight) "-Apply で 100 にします"
+    Mark $vfActive ("Edge Box が実際に直結で通信中 (VFDataPathActive): " + $(if ($vfActive) { "はい" } else { "いいえ" })) `
+        "上が全部 ○ でもここが × なら、Edge Box 側に対応ドライバーが無いか、起動直後です (通信は従来経路で継続)"
 }
 if ($sriovAll.Count -gt 0) {
     Line ""
@@ -219,10 +219,10 @@ if (-not $Apply) {
         else { Line "  メモリは固定済みです。SR-IOV はこの PC では今のところ使えません (上の → を参照)。" "Yellow" }
     } else {
         Line "  -Apply を付けて実行すると、次を行います:" "White"
-        if ($needMem) { Line "    - メモリを固定にする (EdgeBox を一度停止)" }
+        if ($needMem) { Line "    - メモリを固定にする (Edge Box を一度停止)" }
         if ($needPf)  { Line ("    - 物理アダプター '{0}' の SR-IOV を有効にする" -f $pf.Name) }
-        if ($needSw)  { Line ("    - スイッチ '{0}' を SR-IOV 有効で作り直す{1} (EdgeBox を一度停止)" -f $sw.Name, $(if ($switchMove) { " (物理アダプター '" + $pf.Name + "' に付け替え)" } else { "" })) }
-        if ($needNic) { Line "    - EdgeBox の LAN に SR-IOV を要求する (IovWeight 100)" }
+        if ($needSw)  { Line ("    - スイッチ '{0}' を SR-IOV 有効で作り直す{1} (Edge Box を一度停止)" -f $sw.Name, $(if ($switchMove) { " (物理アダプター '" + $pf.Name + "' に付け替え)" } else { "" })) }
+        if ($needNic) { Line "    - Edge Box の LAN に SR-IOV を要求する (IovWeight 100)" }
         if (-not $canSriov -and $needMem) { Line "  SR-IOV は今のところ使えないため、メモリの固定だけ行います。" "Yellow" }
     }
     Line ""
@@ -241,8 +241,8 @@ if ($AtNextStop) {
         $bytes = if ($MemoryGB -gt 0) { [long]$MemoryGB * 1GB } else { [long]$mem.Startup }
         @{ FixMemory = $true; MemoryBytes = $bytes; Created = (Get-Date).ToString("s") } |
             ConvertTo-Json | Set-Content -Path $PendingFile -Encoding UTF8
-        Line ("予約しました: 次に EdgeBox が止まったときに、メモリを固定 {0:N1} GB にします。" -f ($bytes / 1GB)) "Green"
-        Line "  (『全部シャットダウン』『EdgeBox 再起動』、電源 ON 直後の起動処理のどれでも反映されます)" "DarkGray"
+        Line ("予約しました: 次に Edge Box が止まったときに、メモリを固定 {0:N1} GB にします。" -f ($bytes / 1GB)) "Green"
+        Line "  (『全部シャットダウン』『Edge Box 再起動』、電源 ON 直後の起動処理のどれでも反映されます)" "DarkGray"
     } else {
         Line "メモリは固定済みのため、予約するものはありません。" "Green"
     }
@@ -257,24 +257,24 @@ if (-not $NoConfirm) {
     if ($needMem) { $msg += "  - メモリを固定にする`n" }
     if ($needPf)  { $msg += "  - 物理アダプターの SR-IOV を有効にする (LAN が数秒切れます)`n" }
     if ($needSw)  { $msg += "  - スイッチを SR-IOV 有効で作り直す" + $(if ($switchMove) { " (物理アダプター '" + $pf.Name + "' に付け替え。ケーブルもそのポートへ)" } else { "" }) + " (LAN が数秒切れます)`n" }
-    if ($needNic) { $msg += "  - EdgeBox の LAN に SR-IOV を要求する`n" }
-    if ($needStop) { $msg += "`nEdgeBox を正常シャットダウンしてから適用し、終わったら起動します。収集が数分止まります。" }
+    if ($needNic) { $msg += "  - Edge Box の LAN に SR-IOV を要求する`n" }
+    if ($needStop) { $msg += "`nEdge Box を正常シャットダウンしてから適用し、終わったら起動します。収集が数分止まります。" }
     $msg += "`n続けますか? [y/N] "
     $ans = Read-Host $msg
     if ($ans -notmatch '^[yY]') { Line "中止しました (何も変更していません)。"; exit 0 }
 }
 
-# --- EdgeBox の停止 (必要なときだけ。強制電源断はしない) ---
+# --- Edge Box の停止 (必要なときだけ。強制電源断はしない) ---
 $wasRunning = ([string](Get-VM -Name $VMName).State -ne "Off")
 if ($needStop -and $wasRunning) {
-    Line "EdgeBox にシャットダウン要求を送ります..." "White"
+    Line "Edge Box にシャットダウン要求を送ります..." "White"
     Stop-VM -Name $VMName -ErrorAction Stop
     $deadline = (Get-Date).AddSeconds(180)
     while ((Get-VM -Name $VMName).State -ne "Off") {
-        if ((Get-Date) -gt $deadline) { Write-Error "EdgeBox が 180 秒以内に停止しませんでした。中止します (何も変更していません)。"; exit 1 }
+        if ((Get-Date) -gt $deadline) { Write-Error "Edge Box が 180 秒以内に停止しませんでした。中止します (何も変更していません)。"; exit 1 }
         Start-Sleep -Seconds 3
     }
-    Line "EdgeBox が停止しました。" "Green"
+    Line "Edge Box が停止しました。" "Green"
 }
 
 # --- メモリの固定 ---
@@ -330,10 +330,10 @@ if ($needSw) {
     if (-not $sw2.IovEnabled) { foreach ($r in @($sw2.IovSupportReasons | Where-Object { $_ })) { Line ("      理由: " + $r) "DarkYellow" } }
 }
 
-# --- EdgeBox の LAN に要求 ---
+# --- Edge Box の LAN に要求 ---
 if ($canSriov) {
     Set-VMNetworkAdapter -VMName $VMName -IovWeight 100 -IovQueuePairsRequested 1 -ErrorAction Stop
-    Line "EdgeBox の LAN に SR-IOV を要求しました (IovWeight 100)。" "Green"
+    Line "Edge Box の LAN に SR-IOV を要求しました (IovWeight 100)。" "Green"
 }
 
 # --- 起動 (停止したときだけ。CPU 完全分離の起動処理と同じ順番で) ---
@@ -350,22 +350,22 @@ if ($needStop -and $wasRunning -and -not $NoRestart) {
             }
         }
     } catch { }
-    Line "EdgeBox を起動します..." "White"
+    Line "Edge Box を起動します..." "White"
     Start-VM -Name $VMName -ErrorAction Stop
     $s03 = Join-Path $PSScriptRoot "03-field-display-kiosk.ps1"
     if (Test-Path $s03) {
         Start-Process powershell.exe -WindowStyle Hidden -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$s03`" -VMName `"$VMName`" -NoSplash"
     }
     if ($canSriov) {
-        Line "EdgeBox が直結で通信を始めるかを最大 120 秒待ちます (EdgeBox 側のドライバー次第)..." "White"
+        Line "Edge Box が直結で通信を始めるかを最大 120 秒待ちます (Edge Box 側のドライバー次第)..." "White"
         $deadline = (Get-Date).AddSeconds(120); $active = $false
         while ((Get-Date) -lt $deadline) {
             $n = @(Get-VMNetworkAdapter -VMName $VMName)[0]
             if ($n -and $n.VFDataPathActive) { $active = $true; break }
             Start-Sleep -Seconds 5
         }
-        Mark $active ("EdgeBox が直結で通信中 (VFDataPathActive): " + $(if ($active) { "はい" } else { "いいえ" })) `
-            "EdgeBox 側に対応ドライバーが無い可能性があります。通信は従来経路で続きます。しばらく後にもう一度 (引数なしで) 確認してください"
+        Mark $active ("Edge Box が直結で通信中 (VFDataPathActive): " + $(if ($active) { "はい" } else { "いいえ" })) `
+            "Edge Box 側に対応ドライバーが無い可能性があります。通信は従来経路で続きます。しばらく後にもう一度 (引数なしで) 確認してください"
     }
 }
 Line ""

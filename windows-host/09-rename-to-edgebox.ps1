@@ -8,11 +8,11 @@
          実行中でも変更できます (収集は止まりません)
       2. 外部スイッチ名を FIELD-External → EdgeBox-External に変更
       3. CPU コア分割の設定 (cpu-partition.json) の 登録名を書き換え、固定を適用し直す
-         ※ これを忘れると、自動タスクが EdgeBox を見つけられず、コア分割が静かに外れます
+         ※ これを忘れると、自動タスクが Edge Box を見つけられず、コア分割が静かに外れます
       4. 古い名前のタスク・デスクトップアイコンを削除
       5. 新しい名前でタスクとアイコンを登録し直す
 
-    EdgeBox の設定・ディスク・データは変わりません。名前だけの変更です。
+    Edge Box の設定・ディスク・データは変わりません。名前だけの変更です。
 
 .EXAMPLE
     .\09-rename-to-edgebox.ps1            # 実行
@@ -45,17 +45,17 @@ Write-Host "==============================================" -ForegroundColor Cya
 $vmNew = Get-VM -Name $NewName -ErrorAction SilentlyContinue
 $vmOld = Get-VM -Name $OldName -ErrorAction SilentlyContinue
 if ($vmNew) {
-    Write-Host "EdgeBox: すでに '$NewName' です。変更は不要です。" -ForegroundColor Green
+    Write-Host "Edge Box: すでに '$NewName' です。変更は不要です。" -ForegroundColor Green
 } elseif ($vmOld) {
     if ($vmOld.State -ne "Off") {
-        Write-Host "EdgeBox '$OldName' は実行中ですが、名前の変更は実行中でも行えます (収集は止まりません)。" -ForegroundColor Yellow
+        Write-Host "Edge Box '$OldName' は実行中ですが、名前の変更は実行中でも行えます (収集は止まりません)。" -ForegroundColor Yellow
     }
     if ($PSCmdlet.ShouldProcess($OldName, "登録名を $NewName に変更")) {
         Rename-VM -Name $OldName -NewName $NewName
         Write-Host "登録名を '$OldName' → '$NewName' に変更しました。" -ForegroundColor Green
     }
 } else {
-    Write-Warning "EdgeBox '$OldName' も '$NewName' も見つかりませんでした。"
+    Write-Warning "Edge Box '$OldName' も '$NewName' も見つかりませんでした。"
 }
 
 # --- 2. 外部スイッチ名 ---
@@ -73,8 +73,8 @@ if (Get-VMSwitch -Name "EdgeBox-External" -ErrorAction SilentlyContinue) {
 }
 
 # --- 3. CPU コア分割の設定を新しい名前に合わせる ---
-# 自動タスク (CpuPartition-Pin) は cpu-partition.json の 登録名で EdgeBox を探す。
-# ここを書き換えないと、名前変更のあと EdgeBox が見つからず、コア分割が静かに外れる
+# 自動タスク (CpuPartition-Pin) は cpu-partition.json の 登録名で Edge Box を探す。
+# ここを書き換えないと、名前変更のあと Edge Box が見つからず、コア分割が静かに外れる
 $cpuDir  = Join-Path (Split-Path $PSScriptRoot -Parent) "windows-cpu-partition"
 $cpuJson = Join-Path $cpuDir "cpu-partition.json"
 $cpuPs1  = Join-Path $cpuDir "cpu-partition.ps1"

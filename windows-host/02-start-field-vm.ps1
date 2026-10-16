@@ -1,6 +1,6 @@
 ﻿<#
 .SYNOPSIS
-    EdgeBox を起動し、コンソール画面を開きます。
+    Edge Box を起動し、コンソール画面を開きます。
 
 .EXAMPLE
     .\02-start-field-vm.ps1              # 起動 + コンソール表示
@@ -14,18 +14,18 @@ param(
     [switch]$Stop,
     [switch]$Status,
     # ディスクが「別のプロセスが使用中」で起動できないときの自動修復
-    # (重複した接続の削除 / ディスクのオフライン化。他 EdgeBox の設定には触れない)
+    # (重複した接続の削除 / ディスクのオフライン化。他 Edge Box の設定には触れない)
     [switch]$Repair,
 
-    # -Repair と併用。同じディスクを掴んでいる他の EdgeBox から、その接続だけを外す
-    # (EdgeBox 自体もディスクの中身も消しません。対象 が停止中のときのみ実行)
+    # -Repair と併用。同じディスクを掴んでいる他の Edge Box から、その接続だけを外す
+    # (Edge Box 自体もディスクの中身も消しません。対象 が停止中のときのみ実行)
     [switch]$DetachOthers
 )
 
 $ErrorActionPreference = "Stop"
 
-# -VMName を明示していない場合、既定名の EdgeBox が無ければ、EdgeBox のディスク
-# (物理ディスクのパススルー) を持つ EdgeBox を探して使う。00-field-launcher.ps1 と
+# -VMName を明示していない場合、既定名の Edge Box が無ければ、Edge Box のディスク
+# (物理ディスクのパススルー) を持つ Edge Box を探して使う。00-field-launcher.ps1 と
 # 同じ考え方で、登録名が「EdgeBox」でなくても (旧名称のままでも) そのまま動くようにする
 if (-not $PSBoundParameters.ContainsKey("VMName") -and
     -not (Get-VM -Name $VMName -ErrorAction SilentlyContinue)) {
@@ -56,8 +56,8 @@ $SysDisk = -1
 try { $SysDisk = [int](Get-Partition -DriveLetter C -ErrorAction Stop).DiskNumber } catch { $SysDisk = -1 }
 
 
-# CPU コア分割ツール (別フォルダ windows-cpu-partition) が full モードなら、EdgeBox を起動する前に
-# 起動タスクと同じ処理を呼び、CPU グループに固定してから起動する (固定は EdgeBox 停止中に確実に効く)。
+# CPU コア分割ツール (別フォルダ windows-cpu-partition) が full モードなら、Edge Box を起動する前に
+# 起動タスクと同じ処理を呼び、CPU グループに固定してから起動する (固定は Edge Box 停止中に確実に効く)。
 # ツールが無ければ何もしない (互いに独立。あるときだけ順番を譲る)。戻り値: 呼んだか
 function Invoke-CpuPartitionBoot {
     try {
@@ -86,17 +86,17 @@ if ($Status) {
 
 if ($Stop) {
     if ($vm.State -eq "Running") {
-        Stop-VM -Name $VMName   # ACPI シャットダウン要求 (EdgeBox 側が正常終了処理を行う)
+        Stop-VM -Name $VMName   # ACPI シャットダウン要求 (Edge Box 側が正常終了処理を行う)
         Write-Host "シャットダウンを要求しました。"
     } else {
-        Write-Host "EdgeBox は起動していません ($($vm.State))。"
+        Write-Host "Edge Box は起動していません ($($vm.State))。"
     }
     exit 0
 }
 
 # ============================================================
 #  物理ディスクの取り合いを調べる
-#  (パススルー ディスクは「Windows からオフライン」かつ「1 つの EdgeBox だけが接続」
+#  (パススルー ディスクは「Windows からオフライン」かつ「1 つの Edge Box だけが接続」
 #   でないと開けず、Start-VM が 0x80070020 で失敗する)
 # ============================================================
 function Get-PassthroughDisks([string]$Name) {
@@ -126,7 +126,7 @@ function Test-DiskReady([switch]$Fix) {
 
     $diskNums = @($mine | Select-Object -ExpandProperty DiskNumber -Unique)
 
-    # 2) 他の EdgeBox が同じ物理ディスクを掴んでいないか (旧構成の EdgeBox が残っている等)
+    # 2) 他の Edge Box が同じ物理ディスクを掴んでいないか (旧構成の Edge Box が残っている等)
     foreach ($other in @(Get-VM | Where-Object { $_.Name -ne $VMName })) {
         foreach ($d in (Get-PassthroughDisks $other.Name)) {
             if ($diskNums -notcontains $d.DiskNumber) { continue }
@@ -139,7 +139,7 @@ function Test-DiskReady([switch]$Fix) {
                     -ControllerType $d.ControllerType `
                     -ControllerNumber $d.ControllerNumber `
                     -ControllerLocation $d.ControllerLocation
-                Write-Host "  登録『$($other.Name)』からディスク $($d.DiskNumber) の接続を外しました (EdgeBox とデータは残ります)" -ForegroundColor Green
+                Write-Host "  登録『$($other.Name)』からディスク $($d.DiskNumber) の接続を外しました (Edge Box とデータは残ります)" -ForegroundColor Green
             } else {
                 $problems += "登録『$($other.Name)』も同じディスク $($d.DiskNumber) を使っています (同時には使えません)"
             }
@@ -152,10 +152,10 @@ function Test-DiskReady([switch]$Fix) {
         if ($d -and -not $d.IsOffline) {
             $problems += "ディスク $n が Windows でオンラインのままです"
             if ($Fix) {
-                # 万一 EdgeBox に誤ったディスクが接続されていても、Windows 自身の
+                # 万一 Edge Box に誤ったディスクが接続されていても、Windows 自身の
                 # ディスクだけは絶対にオフラインにしない
                 if ($n -eq $SysDisk) {
-                    $problems += "ディスク $n は Windows のシステムディスクです。オフラインにしません (EdgeBox の設定を見直してください)"
+                    $problems += "ディスク $n は Windows のシステムディスクです。オフラインにしません (Edge Box の設定を見直してください)"
                 } else {
                     Set-Disk -Number $n -IsOffline $true
                     Write-Host "  ディスク $n をオフラインにしました" -ForegroundColor Green
@@ -177,10 +177,10 @@ function Show-DiskHelp($Problems) {
     Write-Host ""
     Write-Host "対処:" -ForegroundColor Cyan
     Write-Host "  1. 自動で直せる分を直す : .\02-start-field-vm.ps1 -Repair"
-    Write-Host "     他 EdgeBox の接続も外す   : .\02-start-field-vm.ps1 -Repair -DetachOthers"
-    Write-Host "                            (その EdgeBox とディスクの中身は消えません)"
+    Write-Host "     他 Edge Box の接続も外す   : .\02-start-field-vm.ps1 -Repair -DetachOthers"
+    Write-Host "                            (その Edge Box とディスクの中身は消えません)"
     Write-Host "  2. WSL を切り離す       : wsl --unmount \\.\PHYSICALDRIVE0   (その後 wsl --shutdown)"
-    Write-Host "  3. 他 EdgeBox が使っている場合: その EdgeBox を停止し、Hyper-V マネージャーでディスク接続を外す"
+    Write-Host "  3. 他 Edge Box が使っている場合: その Edge Box を停止し、Hyper-V マネージャーでディスク接続を外す"
     Write-Host "  4. それでも駄目なら PC を再起動すると、掴んでいたプロセスごと解放されます"
 }
 
@@ -223,7 +223,7 @@ if ($vm.State -ne "Running") {
             } catch { }
         }
     }
-    Write-Host "EdgeBox を起動しています..." -ForegroundColor Cyan
+    Write-Host "Edge Box を起動しています..." -ForegroundColor Cyan
     $s11 = Join-Path $PSScriptRoot "11-io-passthrough.ps1"   # 予約された設定 (メモリの固定など) を停止中に反映
     if (Test-Path $s11) { try { & $s11 -VMName $VMName -ApplyPending } catch { } }
     if (Invoke-CpuPartitionBoot) { Write-Host "  CPU コア分割 (full): CPU グループに固定してから起動します" -ForegroundColor Cyan }
@@ -239,10 +239,10 @@ if ($vm.State -ne "Running") {
     }
 }
 
-# コンソール画面 (起動ログ・EdgeBox の画面) を表示。モニター2に置いて監視用に
+# コンソール画面 (起動ログ・Edge Box の画面) を表示。モニター2に置いて監視用に
 Start-Process "vmconnect.exe" -ArgumentList "localhost", $VMName
 
-# いま起動したときだけ: EdgeBox の起動を確認したら監視画面を自動で閉じる
+# いま起動したときだけ: Edge Box の起動を確認したら監視画面を自動で閉じる
 # (起動後のコンソールは黒い画面が残るだけのため。『設定』の[画面表示]でオフにできる)
 $autoCloseNote = ""
 if ($wasOff) {
@@ -270,6 +270,6 @@ Write-Host ""
 Write-Host "起動しました。" -ForegroundColor Green
 Write-Host "  - コンソール窓が開きます。モニター2に移動して監視用にどうぞ"
 if ($autoCloseNote) { Write-Host $autoCloseNote }
-Write-Host "  - 管理画面 (Web UI) は、EdgeBox の IP アドレスにブラウザでアクセスしてください"
+Write-Host "  - 管理画面 (Web UI) は、Edge Box の IP アドレスにブラウザでアクセスしてください"
 Write-Host "    IP の確認: Get-VMNetworkAdapter -VMName $VMName | Select -Expand IPAddresses"
 Write-Host "    (表示されるまで起動から数分かかることがあります)"

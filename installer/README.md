@@ -25,12 +25,12 @@ Windows に標準で入っている IExpress を使うため、追加のソフ�
 |---|---|
 | 1 | 一式を `C:\EdgeBox` に配置 (既にあれば入れ替え。**設定と記録は残す**) |
 | 2 | ダウンロードの印 (Mark of the Web) を外す |
-| 3 | デスクトップのアイコンを作る (EdgeBox 起動 / 設定 / 全部シャットダウン / EdgeBox 再起動・画面 / CPU割り当て) |
+| 3 | デスクトップのアイコンを作る (Edge Box 起動 / 設定 / 全部シャットダウン / Edge Box 再起動・画面 / CPU割り当て) |
 
-この PC に固有の作業 (Hyper-V の有効化、EdgeBox の作成、CPU の分離) は行いません。
+この PC に固有の作業 (Hyper-V の有効化、Edge Box の作成、CPU の分離) は行いません。
 配置後、`C:\EdgeBox\windows-host\SETUP-STEPS.md` の①から順に進めてください。
 
-> Hyper-V がまだ有効でない PC では、EdgeBox に関わるアイコンは作れません。
+> Hyper-V がまだ有効でない PC では、Edge Box に関わるアイコンは作れません。
 > Hyper-V を有効にして再起動したあと、**この EXE をもう一度実行**すれば作られます。
 
 ## 更新のときも同じ

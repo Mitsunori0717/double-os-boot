@@ -1,6 +1,6 @@
 ﻿<#
 .SYNOPSIS
-    EdgeBox の統合設定コンソール。すべての設定をタブで切り替えて 1 画面で行えます。
+    Edge Box の統合設定コンソール。すべての設定をタブで切り替えて 1 画面で行えます。
 
 .DESCRIPTION
     タブ構成:
@@ -26,8 +26,8 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-# -VMName を明示していない場合、既定名の EdgeBox が無ければ、EdgeBox のディスク
-# (物理ディスクのパススルー) を持つ EdgeBox を探して使う。00-field-launcher.ps1 と
+# -VMName を明示していない場合、既定名の Edge Box が無ければ、Edge Box のディスク
+# (物理ディスクのパススルー) を持つ Edge Box を探して使う。00-field-launcher.ps1 と
 # 同じ考え方で、登録名が「EdgeBox」でなくても (旧名称のままでも) そのまま動くようにする
 if (-not $PSBoundParameters.ContainsKey("VMName") -and
     -not (Get-VM -Name $VMName -ErrorAction SilentlyContinue)) {
@@ -61,7 +61,7 @@ if (-not $isAdmin) {
 if ($Setup) {
     $desktop = [Environment]::GetFolderPath("Desktop")
     # 旧アイコンは統合版に置き換える
-    foreach ($old in "EdgeBox表示設定.lnk", "自動サインイン設定.lnk", "EdgeBox設定.lnk") {
+    foreach ($old in "EdgeBox表示設定.lnk", "Edge Box表示設定.lnk", "自動サインイン設定.lnk", "EdgeBox設定.lnk") {
         Remove-Item (Join-Path $desktop $old) -Force -ErrorAction SilentlyContinue
     }
 
@@ -82,7 +82,7 @@ if ($Setup) {
     $lnk.WorkingDirectory = $PSScriptRoot
     $lnk.WindowStyle  = 7   # 最小化 (schtasks の黒い窓を見せない)
     $lnk.IconLocation = "shell32.dll,21"
-    $lnk.Description  = "EdgeBox の統合設定コンソール (UAC 確認なしで開く)"
+    $lnk.Description  = "Edge Box の統合設定コンソール (UAC 確認なしで開く)"
     $lnk.Save()
     Write-Host "デスクトップに『設定』アイコンを作成しました (旧アイコンは置き換え)。" -ForegroundColor Green
     Write-Host "  UAC の確認なしで、ダブルクリックだけで設定画面が開きます。"
@@ -228,7 +228,7 @@ function Split-Account([string]$text) {
 #  表示設定 (display-config.json)
 # ============================================================
 $DefaultConfig = [ordered]@{
-    "_説明"             = "EdgeBox 表示の設定。『設定』アイコンから編集できます。"
+    "_説明"             = "Edge Box 表示の設定。『設定』アイコンから編集できます。"
     "RightUrl"          = ""       # 右画面は通常の Windows デスクトップ (URL を入れるとブラウザで表示)
     "RightFullScreen"   = $false
     "LeftUrl"           = "console"
@@ -259,7 +259,7 @@ if (-not ("Win.AppShell" -as [type])) {
 public static extern int SetCurrentProcessExplicitAppUserModelID(string AppID);
 '@ -ErrorAction SilentlyContinue
 }
-try { [Win.AppShell]::SetCurrentProcessExplicitAppUserModelID("EdgeBox.Settings") | Out-Null } catch { }
+try { [Win.AppShell]::SetCurrentProcessExplicitAppUserModelID("Edge Box.Settings") | Out-Null } catch { }
 
 function Get-AppIcon([string]$Style) {
     try {

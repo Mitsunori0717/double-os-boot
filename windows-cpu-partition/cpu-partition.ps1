@@ -1,6 +1,6 @@
 ﻿<#
 .SYNOPSIS
-    Windows と Hyper-V EdgeBox の間で CPU コアを分割し、固定割り当て (ピンニング) します。
+    Windows と Hyper-V Edge Box の間で CPU コアを分割し、固定割り当て (ピンニング) します。
     主構成 (Linux Windows) の isolcpus + vcpupin に相当する機能の Windows版です。
 
 .DESCRIPTION
@@ -8,16 +8,16 @@
 
     ■ runtime モード (推奨の入口。再起動不要・Windows 標準構成のまま)
         クライアント版 Windows の Hyper-V は既定で「root スケジューラ」で動いており、
-        EdgeBox のプロセッサは vmmem プロセスのスレッドとして Windows の
+        Edge Box のプロセッサは vmmem プロセスのスレッドとして Windows の
         スケジューラが実行しています。この性質を利用して:
-          - vmmem (= EdgeBox の CPU 実行の実体) をEdgeBox 用コアへ物理固定
-          - vmwp (= EdgeBox のディスク/ネットワーク処理) をWindows 用コアへ固定
-          - vmmem の優先度を High に昇格 (EdgeBox 用コアを Windows 側の処理が
+          - vmmem (= Edge Box の CPU 実行の実体) をEdge Box 用コアへ物理固定
+          - vmwp (= Edge Box のディスク/ネットワーク処理) をWindows 用コアへ固定
+          - vmmem の優先度を High に昇格 (Edge Box 用コアを Windows 側の処理が
             奪いにくくする)
           - 常駐 'CpuPartition-Watch' が 3 秒ごとに、vmmem 以外の全プロセス
             (Windows 側のすべて) を Windows 用コアへ固定し直す = Windows 側の締め出し。
             新しく起動したプロセスも数秒以内に Windows 用コアへ戻される
-        EdgeBox の起動を検出して自動で再適用するタスクも登録するため、一度 -Apply
+        Edge Box の起動を検出して自動で再適用するタスクも登録するため、一度 -Apply
         すれば電源 ON だけの運用でも効き続けます。
         残る混ざりは、固定できない保護されたシステムプロセス (csrss 等) とカーネル・
         割り込みの分だけ (通常 1% 未満)。それも無くすには full モード。
@@ -26,16 +26,16 @@
         ハイパーバイザーのスケジューラを core に切り替えたうえで:
           - minroot (bcdedit hypervisorrootproc) で Windows自体を
             下位コアへ封じ込める (Linux の isolcpus 相当。Windows のプロセス・
-            割り込みはEdgeBox 用コアに一切載らなくなる)
-          - CPU グループ (Microsoft 製 CpuGroups.exe) でEdgeBox を上位コアへ
+            割り込みはEdge Box 用コアに一切載らなくなる)
+          - CPU グループ (Microsoft 製 CpuGroups.exe) でEdge Box を上位コアへ
             固定する (Linux の vcpupin 相当)
         両方向とも物理的な分割になります。CpuGroups.exe が使えない環境では
         minroot + 処理能力予約 (-Reserve) までの「準分割」で止まり、その旨を
         正直に報告します。
         手順は「-Apply -Mode full → 再起動」だけ。再起動後は起動タスク 'CpuPartition-Boot' が
-        CPU グループの作成と EdgeBox の固定を自動で行い、以後も起動のたびに作り直します
+        CPU グループの作成と Edge Box の固定を自動で行い、以後も起動のたびに作り直します
         (CPU グループは再起動で消えるため)。成立状態は cpu-full-status.json に書き、
-        『EdgeBox 監視』と設定コンソールに表示します。
+        『Edge Box 監視』と設定コンソールに表示します。
         ※ スケジューラ変更はクライアント版 Windows では Microsoft の公式
            サポート外の構成です (動作実績は広くあります)。工場 PC のような
            専用用途向けで、-Undo でいつでも既定へ戻せます。
@@ -47,8 +47,8 @@
     .\cpu-partition.ps1 -Apply -Mode full    -HostCores 4 # 完全分割 (再起動→もう一度同じコマンド)
     .\cpu-partition.ps1 -Verify                           # 実測: 各コアで誰が実行されているか
     .\cpu-partition.ps1 -SelfTest                         # 撤退手順の予行 (収集は止まらない)
-    .\cpu-partition.ps1 -MemoryGB 12                      # EdgeBox のメモリを 12 GB に (EdgeBox 停止中に反映)
-    .\cpu-partition.ps1 -MemoryGB 12 -RestartVM           # 今すぐ反映 (EdgeBox を停止→設定→起動)
+    .\cpu-partition.ps1 -MemoryGB 12                      # Edge Box のメモリを 12 GB に (Edge Box 停止中に反映)
+    .\cpu-partition.ps1 -MemoryGB 12 -RestartVM           # 今すぐ反映 (Edge Box を停止→設定→起動)
     .\cpu-partition.ps1 -Undo                             # 全て元に戻す
 
 .EXAMPLE
@@ -58,7 +58,7 @@
 .NOTES
     管理者権限の PowerShell で実行してください (-Verify と現状確認は管理者なしでも可)。
     設定は cpu-partition.json に保存され、自動タスクが参照します。
-    対象 は -VMName で指定します (既定: EdgeBox)。どの Hyper-V EdgeBox にも使えます。
+    対象 は -VMName で指定します (既定: Edge Box)。どの Hyper-V Edge Box にも使えます。
 #>
 [CmdletBinding()]
 param(
@@ -71,7 +71,7 @@ param(
 
     # Windows に残す物理コア数 (SMT 有効なら論理 CPU は 2 倍になる)
     [int]$HostCores = 0,
-    # EdgeBox に渡す物理コア数 (省略時: 残り全部)
+    # Edge Box に渡す物理コア数 (省略時: 残り全部)
     [int]$GuestCores = 0,
     # 論理 CPU 番号での明示指定 (例: "0-7" や "0-3,8-11")。指定時は -HostCores より優先
     [string]$HostLps = "",
@@ -85,7 +85,7 @@ param(
     [switch]$NoContain,         # runtime: Windows 側のプロセスを Windows 用コアへ締め出す常駐 (CpuPartition-Watch) を使わない
     [switch]$NoReserve,         # full: CPU グループ不成立時の処理能力予約をしない
     [switch]$AutoGetTools,      # full: CpuGroups.exe を確認なしで取得する (設定コンソール用)
-    [switch]$AllowMissingVM,    # EdgeBox が未作成でも計画を保存する (作成・起動後に自動タスクが適用)
+    [switch]$AllowMissingVM,    # Edge Box が未作成でも計画を保存する (作成・起動後に自動タスクが適用)
 
     # --- 確認・解除 ---
     [switch]$Verify,            # 実測 (各論理 CPU のEdgeBox/合計実行率を採取)
@@ -94,13 +94,13 @@ param(
     [switch]$SelfTest,          # 撤退手順の予行 (-Undo → 再適用 まで自動。収集は止まらない)
 
     # --- メモリ ---
-    [int]$MemoryGB = 0,         # EdgeBox に割り当てるメモリ (GB)。0 = 変更しない
-    [switch]$RestartVM,         # -MemoryGB: EdgeBox が実行中なら 停止→設定→起動 で今すぐ反映する
+    [int]$MemoryGB = 0,         # Edge Box に割り当てるメモリ (GB)。0 = 変更しない
+    [switch]$RestartVM,         # -MemoryGB: Edge Box が実行中なら 停止→設定→起動 で今すぐ反映する
 
     # --- 内部用 (自動タスクが呼ぶ) ---
     [switch]$ApplyRuntime,
-    [switch]$Watch,             # 常駐: vmmem を EdgeBox 用コアへ、それ以外の全プロセスを Windows 用コアへ固定し続ける
-    [switch]$BootApply,         # full モードの起動時処理: CPU グループを作り直して EdgeBox を固定し、EdgeBox を起動する
+    [switch]$Watch,             # 常駐: vmmem を Edge Box 用コアへ、それ以外の全プロセスを Windows 用コアへ固定し続ける
+    [switch]$BootApply,         # full モードの起動時処理: CPU グループを作り直して Edge Box を固定し、Edge Box を起動する
     [switch]$Quiet,
     [switch]$NoConfirm
 )
@@ -281,14 +281,14 @@ function Save-Config($Obj) {
 }
 
 # --- メモリ ---
-# PC 全体のメモリを Windows と EdgeBox で分ける。EdgeBox は固定メモリ (動的メモリは
+# PC 全体のメモリを Windows と Edge Box で分ける。Edge Box は固定メモリ (動的メモリは
 # 専用機のような装置には向かない: バルーン ドライバー前提で、収集中の挙動が読めない)
 $MemHostReserveGB = 8    # Windows 側に最低限残す量 (Windows 11 + アプリ + Hyper-V 自身)
-$MemGuestMinGB    = 4    # EdgeBox の最低量
-$MemGuestRecGB    = 8    # EdgeBox の推奨量 (EdgeBox の元の構成に相当)
+$MemGuestMinGB    = 4    # Edge Box の最低量
+$MemGuestRecGB    = 8    # Edge Box の推奨量 (Edge Box の元の構成に相当)
 
 function Get-MemoryInfo([string]$Name) {
-    # 戻り値: TotalGB (PC 全体) / VmGB (EdgeBox の設定値) / Dynamic (動的メモリか) / Vm
+    # 戻り値: TotalGB (PC 全体) / VmGB (Edge Box の設定値) / Dynamic (動的メモリか) / Vm
     $totalGB = 0.0
     try { $totalGB = [Math]::Round(([double](Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory) / 1GB, 1) } catch { }
     $vmGB = 0.0; $dyn = $false; $vm = $null
@@ -314,16 +314,16 @@ function Test-MemoryPlan([double]$TotalGB, [int]$GuestGB, [string]$Name) {
     }
     if ($TotalGB -gt 0 -and $hostGB -lt $MemHostReserveGB) {
         $errors += ("Windows 側に最低 $MemHostReserveGB GB 残す必要があります " +
-                    "(この PC は $TotalGB GB のため、EdgeBox は最大 $([int][Math]::Floor($TotalGB - $MemHostReserveGB)) GB まで)")
+                    "(この PC は $TotalGB GB のため、Edge Box は最大 $([int][Math]::Floor($TotalGB - $MemHostReserveGB)) GB まで)")
     }
     if ($GuestGB -lt $MemGuestRecGB) { $warnings += "登録 '$Name' の推奨は $MemGuestRecGB GB 以上です" }
     if ($TotalGB -gt 0 -and $GuestGB -gt ($TotalGB / 2)) {
-        $warnings += "EdgeBox に PC の半分以上を割り当てています (Windows 側が窮屈になるかもしれません)"
+        $warnings += "Edge Box に PC の半分以上を割り当てています (Windows 側が窮屈になるかもしれません)"
     }
     return [pscustomobject]@{ Errors = $errors; Warnings = $warnings; HostGB = $hostGB }
 }
 
-# --- EdgeBox に対応する vmwp / vmmem プロセスを探す ---
+# --- Edge Box に対応する vmwp / vmmem プロセスを探す ---
 function Get-VmProcesses([string]$Name) {
     $vm = Get-VM -Name $Name -ErrorAction SilentlyContinue
     if (-not $vm) { return [pscustomobject]@{ Vm = $null; Vmwp = $null; Vmmem = $null } }
@@ -386,9 +386,9 @@ function Get-GuidsInText([string]$Text) {
     return $list
 }
 
-# --- EdgeBox がいまどの CPU グループに属しているか (GUID 小文字。無し/不明は "") ---
-# 実機の出力: "VmName VmId CpuGroupId / EdgeBox CB46099F-... B0EDB0ED-..." のように
-# EdgeBox 自身の ID (VmId) も GUID で出るため、それを除いた最後の GUID をグループ ID とみなす
+# --- Edge Box がいまどの CPU グループに属しているか (GUID 小文字。無し/不明は "") ---
+# 実機の出力: "VmName VmId CpuGroupId / Edge Box CB46099F-... B0EDB0ED-..." のように
+# Edge Box 自身の ID (VmId) も GUID で出るため、それを除いた最後の GUID をグループ ID とみなす
 function Get-VmGroupId([string]$Exe, [string]$Name) {
     $r = Invoke-CpuGroups $Exe @("GetVmGroup", "/VmName:$Name")
     if (-not $r.Ok) { return "" }
@@ -415,8 +415,8 @@ function Test-OurGroupExists([string]$Exe) {
     return $found
 }
 
-# --- CPU グループを作り直して EdgeBox を固定する (何度呼んでも同じ結果になる) ---
-# 実行中の EdgeBox は SetVmGroup が失敗する (実機: 0x80048007) ため、
+# --- CPU グループを作り直して Edge Box を固定する (何度呼んでも同じ結果になる) ---
+# 実行中の Edge Box は SetVmGroup が失敗する (実機: 0x80048007) ため、
 #   ・所属が本ツールのグループ → 何もしない
 #   ・グループはあるが所属を照会できない → 実行中なら触らない (ほどくと固定が外れる瞬間ができる)。停止中なら付け直す
 #   ・グループが無い → 作って割り当てる (実行中なら失敗することがある。次に停止したとき = 再起動時に付く)
@@ -431,7 +431,7 @@ function Invoke-FullBind([string]$Exe, [int[]]$GuestArr, $VmObj) {
     $lpText = ConvertTo-LpRangeText $GuestArr
     $cur = Get-VmGroupId $Exe $VMName      # "" = 不明 / "none" = 未所属 / GUID = 所属グループ
     if ($cur -eq $GroupId.ToLower()) {
-        return [pscustomobject]@{ Bound = $true; Message = "EdgeBox は CPU グループ (CPU $lpText) に固定済み" }
+        return [pscustomobject]@{ Bound = $true; Message = "Edge Box は CPU グループ (CPU $lpText) に固定済み" }
     }
     $exists = Test-OurGroupExists $Exe
     if ($cur -eq "" -and $exists -and $running) {
@@ -439,10 +439,10 @@ function Invoke-FullBind([string]$Exe, [int[]]$GuestArr, $VmObj) {
     }
     if ($cur -ne "" -and $cur -ne "none" -and $running) {
         # 別のグループに属している (通常は起きない)。実行中は付け替えられないので次の停止時に直す
-        return [pscustomobject]@{ Bound = $false; Message = "EdgeBox が別の CPU グループ ($cur) に属しています。EdgeBox の停止時に付け直します" }
+        return [pscustomobject]@{ Bound = $false; Message = "Edge Box が別の CPU グループ ($cur) に属しています。Edge Box の停止時に付け直します" }
     }
     # ここからは (未所属) か (グループが無い) か (停止中で付け直す)。
-    # 実行中の EdgeBox の所属は決してほどかない (ほどいた瞬間に Windows 用コアへ載る)
+    # 実行中の Edge Box の所属は決してほどかない (ほどいた瞬間に Windows 用コアへ載る)
     if (-not $running -and $cur -ne "" -and $cur -ne "none") {
         Invoke-CpuGroups $Exe @("SetVmGroup", "/VmName:$VMName", "/GroupId:$NullGroupId") | Out-Null
     }
@@ -456,13 +456,13 @@ function Invoke-FullBind([string]$Exe, [int[]]$GuestArr, $VmObj) {
     $rBind = Invoke-CpuGroups $Exe @("SetVmGroup", "/VmName:$VMName", "/GroupId:$GroupId")
     if (-not $rBind.Ok) {
         $why = $rBind.Output
-        if ($running) { $why += " (EdgeBox 実行中は割り当てられません。次に停止したとき = 再起動時に自動で付きます)" }
-        return [pscustomobject]@{ Bound = $false; Message = "EdgeBox を CPU グループに割り当てられません: $why" }
+        if ($running) { $why += " (Edge Box 実行中は割り当てられません。次に停止したとき = 再起動時に自動で付きます)" }
+        return [pscustomobject]@{ Bound = $false; Message = "Edge Box を CPU グループに割り当てられません: $why" }
     }
     # 照会できる環境なら、結果を 1 回だけ記録に残す (出力の書式を知るため)
     $chk = Invoke-CpuGroups $Exe @("GetVmGroup", "/VmName:$VMName")
     Write-PinLog ("CpuGroups GetVmGroup: ok=" + $chk.Ok + " 出力=" + (([string]$chk.Output) -replace '\s+', ' ').Trim())
-    return [pscustomobject]@{ Bound = $true; Message = "CPU グループを作成し、EdgeBox を CPU $lpText に固定しました" }
+    return [pscustomobject]@{ Bound = $true; Message = "CPU グループを作成し、Edge Box を CPU $lpText に固定しました" }
 }
 
 function Write-FullStatus([hashtable]$H) {
@@ -505,13 +505,13 @@ function Get-FullStatusText {
     $st = $null
     try { if (Test-Path $FullStatusFile) { $st = Get-Content $FullStatusFile -Raw -Encoding UTF8 | ConvertFrom-Json } } catch { }
     if (-not $st) { return "まだ起動タスクが動いていません (再起動後に自動で行います)" }
-    if ($st.Bound) { return ("完全分割 成立 — Windows は CPU {0} に封じ込め (minroot) / EdgeBox は CPU {1} に固定 (CPU グループ)  最終確認 {2}" -f $st.HostLps, $st.GuestLps, $st.At) }
+    if ($st.Bound) { return ("完全分割 成立 — Windows は CPU {0} に封じ込め (minroot) / Edge Box は CPU {1} に固定 (CPU グループ)  最終確認 {2}" -f $st.HostLps, $st.GuestLps, $st.At) }
     if (-not $st.MinrootOk) { return ("未反映 — {0}  最終確認 {1}" -f $st.Message, $st.At) }
-    return ("準分割 (EdgeBox の固定が効いていません: {0})  最終確認 {1}" -f $st.Message, $st.At)
+    return ("準分割 (Edge Box の固定が効いていません: {0})  最終確認 {1}" -f $st.Message, $st.At)
 }
 
-# full モードの第 2 段階 (再起動後): minroot の反映を確かめ、CPU グループで EdgeBox を固定し、
-# 状態を記録して、自動起動を任されていれば EdgeBox を起動する。起動タスクからも手動 -Apply からも呼ぶ。
+# full モードの第 2 段階 (再起動後): minroot の反映を確かめ、CPU グループで Edge Box を固定し、
+# 状態を記録して、自動起動を任されていれば Edge Box を起動する。起動タスクからも手動 -Apply からも呼ぶ。
 # 何度呼んでも同じ結果になる。戻り値: 完全分割が成立したか
 function Invoke-FullStage2([int[]]$HostArr, [int[]]$GuestArr, [bool]$Interactive) {
     $hostText = ConvertTo-LpRangeText $HostArr
@@ -554,7 +554,7 @@ function Invoke-FullStage2([int[]]$HostArr, [int[]]$GuestArr, [bool]$Interactive
         $get = (-not $Interactive) -or $AutoGetTools
         if (-not $get -and $Interactive -and -not $NoConfirm) {
             Write-Host ""
-            Write-Host "EdgeBox 側の完全固定には Microsoft 製 CpuGroups.exe が必要です (未検出)。" -ForegroundColor Yellow
+            Write-Host "Edge Box 側の完全固定には Microsoft 製 CpuGroups.exe が必要です (未検出)。" -ForegroundColor Yellow
             $get = ((Read-Host "Microsoft Download Center から取得しますか? (y/N)") -eq "y")
         }
         if ($get) { $exe2 = Get-CpuGroupsExe }
@@ -564,7 +564,7 @@ function Invoke-FullStage2([int[]]$HostArr, [int[]]$GuestArr, [bool]$Interactive
 
     $vm2 = $null
     try { $vm2 = Get-VM -Name $VMName -ErrorAction Stop } catch { }
-    # vCPU 数と EdgeBox 用コア数を合わせる (停止中のみ変更可能)
+    # vCPU 数と Edge Box 用コア数を合わせる (停止中のみ変更可能)
     if ($vm2 -and [string]$vm2.State -eq "Off") {
         try {
             $vcpu2 = [int](Get-VMProcessor -VMName $VMName).Count
@@ -603,10 +603,10 @@ function Invoke-FullStage2([int[]]$HostArr, [int[]]$GuestArr, [bool]$Interactive
         $s11 = Join-Path (Split-Path $PSScriptRoot -Parent) "windows-host\11-io-passthrough.ps1"
         if (Test-Path $s11) { try { $r11 = & $s11 -VMName $VMName -ApplyPending -Quiet; if ($r11) { Write-PinLog ([string]$r11) } } catch { } }
     }
-    # EdgeBox の自動起動を任されている場合は、固定したあとに起動する (固定できなくても止めたままにはしない)
+    # Edge Box の自動起動を任されている場合は、固定したあとに起動する (固定できなくても止めたままにはしない)
     if ($vm2 -and [string]$vm2.State -eq "Off" -and $cfg2 -and $cfg2.ManageVmStart) {
-        try { Start-VM -Name $VMName -ErrorAction Stop; Write-PinLog "Full: EdgeBox を起動しました" }
-        catch { Write-PinLog "Full: EdgeBox の起動に失敗: $($_.Exception.Message)" }
+        try { Start-VM -Name $VMName -ErrorAction Stop; Write-PinLog "Full: Edge Box を起動しました" }
+        catch { Write-PinLog "Full: Edge Box の起動に失敗: $($_.Exception.Message)" }
     }
     return [bool]$bind.Bound
 }
@@ -626,7 +626,7 @@ function Resolve-Plan([object]$Topo, [string]$PlanMode) {
                   "番号の対応はタスクマネージャーのパフォーマンスタブ、または CpuGroups.exe GetCpuTopology で確認できます。"
         }
         $n = $HostCores * $Topo.SmtPerCore
-        if ($n -ge $total) { throw "Windows に $HostCores コア (論理 $n) を残すとEdgeBox 用が残りません (全論理 $total)" }
+        if ($n -ge $total) { throw "Windows に $HostCores コア (論理 $n) を残すとEdge Box 用が残りません (全論理 $total)" }
         $h = @(0..($n - 1))
     } else {
         throw "分割の指定がありません。-HostCores <残す物理コア数> か -HostLps `"0-7`" の形式で指定してください。"
@@ -638,7 +638,7 @@ function Resolve-Plan([object]$Topo, [string]$PlanMode) {
         if ($Topo.HybridSuspected) { throw "P/E コア混成の可能性があるため -GuestLps で明示してください。" }
         $n = $GuestCores * $Topo.SmtPerCore
         $rest = @(0..($total - 1) | Where-Object { $h -notcontains $_ })
-        if ($n -gt $rest.Count) { throw "EdgeBox 用に $GuestCores コア (論理 $n) は確保できません (残り論理 $($rest.Count))" }
+        if ($n -gt $rest.Count) { throw "Edge Box 用に $GuestCores コア (論理 $n) は確保できません (残り論理 $($rest.Count))" }
         $g = @($rest | Select-Object -First $n)
     } else {
         $g = @(0..($total - 1) | Where-Object { $h -notcontains $_ })
@@ -646,10 +646,10 @@ function Resolve-Plan([object]$Topo, [string]$PlanMode) {
 
     # --- 妥当性 ---
     foreach ($i in $g) {
-        if ($h -contains $i) { throw "論理 CPU $i がWindows とEdgeBox の両方に指定されています" }
+        if ($h -contains $i) { throw "論理 CPU $i がWindows とEdge Box の両方に指定されています" }
     }
-    if ($h.Count -lt 2) { throw "Windows 側は最低 2 論理 CPU 必要です (EdgeBox のディスク/ネットワーク処理もWindows 側で動くため 4 以上を推奨)" }
-    if ($g.Count -lt 1) { throw "EdgeBox 側の論理 CPU がありません" }
+    if ($h.Count -lt 2) { throw "Windows 側は最低 2 論理 CPU 必要です (Edge Box のディスク/ネットワーク処理もWindows 側で動くため 4 以上を推奨)" }
+    if ($g.Count -lt 1) { throw "Edge Box 側の論理 CPU がありません" }
 
     if ($PlanMode -eq "full") {
         # minroot はWindows を「先頭から N 個」の論理 CPU に閉じ込める方式のため、
@@ -667,7 +667,7 @@ function Resolve-Plan([object]$Topo, [string]$PlanMode) {
         Say ("注意: 論理 CPU {0} はどちらにも割り当てられず遊びます。" -f (ConvertTo-LpRangeText $rest)) "Yellow"
     }
     if ($h.Count -lt 4) {
-        Say "注意: Windows 側が論理 4 未満です。EdgeBox のディスク/ネットワーク処理はWindows 側コアで動くため、細くしすぎると EdgeBox の I/O も遅くなります。" "Yellow"
+        Say "注意: Windows 側が論理 4 未満です。Edge Box のディスク/ネットワーク処理はWindows 側コアで動くため、細くしすぎると Edge Box の I/O も遅くなります。" "Yellow"
     }
     # SMT 境界チェック (同一物理コアの 2 スレッドが両側にまたがると分割が甘くなる)
     if (-not $Topo.HybridSuspected -and $Topo.SmtPerCore -eq 2) {
@@ -685,7 +685,7 @@ function Resolve-Plan([object]$Topo, [string]$PlanMode) {
 
 # ============================================================ runtime モードの実体
 
-# vmmem をEdgeBox 用コアへ、vmwp をWindows 用コアへ固定する。戻り値: 結果の説明文字列
+# vmmem をEdge Box 用コアへ、vmwp をWindows 用コアへ固定する。戻り値: 結果の説明文字列
 function Set-RuntimePin([int[]]$HostArr, [int[]]$GuestArr, [bool]$Boost) {
     $procs = Get-VmProcesses $VMName
     if (-not $procs.Vm) {
@@ -695,7 +695,7 @@ function Set-RuntimePin([int[]]$HostArr, [int[]]$GuestArr, [bool]$Boost) {
         return "skip: 登録 '$VMName' が実行中でないため何もしませんでした ($($procs.Vm.State))"
     }
     if (-not $procs.Vmmem) {
-        return "fail: vmmem プロセスが見つかりません (EdgeBox 起動直後なら数十秒後に自動タスクが再適用します)"
+        return "fail: vmmem プロセスが見つかりません (Edge Box 起動直後なら数十秒後に自動タスクが再適用します)"
     }
     $results = @()
 
@@ -734,7 +734,7 @@ function Set-RuntimePin([int[]]$HostArr, [int[]]$GuestArr, [bool]$Boost) {
 }
 
 # ============================================================ Windows 側の締め出し (runtime モードの常駐)
-#   vmmem 以外の全プロセスを Windows 用コアに固定し直す。EdgeBox 用コアには Windows のプロセスが
+#   vmmem 以外の全プロセスを Windows 用コアに固定し直す。Edge Box 用コアには Windows のプロセスが
 #   載らなくなる (minroot 無しでできる範囲の締め出し)。固定できないのは保護されたシステムプロセス
 #   (csrss, wininit, services, Registry, System など) とカーネルの処理だけで、それらは記録に残す。
 
@@ -751,7 +751,7 @@ function Get-AppExceptionPids {
     return $set
 }
 
-# 1 回の見回り: EdgeBox 用コアに掛かっている Windows 側のプロセスを Windows 用コアへ固定する
+# 1 回の見回り: Edge Box 用コアに掛かっている Windows 側のプロセスを Windows 用コアへ固定する
 # $Skip = 固定できなかった PID → 時刻 (5 分は再試行しない)。戻り値: 件数と固定できなかった名前
 function Invoke-HostContainment([int64]$HostMask, [int64]$GuestMask, [hashtable]$Skip, [hashtable]$Except) {
     $contained = 0; $pinned = 0; $unpin = @{}
@@ -760,7 +760,7 @@ function Invoke-HostContainment([int64]$HostMask, [int64]$GuestMask, [hashtable]
         $id = [int]$p.Id
         if ($id -le 4) { continue }                       # Idle / System (固定不可)
         $n = [string]$p.ProcessName
-        if ($n -like 'vmmem*') { continue }              # EdgeBox の CPU 実行そのもの (EdgeBox 用コアに固定済み)
+        if ($n -like 'vmmem*') { continue }              # Edge Box の CPU 実行そのもの (Edge Box 用コアに固定済み)
         if ($Except.ContainsKey($id)) { continue }
         if ($Skip.ContainsKey($id) -and (($now - $Skip[$id]).TotalSeconds -lt 300)) { continue }
         try {
@@ -832,7 +832,7 @@ function Get-ContainStatusText {
         $st.Contained, $st.HostLps, $(if ($unp.Count -gt 0) { $unp -join ", " } else { "なし" }), $st.At)
 }
 
-# EdgeBox 起動を検出して自動で再適用するタスク (SYSTEM 権限)
+# Edge Box 起動を検出して自動で再適用するタスク (SYSTEM 権限)
 # 戻り値: 制限があった場合の説明 (無ければ空文字)
 function Register-PinTask {
     $action = New-ScheduledTaskAction -Execute "powershell.exe" `
@@ -841,7 +841,7 @@ function Register-PinTask {
     $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
         -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 10)
 
-    # 1) EdgeBox 起動イベント (最速で反映される)。作れない環境ではスキップ
+    # 1) Edge Box 起動イベント (最速で反映される)。作れない環境ではスキップ
     $evTrigger = $null
     try {
         $xml = '<QueryList><Query Id="0" Path="Microsoft-Windows-Hyper-V-Worker-Admin">' +
@@ -874,11 +874,11 @@ function Register-PinTask {
     $plans = @()
     if ($evTrigger) { $plans += [pscustomobject]@{ T = @($evTrigger, $boot, $logonRep);   N = "" } }
     $plans += [pscustomobject]@{ T = @($boot, $logonRep)
-                                 N = "EdgeBox 起動イベントのトリガーが使えないため、2 分ごとの再適用で補います" }
+                                 N = "Edge Box 起動イベントのトリガーが使えないため、2 分ごとの再適用で補います" }
     if ($evTrigger) { $plans += [pscustomobject]@{ T = @($evTrigger, $boot, $logonPlain)
-                                                   N = "定期実行が使えないため、EdgeBox 起動イベントと起動/ログオン時に適用します" } }
+                                                   N = "定期実行が使えないため、Edge Box 起動イベントと起動/ログオン時に適用します" } }
     $plans += [pscustomobject]@{ T = @($boot, $logonPlain)
-                                 N = "この環境では起動時とログオン時のみの適用になります (EdgeBox 起動時の即時反映は不可)" }
+                                 N = "この環境では起動時とログオン時のみの適用になります (Edge Box 起動時の即時反映は不可)" }
 
     $lastErr = $null
     foreach ($plan in $plans) {
@@ -895,14 +895,14 @@ function Register-PinTask {
 }
 
 # -VMName を明示していない場合は、保存済み計画の 登録名を採用する。
-# 既定値 (EdgeBox) のまま -Undo すると別 EdgeBox を対象にしてしまい、
+# 既定値 (Edge Box) のまま -Undo すると別 Edge Box を対象にしてしまい、
 # 「タスクは消えたが vmmem の固定は外れていない」という中途半端な状態になる。
 if (-not $PSBoundParameters.ContainsKey("VMName")) {
     $cfgVm = Get-SavedConfig
     if ($cfgVm -and $cfgVm.VMName) { $VMName = [string]$cfgVm.VMName }
 }
 
-# 登録名が実在しない場合 (名前を変えた・旧名のまま保存されていた等) は、EdgeBox の物理ディスクを持つ
+# 登録名が実在しない場合 (名前を変えた・旧名のまま保存されていた等) は、Edge Box の物理ディスクを持つ
 # 登録か、1 つしかない登録を対象にする (windows-host 側と同じ考え方)。見つけたら設定ファイルも直す
 function Resolve-VMName([string]$Name) {
     if (-not (Get-Command Get-VM -ErrorAction SilentlyContinue)) { return $Name }
@@ -927,9 +927,9 @@ function Resolve-VMName([string]$Name) {
 }
 if (-not $PSBoundParameters.ContainsKey("VMName")) { $VMName = Resolve-VMName $VMName }
 
-# ============================================================ -MemoryGB (EdgeBox のメモリ)
+# ============================================================ -MemoryGB (Edge Box のメモリ)
 #
-# メモリは EdgeBox の停止中にしか変更できない (固定メモリ)。実行中に指定された場合は
+# メモリは Edge Box の停止中にしか変更できない (固定メモリ)。実行中に指定された場合は
 # -RestartVM があるときだけ 停止→設定→起動 を行う。停止は正常シャットダウンのみで、
 # 強制電源断は行わない (収集中のデータやファイルシステムを壊しうるため)。
 
@@ -940,7 +940,7 @@ if ($MemoryGB -gt 0) {
     if (-not $mi.Vm) { Write-Error "登録 '$VMName' がありません。-VMName で対象の 登録名を指定してください。"; exit 1 }
 
     Write-Host ""
-    Write-Host "=== EdgeBox のメモリ割り当て ===" -ForegroundColor Cyan
+    Write-Host "=== Edge Box のメモリ割り当て ===" -ForegroundColor Cyan
     Write-Host ("  この PC のメモリ : {0} GB" -f $mi.TotalGB)
     Write-Host ("  現在の設定       : {0} GB{1}" -f $mi.VmGB, $(if ($mi.Dynamic) { " (動的)" } else { " (固定)" }))
     $chk = Test-MemoryPlan $mi.TotalGB $MemoryGB $VMName
@@ -964,20 +964,20 @@ if ($MemoryGB -gt 0) {
             exit 3
         }
         if (-not $NoConfirm) {
-            $ans = Read-Host "  EdgeBox を 停止 → 設定 → 起動 します (収集が数分止まります)。よろしいですか? (y/N)"
+            $ans = Read-Host "  Edge Box を 停止 → 設定 → 起動 します (収集が数分止まります)。よろしいですか? (y/N)"
             if ($ans -ne "y") { exit 0 }
         }
-        Write-Host "  EdgeBox を停止しています (正常シャットダウン)..."
+        Write-Host "  Edge Box を停止しています (正常シャットダウン)..."
         try { Stop-VM -Name $VMName -ErrorAction Stop } catch {
             Write-PinLog "Memory: 停止失敗 $($_.Exception.Message)"
-            Write-Error ("EdgeBox を停止できませんでした: $($_.Exception.Message)`n" +
-                "EdgeBox の管理画面から先にシャットダウンし、停止後にもう一度 -MemoryGB $MemoryGB を実行してください。")
+            Write-Error ("Edge Box を停止できませんでした: $($_.Exception.Message)`n" +
+                "Edge Box の管理画面から先にシャットダウンし、停止後にもう一度 -MemoryGB $MemoryGB を実行してください。")
             exit 1
         }
         $deadline = (Get-Date).AddSeconds(180)
         while ((Get-VM -Name $VMName).State -ne "Off") {
             if ((Get-Date) -gt $deadline) {
-                Write-Error "EdgeBox が 180 秒以内に停止しませんでした。メモリは変更していません。"
+                Write-Error "Edge Box が 180 秒以内に停止しませんでした。メモリは変更していません。"
                 exit 1
             }
             Start-Sleep -Seconds 3
@@ -991,17 +991,17 @@ if ($MemoryGB -gt 0) {
         Write-Host "  メモリを $MemoryGB GB に設定しました。" -ForegroundColor Green
     } catch {
         Write-PinLog "Memory: 設定失敗 $($_.Exception.Message)"
-        if ($state -ne "Off") { try { Start-VM -Name $VMName } catch { } }   # 止めた EdgeBox は必ず起動し直す
+        if ($state -ne "Off") { try { Start-VM -Name $VMName } catch { } }   # 止めた Edge Box は必ず起動し直す
         Write-Error "メモリを設定できませんでした: $($_.Exception.Message)"
         exit 1
     }
     if ($state -ne "Off") {
-        Write-Host "  EdgeBox を起動しています..."
+        Write-Host "  Edge Box を起動しています..."
         try {
             Start-VM -Name $VMName -ErrorAction Stop
             Write-Host "  起動しました。コア固定は自動タスクが数秒後に適用し直します。" -ForegroundColor Green
         } catch {
-            Write-Error "EdgeBox を起動できませんでした: $($_.Exception.Message)"
+            Write-Error "Edge Box を起動できませんでした: $($_.Exception.Message)"
             exit 1
         }
     }
@@ -1009,7 +1009,7 @@ if ($MemoryGB -gt 0) {
 }
 
 # ============================================================ -BootApply (full モードの起動時処理・内部用)
-#   CPU グループは再起動で消えるため、起動のたびに作り直して EdgeBox を固定し、そのあと EdgeBox を起動する。
+#   CPU グループは再起動で消えるため、起動のたびに作り直して Edge Box を固定し、そのあと Edge Box を起動する。
 #   5 分ごとにも呼ばれ、固定が外れていれば作り直す (何度呼んでも同じ結果)
 
 if ($BootApply) {
@@ -1036,8 +1036,8 @@ if ($BootApply) {
 
 # ============================================================ -Watch (常駐・内部用)
 #   3 秒ごとに見回り: (1) 10 秒に 1 回 vmmem / vmwp の固定を確かめ直す
-#                     (2) EdgeBox 用コアに掛かっている Windows 側のプロセスを Windows 用コアへ戻す
-#   状態は cpu-contain-status.json に書き、監視画面『EdgeBox 監視』がそれを表示する
+#                     (2) Edge Box 用コアに掛かっている Windows 側のプロセスを Windows 用コアへ戻す
+#   状態は cpu-contain-status.json に書き、監視画面『Edge Box 監視』がそれを表示する
 
 if ($Watch) {
     Write-PinLog "Watch: 常駐を開始 (PID $PID)"
@@ -1103,7 +1103,7 @@ if ($ApplyRuntime) {
     if ($cfg.Mode -ne "runtime") { exit 0 }   # full モード時はハイパーバイザー側で固定済み
     if ($cfg.VMName) { $VMName = Resolve-VMName ([string]$cfg.VMName) }
 
-    # EdgeBox 起動直後は vmmem が出そろうまで少し待つ (最大 60 秒)
+    # Edge Box 起動直後は vmmem が出そろうまで少し待つ (最大 60 秒)
     $msg = ""
     for ($try = 1; $try -le 12; $try++) {
         try {
@@ -1135,7 +1135,7 @@ if ($ApplyRuntime) {
 # 「いざというとき -Undo で戻せる」ことを、実際に戻して確かめる。
 # 手作業だと途中で中断したときに分割が外れたまま残るため、
 # 何があっても最後に必ず再適用する (finally)。
-# 収集は止まらない (EdgeBox は動いたまま。変わるのはコアの割り当てだけ)。
+# 収集は止まらない (Edge Box は動いたまま。変わるのはコアの割り当てだけ)。
 
 if ($SelfTest) {
     if (-not (Test-Admin)) { Write-Error "管理者権限の PowerShell で実行してください。"; exit 1 }
@@ -1159,7 +1159,7 @@ if ($SelfTest) {
     $guestMask = Get-LpMask @([int[]]$cfg.GuestLps)
 
     function Get-VmmemAffinity([string]$Name) {
-        # 戻り値: vmmem の現在のアフィニティ (EdgeBox 停止中など取得できない場合は $null)
+        # 戻り値: vmmem の現在のアフィニティ (Edge Box 停止中など取得できない場合は $null)
         try {
             $pr = Get-VmProcesses $Name
             if (-not $pr.Vmmem) { return $null }
@@ -1213,13 +1213,13 @@ if ($SelfTest) {
     Write-Host ""
     Write-Host "=== 撤退手順の予行 (-Undo → 再適用) ===" -ForegroundColor Cyan
     Write-Host "  対象  : $tVm"
-    Write-Host "  戻す計画 : Windows = CPU $tHost / EdgeBox = CPU $tGuest"
-    Write-Host "  収集は止まりません (EdgeBox は動いたまま)。最後に必ず元の割り当てへ戻します。"
+    Write-Host "  戻す計画 : Windows = CPU $tHost / Edge Box = CPU $tGuest"
+    Write-Host "  収集は止まりません (Edge Box は動いたまま)。最後に必ず元の割り当てへ戻します。"
     Write-Host ""
 
     $affBefore = Get-VmmemAffinity $tVm
     if ($affBefore -eq $null) {
-        Write-Host "  注意: vmmem が見つからないため (EdgeBox 停止中?)、コア固定の確認は省略します。" -ForegroundColor Yellow
+        Write-Host "  注意: vmmem が見つからないため (Edge Box 停止中?)、コア固定の確認は省略します。" -ForegroundColor Yellow
     }
 
     try {
@@ -1255,7 +1255,7 @@ if ($SelfTest) {
 
     # --- 3) 自動タスクが本当に固定し直せるか ---
     #
-    # ここがいちばん静かに失敗する。分割が外れても Windows も EdgeBox も普通に動くため
+    # ここがいちばん静かに失敗する。分割が外れても Windows も Edge Box も普通に動くため
     # 誰も気付かない。再起動せずに、タスクの「中身」だけを試す
     # (再起動が確かめるのは引き金の方で、それは別途 1-5 で行う)。
     if ($affBefore -ne $null) {
@@ -1319,12 +1319,12 @@ if ($Undo) {
         Unregister-BootTask
         Write-Host "  起動タスク '$BootTaskName' を削除しました" -ForegroundColor Green
     }
-    # full モードで EdgeBox の自動起動を起動タスクに任せていた場合は、元の自動起動設定に戻す
+    # full モードで Edge Box の自動起動を起動タスクに任せていた場合は、元の自動起動設定に戻す
     if ($cfgU -and $cfgU.VmAutoStart -and $cfgU.VmAutoStart.Action) {
         try {
             $vmA = Get-VM -Name $VMName -ErrorAction Stop
             Set-VM -Name $VMName -AutomaticStartAction ([string]$cfgU.VmAutoStart.Action) -AutomaticStartDelay ([int]$cfgU.VmAutoStart.Delay)
-            Write-Host "  EdgeBox の自動起動設定を元に戻しました ($($cfgU.VmAutoStart.Action))" -ForegroundColor Green
+            Write-Host "  Edge Box の自動起動設定を元に戻しました ($($cfgU.VmAutoStart.Action))" -ForegroundColor Green
         } catch { }
     }
     try {
@@ -1347,7 +1347,7 @@ if ($Undo) {
         Write-Host "  自動タスク '$PinTaskName' を削除しました" -ForegroundColor Green
     } catch { Write-Host "  自動タスク: 登録なし" }
 
-    # 2) vmmem / vmwp のコア固定と優先度を戻す (EdgeBox 実行中のみ意味がある)
+    # 2) vmmem / vmwp のコア固定と優先度を戻す (Edge Box 実行中のみ意味がある)
     try {
         $topo = Get-CpuTopology
         $allMask = Get-LpMask @(0..([Math]::Min($topo.Lps, 63) - 1))
@@ -1374,7 +1374,7 @@ if ($Undo) {
         else { Write-Host "  CPU グループ: 登録なし" }
     }
 
-    # 4) 処理能力予約を戻す (EdgeBox 停止中のみ変更可能)
+    # 4) 処理能力予約を戻す (Edge Box 停止中のみ変更可能)
     try {
         $vm = Get-VM -Name $VMName -ErrorAction Stop
         if ((Get-VMProcessor -VMName $VMName).Reserve -gt 0) {
@@ -1382,7 +1382,7 @@ if ($Undo) {
                 Set-VMProcessor -VMName $VMName -Reserve 0
                 Write-Host "  処理能力予約 (Reserve) を 0 に戻しました" -ForegroundColor Green
             } else {
-                Write-Host "  処理能力予約 (Reserve) は EdgeBox 停止中に次で戻せます: Set-VMProcessor -VMName $VMName -Reserve 0" -ForegroundColor Yellow
+                Write-Host "  処理能力予約 (Reserve) は Edge Box 停止中に次で戻せます: Set-VMProcessor -VMName $VMName -Reserve 0" -ForegroundColor Yellow
             }
         }
     } catch { }
@@ -1421,7 +1421,7 @@ if ($Verify) {
     Write-Host "=== CPU コア分割の実測 (${Seconds}秒間の採取) ===" -ForegroundColor Cyan
     Write-Host "  Windows から見える論理 CPU 数: $([Environment]::ProcessorCount) / 物理には $($topo.Lps)"
     if ($cfg) {
-        Write-Host "  計画: Windows = CPU $(ConvertTo-LpRangeText $planHost) / EdgeBox = CPU $(ConvertTo-LpRangeText $planGuest) ($($cfg.Mode) モード)"
+        Write-Host "  計画: Windows = CPU $(ConvertTo-LpRangeText $planHost) / Edge Box = CPU $(ConvertTo-LpRangeText $planGuest) ($($cfg.Mode) モード)"
     } else {
         Write-Host "  計画: 未適用 (cpu-partition.json なし)"
     }
@@ -1429,21 +1429,21 @@ if ($Verify) {
     # ハイパーバイザーの性能カウンター (言語非依存の CIM クラス経由)
     #
     # 重要: 論理プロセッサ カウンターの PercentGuestRunTime は
-    #       「EdgeBox の実行時間」ではなく「パーティションの実行時間」で、
+    #       「Edge Box の実行時間」ではなく「パーティションの実行時間」で、
     #       Windows 自身 (ルート パーティション) の実行も含まれる。
     #       Hyper-V を有効にした Windows は素のハードウェア上ではなく
     #       ルート パーティションとして動くため、ここを引き算しないと
-    #       Windows の処理まで「EdgeBox実行」として数えてしまう。
+    #       Windows の処理まで「Edge Box実行」として数えてしまう。
     #
-    #       LP の Guest = ルート VP (Windows) + すべての EdgeBox の VP
+    #       LP の Guest = ルート VP (Windows) + すべての Edge Box の VP
     #       ルート VP は論理 CPU と 1:1 で固定 (移動しない) ため、
-    #       EdgeBox の実行 = LP の Guest − 同番号のルート VP の Guest で求まる。
+    #       Edge Box の実行 = LP の Guest − 同番号のルート VP の Guest で求まる。
     $lpCls = Get-CimClass -ClassName "Win32_PerfRawData_*HyperVHypervisorLogicalProcessor" -ErrorAction SilentlyContinue |
         Select-Object -First 1
     if (-not $lpCls) {
         Write-Host ""
         Write-Host "ハイパーバイザーの性能カウンターが見つかりません (Hyper-V 無効か、カウンター破損)。" -ForegroundColor Yellow
-        Write-Host "代わりの確認手段: タスクマネージャーで vmmem の CPU 使用がEdgeBox 用コアに寄っているか (詳細タブ→列に「CPU」追加)。"
+        Write-Host "代わりの確認手段: タスクマネージャーで vmmem の CPU 使用がEdge Box 用コアに寄っているか (詳細タブ→列に「CPU」追加)。"
         exit 1
     }
     $rvCls = Get-CimClass -ClassName "Win32_PerfRawData_*HyperVHypervisorRootVirtualProcessor" -ErrorAction SilentlyContinue |
@@ -1477,13 +1477,13 @@ if ($Verify) {
             Write-Host ("  自動タスク: {0} / 前回実行 {1} ({2})" -f `
                 $pinTask.State, $tinfo.LastRunTime.ToString("yyyy-MM-dd HH:mm:ss"), $rtext) -ForegroundColor $rcol
         } else {
-            Write-Host "  自動タスク: $($pinTask.State) / まだ一度も実行されていません (再起動・ログオン・EdgeBox 起動で走ります)" -ForegroundColor Yellow
+            Write-Host "  自動タスク: $($pinTask.State) / まだ一度も実行されていません (再起動・ログオン・Edge Box 起動で走ります)" -ForegroundColor Yellow
         }
     } else {
         Write-Host "  自動タスク: 未登録 — 再起動すると分割は外れます" -ForegroundColor Yellow
     }
 
-    Write-Host "  採取中... (EdgeBox に負荷がかかっているほど分かりやすい結果になります)"
+    Write-Host "  採取中... (Edge Box に負荷がかかっているほど分かりやすい結果になります)"
 
     function Get-CounterMap($ClassName) {
         # 末尾の数字をインスタンス番号として取り出す (_Total は数字で終わらないので除外)
@@ -1535,7 +1535,7 @@ if ($Verify) {
         if ($rv2.ContainsKey($lp)) { $winPct = Get-DeltaPct $rv1[$lp] $rv2[$lp] "PercentGuestRunTime" }
         $vmPct = [Math]::Max(0, $lpGuest - $winPct)
         $side = ""
-        if ($planGuest -contains $lp) { $side = "EdgeBox 用" }
+        if ($planGuest -contains $lp) { $side = "Edge Box 用" }
         elseif ($planHost -contains $lp) { $side = "Windows 用" }
         $rows += [pscustomobject]@{
             LP = $lp; PlanSide = $side; VmPct = $vmPct; WinPct = $winPct
@@ -1550,24 +1550,24 @@ if ($Verify) {
     if (-not $rvCls) {
         Write-Host ""
         Write-Host "注意: ルートプロセッサのカウンターが無いため、Windows 自身の実行を分離できません。" -ForegroundColor Yellow
-        Write-Host "      下表の『EdgeBox 実行%』には Windows の処理も混ざります (判定は参考値)。" -ForegroundColor Yellow
+        Write-Host "      下表の『Edge Box 実行%』には Windows の処理も混ざります (判定は参考値)。" -ForegroundColor Yellow
     }
 
     Write-Host ""
-    Write-Host ("  {0,4} {1,-10} {2,10} {3,14} {4,12}" -f "CPU", "割り当て", "EdgeBox実行%", "Windows実行%", "HV内部%")
+    Write-Host ("  {0,4} {1,-10} {2,10} {3,14} {4,12}" -f "CPU", "割り当て", "Edge Box実行%", "Windows実行%", "HV内部%")
     foreach ($r in $rows) {
         $mark = ""
-        if ($r.PlanSide -eq "Windows 用" -and $r.VmPct -ge 3)  { $mark = " ← EdgeBox がはみ出している" }
-        if ($r.PlanSide -eq "EdgeBox 用" -and $r.WinPct -ge 20) { $mark = " ← Windows 側の処理が多い" }
+        if ($r.PlanSide -eq "Windows 用" -and $r.VmPct -ge 3)  { $mark = " ← Edge Box がはみ出している" }
+        if ($r.PlanSide -eq "Edge Box 用" -and $r.WinPct -ge 20) { $mark = " ← Windows 側の処理が多い" }
         Write-Host ("  {0,4} {1,-10} {2,10:N1} {3,14:N1} {4,12:N1}{5}" -f $r.LP, $r.PlanSide, $r.VmPct, $r.WinPct, $r.HvPct, $mark)
     }
 
-    # 他の EdgeBox が動いていると、その実行も上の「EdgeBox 実行%」に混ざる
+    # 他の Edge Box が動いていると、その実行も上の「Edge Box 実行%」に混ざる
     $others = @($vp2.Keys | Where-Object { $_ -ne $VMName -and $_ -notmatch '^_Total' })
     if ($others.Count -gt 0) {
         Write-Host ""
-        Write-Host "注意: 他にも稼働中の EdgeBox があります: $($others -join ', ')" -ForegroundColor Yellow
-        Write-Host "      その分も『EdgeBox 実行%』に含まれるため、判定がぶれることがあります。" -ForegroundColor Yellow
+        Write-Host "注意: 他にも稼働中の Edge Box があります: $($others -join ', ')" -ForegroundColor Yellow
+        Write-Host "      その分も『Edge Box 実行%』に含まれるため、判定がぶれることがあります。" -ForegroundColor Yellow
     }
 
     if ($planGuest.Count -gt 0) {
@@ -1576,16 +1576,16 @@ if ($Verify) {
         Write-Host ""
         if ($gAll -gt 2) {
             $pct = [Math]::Round(100.0 * $gOn / $gAll, 1)
-            Write-Host "  EdgeBox の CPU 実行のうち、計画どおりEdgeBox 用コア上で実行された割合: $pct%" -ForegroundColor Cyan
+            Write-Host "  Edge Box の CPU 実行のうち、計画どおりEdge Box 用コア上で実行された割合: $pct%" -ForegroundColor Cyan
             if ($pct -ge 95) { Write-Host "  → 分割は効いています。" -ForegroundColor Green }
-            elseif ($pct -ge 70) { Write-Host "  → おおむね効いていますが、完全ではありません (EdgeBox 起動後に -Apply した場合は、EdgeBox を再起動すると揃います)。" -ForegroundColor Yellow }
+            elseif ($pct -ge 70) { Write-Host "  → おおむね効いていますが、完全ではありません (Edge Box 起動後に -Apply した場合は、Edge Box を再起動すると揃います)。" -ForegroundColor Yellow }
             else { Write-Host "  → 分割が効いていません。-Apply の実行状況と、上の『現在の固定』の範囲を確認してください。" -ForegroundColor Red }
         } else {
-            Write-Host "  EdgeBox の CPU 使用がほぼゼロのため判定できません (計 $([Math]::Round($gAll,1))%)。" -ForegroundColor Yellow
+            Write-Host "  Edge Box の CPU 使用がほぼゼロのため判定できません (計 $([Math]::Round($gAll,1))%)。" -ForegroundColor Yellow
             Write-Host "  上の『現在の固定』が計画どおりなら、割り当て自体は OS に受理されています。" -ForegroundColor Yellow
         }
         $winTotal = [double](($rows | Measure-Object -Property WinPct -Sum).Sum)
-        Write-Host "  (参考) Windows 自身の実行合計: $([Math]::Round($winTotal,1))% / EdgeBox の実行合計: $([Math]::Round($gAll,1))%"
+        Write-Host "  (参考) Windows 自身の実行合計: $([Math]::Round($winTotal,1))% / Edge Box の実行合計: $([Math]::Round($gAll,1))%"
     }
     exit 0
 }
@@ -1613,7 +1613,7 @@ if (-not $Apply) {
     Write-Host "  CPU               : $($topo.Name)"
     Write-Host ("  物理コア / 論理CPU : {0} / {1} (SMT x{2}{3})" -f $topo.Cores, $topo.Lps, $topo.SmtPerCore,
         $(if ($topo.HybridSuspected) { "・P/E混成の可能性" } else { "" }))
-    Write-Host "  スケジューラ       : $schedNow $(if ($schedNow -eq 'root') { '(クライアント既定。EdgeBox はWindows のスレッドとして実行)' })"
+    Write-Host "  スケジューラ       : $schedNow $(if ($schedNow -eq 'root') { '(クライアント既定。Edge Box はWindows のスレッドとして実行)' })"
     if ($bcd) {
         Write-Host "  bcdedit 設定      : hypervisorschedulertype=$(if ($bcd.SchedulerType) { $bcd.SchedulerType } else { '(既定)' })  hypervisorrootproc=$(if ($bcd.RootProc) { $bcd.RootProc } else { '(既定)' })"
     } else {
@@ -1625,7 +1625,7 @@ if (-not $Apply) {
             (Get-VMProcessor -VMName $VMName).Count, (Get-VMProcessor -VMName $VMName).Reserve)
         try {
             $mi0 = Get-MemoryInfo $VMName
-            Write-Host ("  メモリ            : EdgeBox {0} GB{1} / この PC {2} GB (Windows 側 {3} GB)" -f $mi0.VmGB,
+            Write-Host ("  メモリ            : Edge Box {0} GB{1} / この PC {2} GB (Windows 側 {3} GB)" -f $mi0.VmGB,
                 $(if ($mi0.Dynamic) { " (動的)" } else { "" }), $mi0.TotalGB, [Math]::Round($mi0.TotalGB - $mi0.VmGB, 1))
         } catch { }
         if ($vm.State -eq "Running") {
@@ -1645,7 +1645,7 @@ if (-not $Apply) {
     Write-Host "  CpuGroups.exe     : $(if ($exe) { $exe } else { '(なし。full モードの完全固定時に使用)' })"
     if ($cfg) {
         Write-Host ""
-        Write-Host "  適用済みの計画    : $($cfg.Mode) モード / Windows = CPU $(ConvertTo-LpRangeText @([int[]]$cfg.HostLps)) / EdgeBox = CPU $(ConvertTo-LpRangeText @([int[]]$cfg.GuestLps))" -ForegroundColor Green
+        Write-Host "  適用済みの計画    : $($cfg.Mode) モード / Windows = CPU $(ConvertTo-LpRangeText @([int[]]$cfg.HostLps)) / Edge Box = CPU $(ConvertTo-LpRangeText @([int[]]$cfg.GuestLps))" -ForegroundColor Green
         if ($cfg.Mode -eq "runtime") { Write-Host "  Windows の締め出し : $(Get-ContainStatusText)" }
         if ($cfg.Mode -eq "full")    { Write-Host "  完全分割の状態    : $(Get-FullStatusText)" }
     } else {
@@ -1660,14 +1660,14 @@ if (-not $Apply) {
         if ($previewMode -eq "") { $previewMode = "runtime" }
         $plan = Resolve-Plan $topo $previewMode
         Write-Host "  Windows : CPU $(ConvertTo-LpRangeText $plan.HostLps) ($($plan.HostLps.Count) 論理)"
-        Write-Host "  EdgeBox      : CPU $(ConvertTo-LpRangeText $plan.GuestLps) ($($plan.GuestLps.Count) 論理)"
+        Write-Host "  Edge Box      : CPU $(ConvertTo-LpRangeText $plan.GuestLps) ($($plan.GuestLps.Count) 論理)"
         Write-Host ""
         # 文字列の中に $( ... "..." ... ) を書くと Windows PowerShell 5.1 が解釈できないため、
         # 引数の文面は先に組み立ててから埋め込む
         $applyHint = if ($HostLps) { "-HostLps `"$HostLps`"" } else { "-HostCores $HostCores" }
         if ($GuestLps) { $applyHint += " -GuestLps `"$GuestLps`"" }
         Write-Host "  適用するには: .\cpu-partition.ps1 -Apply -Mode runtime $applyHint" -ForegroundColor Cyan
-        Write-Host "    -Mode runtime : 再起動不要。EdgeBox を専用コアへ固定 (まず推奨)"
+        Write-Host "    -Mode runtime : 再起動不要。Edge Box を専用コアへ固定 (まず推奨)"
         Write-Host "    -Mode full    : 再起動 2 回で完全分割 (Windows 側もコアから締め出す)"
     } else {
         Write-Host ""
@@ -1689,18 +1689,18 @@ if ($Mode -eq "") {
 }
 if (-not $vm -and -not $AllowMissingVM) {
     Write-Error ("登録 '$VMName' がありません。-VMName で対象の 登録名を指定してください (一覧: Get-VM)。`n" +
-        "まだ EdgeBox を作っていない場合は -AllowMissingVM を付けると、計画だけ保存して EdgeBox の作成・起動後に自動適用します。")
+        "まだ Edge Box を作っていない場合は -AllowMissingVM を付けると、計画だけ保存して Edge Box の作成・起動後に自動適用します。")
     exit 1
 }
 if (-not $vm) {
-    Write-Host "登録 '$VMName' は未作成です。計画を保存し、EdgeBox を作成・起動した時点で自動適用します。" -ForegroundColor Yellow
+    Write-Host "登録 '$VMName' は未作成です。計画を保存し、Edge Box を作成・起動した時点で自動適用します。" -ForegroundColor Yellow
 }
 
 # 適用のたびに指定がなければ、保存済み計画を引き継ぐ (full の 2 段階目で同じ指定を省略可能に)
 if ($HostCores -eq 0 -and $HostLps -eq "" -and $cfg -and $cfg.Mode -eq $Mode) {
     $HostLps  = ConvertTo-LpRangeText @([int[]]$cfg.HostLps)
     $GuestLps = ConvertTo-LpRangeText @([int[]]$cfg.GuestLps)
-    Say "保存済みの計画を使用します (Windows = $HostLps / EdgeBox = $GuestLps)" "Cyan"
+    Say "保存済みの計画を使用します (Windows = $HostLps / Edge Box = $GuestLps)" "Cyan"
 }
 $plan = Resolve-Plan $topo $Mode
 $hostText  = ConvertTo-LpRangeText $plan.HostLps
@@ -1717,9 +1717,9 @@ try {
 Write-Host ""
 Write-Host "=== CPU コア分割の適用 ($Mode モード) ===" -ForegroundColor Cyan
 Write-Host "  Windows : CPU $hostText ($($plan.HostLps.Count) 論理)"
-Write-Host "  EdgeBox      : CPU $guestText ($($plan.GuestLps.Count) 論理)"
+Write-Host "  Edge Box      : CPU $guestText ($($plan.GuestLps.Count) 論理)"
 
-# vCPU 数とEdgeBox 用コア数の一致を確認 (1 論理 CPU = 1 プロセッサが理想形)
+# vCPU 数とEdge Box 用コア数の一致を確認 (1 論理 CPU = 1 プロセッサが理想形)
 $vcpu = 0
 if ($vm) { $vcpu = [int](Get-VMProcessor -VMName $VMName).Count }
 if ($vm -and $vcpu -ne $plan.GuestLps.Count) {
@@ -1727,8 +1727,8 @@ if ($vm -and $vcpu -ne $plan.GuestLps.Count) {
         Write-Host "  プロセッサ数を $vcpu → $($plan.GuestLps.Count) に合わせます (1 コア = 1 プロセッサが理想のため)" -ForegroundColor Cyan
         Set-VMProcessor -VMName $VMName -Count $plan.GuestLps.Count
     } else {
-        Write-Host "  注意: プロセッサ数 ($vcpu) がEdgeBox 用論理 CPU 数 ($($plan.GuestLps.Count)) と不一致です。" -ForegroundColor Yellow
-        Write-Host "        EdgeBox 停止中に再度 -Apply すると自動調整します (ずれたままでも動きますが理想は 1:1)。" -ForegroundColor Yellow
+        Write-Host "  注意: プロセッサ数 ($vcpu) がEdge Box 用論理 CPU 数 ($($plan.GuestLps.Count)) と不一致です。" -ForegroundColor Yellow
+        Write-Host "        Edge Box 停止中に再度 -Apply すると自動調整します (ずれたままでも動きますが理想は 1:1)。" -ForegroundColor Yellow
     }
 }
 
@@ -1755,13 +1755,13 @@ if ($Mode -eq "runtime") {
         HostLps = $plan.HostLps; GuestLps = $plan.GuestLps
         NoPriorityBoost = [bool]$NoPriorityBoost
         HostContain = (-not $NoContain)   # Windows 側のプロセスを Windows 用コアへ締め出す常駐を使う
-        PendingVM = (-not $vm)     # EdgeBox 未作成のまま保存した計画かどうか
+        PendingVM = (-not $vm)     # Edge Box 未作成のまま保存した計画かどうか
         UpdatedAt = (Get-Date -Format "yyyy-MM-dd HH:mm:ss")
     })
-    Write-PinLog "Apply(runtime): Windows=$hostText EdgeBox=$guestText contain=$(-not $NoContain)"
+    Write-PinLog "Apply(runtime): Windows=$hostText Edge Box=$guestText contain=$(-not $NoContain)"
 
     $taskNote = Register-PinTask
-    Write-Host "  EdgeBox 起動時に自動で固定し直すタスク '$PinTaskName' を登録しました" -ForegroundColor Green
+    Write-Host "  Edge Box 起動時に自動で固定し直すタスク '$PinTaskName' を登録しました" -ForegroundColor Green
     if ($taskNote) { Write-Host "  ($taskNote)" -ForegroundColor Yellow }
 
     if ($NoContain) {
@@ -1781,9 +1781,9 @@ if ($Mode -eq "runtime") {
         if ($msg -like "ok:*") { Write-Host "  即時適用: $($msg.Substring(4))" -ForegroundColor Green }
         else { Write-Host "  即時適用: $msg" -ForegroundColor Yellow }
     } elseif ($vm) {
-        Write-Host "  EdgeBox は停止中です。次回起動時に自動タスクが適用します。"
+        Write-Host "  Edge Box は停止中です。次回起動時に自動タスクが適用します。"
     } else {
-        Write-Host "  EdgeBox が未作成のため、作成して起動した時点で自動タスクが適用します。" -ForegroundColor Yellow
+        Write-Host "  Edge Box が未作成のため、作成して起動した時点で自動タスクが適用します。" -ForegroundColor Yellow
     }
 
     Write-Host ""
@@ -1795,7 +1795,7 @@ if ($Mode -eq "runtime") {
         Write-Host "  - Windows 側のプロセスは常駐が 3 秒ごとに CPU $hostText へ固定し直します (新しいプロセスも数秒で戻る)"
         Write-Host "  - 残るのは固定できない保護プロセスとカーネル・割り込みの分だけ (通常 1% 未満)。それも無くすには -Mode full"
     }
-    Write-Host "  - 効き具合の実測: .\cpu-partition.ps1 -Verify  / 常時の確認: 『EdgeBox 監視』の「分離の状態」" -ForegroundColor Cyan
+    Write-Host "  - 効き具合の実測: .\cpu-partition.ps1 -Verify  / 常時の確認: 『Edge Box 監視』の「分離の状態」" -ForegroundColor Cyan
     exit 0
 }
 
@@ -1825,7 +1825,7 @@ if (-not $bcdReady) {
     if (-not $exe) {
         $get = [bool]$AutoGetTools
         if (-not $get -and -not $NoConfirm) {
-            Write-Host "EdgeBox 側の完全固定には Microsoft 製 CpuGroups.exe が必要です (未検出)。" -ForegroundColor Yellow
+            Write-Host "Edge Box 側の完全固定には Microsoft 製 CpuGroups.exe が必要です (未検出)。" -ForegroundColor Yellow
             $get = ((Read-Host "Microsoft Download Center から取得しますか? (y/N)") -eq "y")
         }
         if ($get) {
@@ -1838,13 +1838,13 @@ if (-not $bcdReady) {
     Invoke-Bcdedit @("/set", "hypervisorschedulertype", $Scheduler)
     Invoke-Bcdedit @("/set", "hypervisorrootproc", "$wantRootProc")
 
-    # EdgeBox の自動起動は起動タスクに任せる (CPU グループに固定してから起動するため)。元の設定は控えて -Undo で戻す
+    # Edge Box の自動起動は起動タスクに任せる (CPU グループに固定してから起動するため)。元の設定は控えて -Undo で戻す
     $auto = $null
     if ($vm) {
         try {
             $auto = @{ Action = [string]$vm.AutomaticStartAction; Delay = [int]$vm.AutomaticStartDelay }
             Set-VM -Name $VMName -AutomaticStartAction Nothing
-            Write-Host "  EdgeBox の自動起動は起動タスク '$BootTaskName' が行います (固定してから起動)" -ForegroundColor Green
+            Write-Host "  Edge Box の自動起動は起動タスク '$BootTaskName' が行います (固定してから起動)" -ForegroundColor Green
         } catch { $auto = $null }
     }
 
@@ -1864,17 +1864,17 @@ if (-not $bcdReady) {
     Stop-WatchTask
     Register-BootTask
     Write-FullStatus @{ MinrootOk = $false; Bound = $false; Message = "再起動待ち (再起動後に起動タスクが CPU グループを作成します)"; HostLps = $hostText; GuestLps = $guestText }
-    Write-Host "  起動タスク '$BootTaskName' を登録しました (再起動後、EdgeBox の固定まで自動で完了します)" -ForegroundColor Green
+    Write-Host "  起動タスク '$BootTaskName' を登録しました (再起動後、Edge Box の固定まで自動で完了します)" -ForegroundColor Green
 
     Write-Host ""
     Write-Host "書き込みました。PC を再起動してください。再起動後は自動で完了します。" -ForegroundColor Green
-    Write-Host "  成立の確認: .\cpu-partition.ps1 (現状表示) または『EdgeBox 監視』の「分離の状態」" -ForegroundColor Cyan
+    Write-Host "  成立の確認: .\cpu-partition.ps1 (現状表示) または『Edge Box 監視』の「分離の状態」" -ForegroundColor Cyan
     exit 0
 }
 
-# ---- 第 2 段階: 再起動後の確認と EdgeBox のコア固定 (起動タスクと同じ処理を手動で行う) ----
+# ---- 第 2 段階: 再起動後の確認と Edge Box のコア固定 (起動タスクと同じ処理を手動で行う) ----
 Write-Host ""
-Write-Host "【第 2 段階】再起動後の反映確認と EdgeBox のコア固定を行います。" -ForegroundColor Cyan
+Write-Host "【第 2 段階】再起動後の反映確認と Edge Box のコア固定を行います。" -ForegroundColor Cyan
 Register-BootTask   # 旧版で登録されていない場合に備えて (再登録は無害)
 $bound = Invoke-FullStage2 $plan.HostLps $plan.GuestLps $true
 $cfgF = Get-SavedConfig
@@ -1893,12 +1893,12 @@ Write-Host ""
 if ($bound) {
     Write-Host "完全分割が成立しました (Linux 主構成の isolcpus + vcpupin 相当)。" -ForegroundColor Green
     Write-Host "  - Windows : CPU $hostText から出られません (minroot)"
-    Write-Host "  - EdgeBox      : CPU $guestText から出られません (CPU グループ。起動のたびに '$BootTaskName' が作り直します)"
+    Write-Host "  - Edge Box      : CPU $guestText から出られません (CPU グループ。起動のたびに '$BootTaskName' が作り直します)"
 } else {
     Write-Host "準分割で適用しました。" -ForegroundColor Yellow
     Write-Host "  - Windows : CPU $hostText から出られません (minroot) ← ここは完全"
-    Write-Host "  - EdgeBox      : 空いている CPU $guestText 上でほぼ実行されます (ハイパーバイザー任せ + 予約で保証)"
-    Write-Host "  - 起動タスク '$BootTaskName' が 5 分ごとに固定を試し直します。EdgeBox 停止中に効くこともあります"
+    Write-Host "  - Edge Box      : 空いている CPU $guestText 上でほぼ実行されます (ハイパーバイザー任せ + 予約で保証)"
+    Write-Host "  - 起動タスク '$BootTaskName' が 5 分ごとに固定を試し直します。Edge Box 停止中に効くこともあります"
 }
 Write-Host ""
-Write-Host "確認: 『EdgeBox 監視』の「分離の状態」、または .\cpu-partition.ps1 -Verify" -ForegroundColor Cyan
+Write-Host "確認: 『Edge Box 監視』の「分離の状態」、または .\cpu-partition.ps1 -Verify" -ForegroundColor Cyan

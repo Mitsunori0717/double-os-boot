@@ -1,16 +1,16 @@
 ﻿<#
 .SYNOPSIS
-    EdgeBox の画面表示を管理します (左右モニターへの自動表示)。
-    すべての設定は『EdgeBox表示設定』の設定コンソール (-Settings) で変更できます。
+    Edge Box の画面表示を管理します (左右モニターへの自動表示)。
+    すべての設定は『Edge Box表示設定』の設定コンソール (-Settings) で変更できます。
 
 .EXAMPLE
     .\03-field-display-kiosk.ps1              # 設定内容で今すぐ表示
     .\03-field-display-kiosk.ps1 -Settings    # 設定コンソールを開く
-    .\03-field-display-kiosk.ps1 -Setup       # デスクトップに『EdgeBox表示設定』アイコンを作成
+    .\03-field-display-kiosk.ps1 -Setup       # デスクトップに『Edge Box表示設定』アイコンを作成
     .\03-field-display-kiosk.ps1 -Install     # ログオン時の自動表示を登録
     .\03-field-display-kiosk.ps1 -Uninstall   # 自動表示を解除
-    .\03-field-display-kiosk.ps1 -ConsoleResolution auto   # コンソールの解像度をモニターに合わせる (EdgeBox 停止中)
-    .\03-field-display-kiosk.ps1 -ApplyResolution         # 設定済みの解像度を EdgeBox に反映 (停止中のみ。起動前に 02/10 が呼ぶ)
+    .\03-field-display-kiosk.ps1 -ConsoleResolution auto   # コンソールの解像度をモニターに合わせる (Edge Box 停止中)
+    .\03-field-display-kiosk.ps1 -ApplyResolution         # 設定済みの解像度を Edge Box に反映 (停止中のみ。起動前に 02/10 が呼ぶ)
 
 .NOTES
     動作の記録は display-log.txt に残ります (うまく表示されないときはこれを確認)。
@@ -27,7 +27,7 @@ param(
     [switch]$EscWatcher,
     [switch]$Splash,
     [switch]$NoSplash,
-    [string]$CoverText = "",     # 左画面の覆いに出す文字 (既定: 電源 ON 時の「EdgeBox 起動中」)
+    [string]$CoverText = "",     # 左画面の覆いに出す文字 (既定: 電源 ON 時の「Edge Box 起動中」)
     [switch]$Backdrop,
     [string]$BackdropBounds,
     [switch]$Notice,          # 内部用: 右画面の右上に数秒だけ出す小さな案内 (別プロセスで自分で閉じる)
@@ -35,21 +35,21 @@ param(
     [int]$NoticeSec = 5,
     [string]$NoticeBounds = "",   # 右画面の範囲 "X,Y,W,H"
     [switch]$ConsoleCloser,
-    [switch]$KeepConsole,     # コンソールを自動で閉じない (『EdgeBox 画面』アイコン用)
+    [switch]$KeepConsole,     # コンソールを自動で閉じない (『Edge Box 画面』アイコン用)
     [switch]$LeftGuard,       # 内部用: 左画面の見張り役 (コンソールの全画面を固定し、他の窓を右へ)
     [switch]$UrlRetry,        # 内部用: 管理画面が応答してから右画面のブラウザを開き直す (起動時に応答が無かった場合)
     [int]$CloserDelaySec = 30,
     [string]$CloserWaitUrl = "",
     [string]$ConsoleResolution,
-    [switch]$ApplyResolution,   # 内部用: 『設定』の解像度を、EdgeBox が停止中なら反映して終わる (起動前に呼ぶ)
+    [switch]$ApplyResolution,   # 内部用: 『設定』の解像度を、Edge Box が停止中なら反映して終わる (起動前に呼ぶ)
     [int]$TimeoutSec  = 420,
     [int]$UrlTimeoutSec = 900   # 管理画面 (右画面の URL) の応答を待つ上限。左のコンソールは待たずに先に出す
 )
 
 $ErrorActionPreference = "Stop"
 
-# -VMName を明示していない場合、既定名の EdgeBox が無ければ、EdgeBox のディスク
-# (物理ディスクのパススルー) を持つ EdgeBox を探して使う。00-field-launcher.ps1 と
+# -VMName を明示していない場合、既定名の Edge Box が無ければ、Edge Box のディスク
+# (物理ディスクのパススルー) を持つ Edge Box を探して使う。00-field-launcher.ps1 と
 # 同じ考え方で、登録名が「EdgeBox」でなくても (旧名称のままでも) そのまま動くようにする
 if (-not $PSBoundParameters.ContainsKey("VMName") -and -not ($Splash -or $Backdrop -or $Notice -or $EscWatcher -or $ConsoleCloser -or $LeftGuard -or $UrlRetry) -and
     -not (Get-VM -Name $VMName -ErrorAction SilentlyContinue)) {
@@ -92,8 +92,8 @@ function Set-Status([string]$m) {
     try { Set-Content -Path $StatusFile -Value $m -Encoding UTF8 -ErrorAction SilentlyContinue } catch { }
 }
 
-# CPU コア分割ツール (別フォルダ windows-cpu-partition) が full モードなら、EdgeBox を起動する前に
-# 起動タスクと同じ処理を呼び、CPU グループに固定してから起動する (固定は EdgeBox 停止中に確実に効く)。
+# CPU コア分割ツール (別フォルダ windows-cpu-partition) が full モードなら、Edge Box を起動する前に
+# 起動タスクと同じ処理を呼び、CPU グループに固定してから起動する (固定は Edge Box 停止中に確実に効く)。
 # ツールが無ければ何もしない (互いに独立。あるときだけ順番を譲る)。戻り値: 呼んだか
 function Invoke-CpuPartitionBoot {
     try {
@@ -125,7 +125,7 @@ $SplashReadyFile   = Join-Path $PSScriptRoot "display-splash-ready.flag"     # �
 # ============================================================
 #  モニターの座標を実ピクセルで扱う
 #  powershell.exe は拡大率 (DPI) を知らないため、拡大率 125% などの環境では、モニターの大きさや窓の位置が
-#  縮めた値で見える (1920x1080 が 1536x864 に見える)。EdgeBox に渡す解像度や全画面の判定がずれるため、
+#  縮めた値で見える (1920x1080 が 1536x864 に見える)。Edge Box に渡す解像度や全画面の判定がずれるため、
 #  表示処理のプロセスは最初に DPI 対応にし、以後の座標はすべて実ピクセルにそろえる。
 #  起動中画面と設定画面は見た目を変えないよう従来のまま (必要な値は Get-PhysicalScreens で実ピクセルを測る)
 # ============================================================
@@ -317,7 +317,7 @@ function Get-ConsoleTopWindowDiag {
 }
 
 # ============================================================
-#  起動中画面: 表示準備が終わるまで、左端のモニター (EdgeBox のコンソールが出る画面) を黒い画面で覆う
+#  起動中画面: 表示準備が終わるまで、左端のモニター (Edge Box のコンソールが出る画面) を黒い画面で覆う
 #
 #  覆いは「最前面」かつ「フォーカスを取らない」窓にする (SplashCover):
 #    - 最前面: コンソールの窓を開いて最大化し、全画面に切り替えるまでの途中の窓は、覆いの下に隠れて見えない。
@@ -365,9 +365,9 @@ if ($Splash) {
     $script:SplashDots = 0
     $script:SplashTick = 0
     $script:EscSince = $null
-    # 覆いに出す文字。電源 ON のときは「EdgeBox 起動中」、
+    # 覆いに出す文字。電源 ON のときは「Edge Box 起動中」、
     # 表示だけ戻すとき (Ctrl+Alt+K など) は呼び出し側が「画面を戻しています」などを渡す
-    $script:SplashMsg = if ($CoverText) { $CoverText } else { "EdgeBox 起動中" }
+    $script:SplashMsg = if ($CoverText) { $CoverText } else { "Edge Box 起動中" }
     # 表示処理の本体 (このスクリプトを補助モードなしで実行しているプロセス) が動いているか。
     # 本体が起動しなかった / 途中で止まった場合に、黒い画面だけが残らないようにするための確認
     function Test-MainRunning {
@@ -388,20 +388,23 @@ if ($Splash) {
         $f.BackColor = [System.Drawing.Color]::Black
         $f.TopMost = $true
         $f.ShowInTaskbar = $false
+        # 文字は画面の下のほうに小さく出す (真ん中に大きくは出さない)。黒い覆いはそのまま全画面
         $main = New-Object System.Windows.Forms.Label
         $main.Name = "main"
-        $main.Dock = "Fill"
-        $main.TextAlign = "MiddleCenter"
+        $main.Dock = "Bottom"
+        $main.Height = 80
+        $main.Padding = New-Object System.Windows.Forms.Padding(0, 0, 0, 24)
+        $main.TextAlign = "BottomCenter"
         $main.BackColor = [System.Drawing.Color]::Black
-        $main.ForeColor = [System.Drawing.Color]::White
-        $main.Font = New-Object System.Drawing.Font("Meiryo UI", 26)
+        $main.ForeColor = [System.Drawing.Color]::Gray
+        $main.Font = New-Object System.Drawing.Font("Meiryo UI", 12)
         $main.Text = $script:SplashMsg
-        # 下の説明文 (進み具合) は出さない。「EdgeBox 起動中」だけ
+        # 進み具合などの説明文は出さない。「Edge Box 起動中」だけ
         $f.Controls.Add($main)
         return $f
     }
 
-    # 左端のモニター (EdgeBox のコンソールが出る画面) だけを「EdgeBox 起動中」で覆う
+    # 左端のモニター (Edge Box のコンソールが出る画面) だけを「Edge Box 起動中」で覆う
     # (あとから 2 枚目が認識されて左端が変わったらそちらへ移す)。右画面 (Windows のデスクトップ) は覆わない
     $script:LeftOff = $false
     function Sync-SplashScreens {
@@ -583,7 +586,7 @@ if ($Notice) {
 }
 
 # ============================================================
-#  ESC 見張り役: EdgeBox 表示用ブラウザ窓が前面・最大化のときだけ ESC で解除
+#  ESC 見張り役: Edge Box 表示用ブラウザ窓が前面・最大化のときだけ ESC で解除
 # ============================================================
 if ($EscWatcher) {
     Add-Type -AssemblyName System.Windows.Forms
@@ -633,8 +636,8 @@ public class EscApi {
 }
 
 # ============================================================
-#  コンソール自動クローズ: EdgeBox の起動を確認したら、コンソール画面と黒背景を閉じる
-#  (EdgeBox の操作は Web 管理画面で行うため、起動後のコンソールは黒い画面が残るだけになる)
+#  コンソール自動クローズ: Edge Box の起動を確認したら、コンソール画面と黒背景を閉じる
+#  (Edge Box の操作は Web 管理画面で行うため、起動後のコンソールは黒い画面が残るだけになる)
 # ============================================================
 if ($ConsoleCloser) {
     # 起動完了の目印になる URL (管理画面) が指定されていれば、応答するまで待つ
@@ -662,7 +665,7 @@ if ($ConsoleCloser) {
     Start-Sleep -Seconds $CloserDelaySec
     $vm = Get-VM -Name $VMName -ErrorAction SilentlyContinue
     if (-not ($vm -and $vm.State -eq "Running")) {
-        Log "コンソール自動クローズ: EdgeBox が実行中でないため閉じません (起動の様子を確認できるよう残します)。"
+        Log "コンソール自動クローズ: Edge Box が実行中でないため閉じません (起動の様子を確認できるよう残します)。"
         exit 0
     }
     $procs = @(Get-Process vmconnect -ErrorAction SilentlyContinue)
@@ -679,7 +682,7 @@ if ($ConsoleCloser) {
     Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" -ErrorAction SilentlyContinue |
         Where-Object { $_.CommandLine -match '-Backdrop' -and $_.ProcessId -ne $PID } |
         ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
-    Log "コンソール自動クローズ: EdgeBox は起動済みのため、コンソール画面を閉じました (EdgeBox は動いています。見たいときはデスクトップの『EdgeBox 画面』)。"
+    Log "コンソール自動クローズ: Edge Box は起動済みのため、コンソール画面を閉じました (Edge Box は動いています。見たいときはデスクトップの『Edge Box 画面』)。"
     exit 0
 }
 
@@ -703,7 +706,7 @@ function Stop-UrlRetry {
 #  設定ファイル
 # ============================================================
 $DefaultConfig = [ordered]@{
-    "_説明"             = "EdgeBox 表示の設定。『EdgeBox表示設定』アイコンから編集できます。"
+    "_説明"             = "Edge Box 表示の設定。『Edge Box表示設定』アイコンから編集できます。"
     "RightUrl"          = ""       # 右画面は通常の Windows デスクトップ (URL を入れるとブラウザで表示)
     "RightFullScreen"   = $false
     "LeftUrl"           = "console"
@@ -713,7 +716,7 @@ $DefaultConfig = [ordered]@{
     "ConsoleStripFrame" = $true
     "ConsoleAutoClose"  = $false   # コンソール窓は閉じない (閉じてほしい場合だけオン)
     "ConsoleAutoCloseV2" = $true   # 「閉じない」既定に切り替え済みの印 (旧設定ファイルの移行用)
-    "ConsoleHideBar"    = $true    # 全画面時に上部の接続バー (「localhost 上の EdgeBox」の帯) を出さない
+    "ConsoleHideBar"    = $true    # 全画面時に上部の接続バー (「localhost 上の Edge Box」の帯) を出さない
     "LeftGuard"         = $true    # 左画面をコンソールの全画面で固定 (他の窓は右へ移し、全画面が外れたら戻す)
     "LeftGuardHotkey"   = "Alt+F11" # 固定の解除/再固定に使うキー
     "StowHotkey"        = "Ctrl+Alt+K" # 長押しでコンソールを収納 (最小化) ⇔ 全画面に戻す
@@ -764,7 +767,7 @@ $LeftFull  = Get-SideFullScreen "Left"  $LeftUrl
 $RightFull = Get-SideFullScreen "Right" $RightUrl
 
 # ============================================================
-#  左画面の見張り役 (内部用): EdgeBox のコンソール全画面を左画面に固定し、
+#  左画面の見張り役 (内部用): Edge Box のコンソール全画面を左画面に固定し、
 #  左画面に出てきた他の窓は右画面へ移す。解除/再固定はホットキーだけ
 # ============================================================
 # ============================================================
@@ -783,7 +786,7 @@ if ($UrlRetry) {
             exit 0
         }
     }
-    Log "管理画面の後追い: 90 分待っても応答しないため終了します (『EdgeBox 再起動』で表示し直せます)。"
+    Log "管理画面の後追い: 90 分待っても応答しないため終了します (『Edge Box 再起動』で表示し直せます)。"
     exit 0
 }
 
@@ -989,7 +992,7 @@ public class GuardApi {
         Log ("左画面の見張り役: 全画面を解除できませんでした。窓: " + (Get-ConsoleTopWindowDiag))
         return ""
     }
-    # コンソール窓を正しく閉じる (本体側の Close-ConsoleGracefully と同じ。EdgeBox は動き続ける)。閉じられたら $true
+    # コンソール窓を正しく閉じる (本体側の Close-ConsoleGracefully と同じ。Edge Box は動き続ける)。閉じられたら $true
     function Close-GuardConsole {
         $procs = @(Get-Process vmconnect -ErrorAction SilentlyContinue)
         if ($procs.Count -eq 0) { return $true }
@@ -1005,14 +1008,14 @@ public class GuardApi {
     }
     # 左画面のコンソール表示を立ち上げ直す (電源 ON のときと同じ流れで全画面になる。見張り役も新しいものに入れ替わる)
     function Start-GuardConsole {
-        # -NoSplash は付けない: 立ち上げ直しの間、左画面を「EdgeBox 起動中」の黒い画面で覆う。
+        # -NoSplash は付けない: 立ち上げ直しの間、左画面を「Edge Box 起動中」の黒い画面で覆う。
         # 組み立て中の小さい窓を見せず、覆いが外れた時点ですでに全画面になっている
         # (覆いは左端のモニターだけなので、右画面の Windows 作業はそのまま続けられる)
         Start-Process powershell.exe -WindowStyle Hidden -ArgumentList (
             "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" -VMName `"$VMName`" -LeftUrl console -RightUrl `"`" -KeepConsole " +
             "-CoverText `"画面表示を戻しています`"")
     }
-    # 収納: コンソール窓を閉じて左画面を Windows に明け渡す (EdgeBox は動き続ける)。
+    # 収納: コンソール窓を閉じて左画面を Windows に明け渡す (Edge Box は動き続ける)。
     #   全画面の解除や最小化は使わない: 全画面のまま最小化すると戻したときに真っ白になり、
     #   普通の窓に戻してからでは、戻すときの全画面への切り替え (Ctrl+Alt+Break) が効かないことがあった。
     #   閉じる → 立ち上げ直す は電源 ON 時と同じ流れ (保存設定で最初から全画面で開く) で、いちばん確実
@@ -1106,7 +1109,7 @@ public class GuardApi {
             if ((([GuardApi]::GetAsyncKeyState(0x11) -band 0x8000) -ne 0) -and (([GuardApi]::GetAsyncKeyState(0x12) -band 0x8000) -ne 0)) { $lastCtrlAlt = Get-Date }
             # (b) 全画面中に ESC を 1 秒長押し → 解除して、自動では戻さない。再固定は $hotkey
             #     Windows 側 (右画面のアプリなど) を操作しているときに効く。コンソールの中にキー入力が
-            #     入っている間は vmconnect がキーを EdgeBox へ渡して横取りするため、見張り役からは見えない。
+            #     入っている間は vmconnect がキーを Edge Box へ渡して横取りするため、見張り役からは見えない。
             #     普通の ESC (短押し) は Windows のアプリでよく使うので、長押しだけを合図にする
             #     固定を解除したあとに窓の最大化ボタンで最大化した場合も、ESC 長押しで最大化を解除する
             #     切り替えのキーは ESC を離してから送る (ESC を押したまま送ると、押しっぱなしの ESC が
@@ -1125,12 +1128,12 @@ public class GuardApi {
                             Show-Notice "ESC 長押しで左画面の固定を解除しました ($hotkey でもう一度固定)"
                             Log "左画面の見張り役: ESC 長押しにより固定を解除しました (自動では戻しません。再固定は $hotkey)。"
                         } else {
-                            # 解除できない環境では、代わりにコンソール窓を閉じて左画面を明け渡す (EdgeBox は動き続ける)。
+                            # 解除できない環境では、代わりにコンソール窓を閉じて左画面を明け渡す (Edge Box は動き続ける)。
                             # 再表示は $stowHotkey 長押し (すぐ立ち上げ直す) か $hotkey (見張り役が立ち上げ直す)
                             if (Close-GuardConsole) {
                                 $stowed = $true
                                 Show-Notice "ESC 長押し: 全画面の解除が効かないため、コンソール画面を閉じました ($stowHotkey 長押しで再表示)"
-                                Log "左画面の見張り役: ESC 長押し: 全画面を解除できなかったため、コンソール窓を閉じました (EdgeBox は動いています。再表示は $stowHotkey 長押し / $hotkey)。"
+                                Log "左画面の見張り役: ESC 長押し: 全画面を解除できなかったため、コンソール窓を閉じました (Edge Box は動いています。再表示は $stowHotkey 長押し / $hotkey)。"
                             } else {
                                 Show-Notice "ESC 長押し: 全画面を解除できませんでした ($hotkey で固定の解除/再固定)"
                                 Log "左画面の見張り役: ESC 長押し: 全画面を解除できず、コンソール窓も閉じられませんでした (固定は解除扱い。再固定は $hotkey)。"
@@ -1145,7 +1148,7 @@ public class GuardApi {
                 }
             } else { $escSince = $null }
             # (c) 収納キー ($stowHotkey) を 1 秒長押し → コンソールを収納して左画面を Windows に明け渡す
-            #     (全画面を解除してから普通の窓を最小化。解除できない環境では窓を閉じる。EdgeBox は動き続ける)。
+            #     (全画面を解除してから普通の窓を最小化。解除できない環境では窓を閉じる。Edge Box は動き続ける)。
             #     もう一度長押し → 窓を戻し (閉じていれば立ち上げ直し)、左画面の全画面に固定し直す。
             #     ESC と同じく Windows 側を操作しているときに効く。
             #     収納の操作中は先に「固定の解除」にしておき、見張り役の見回りが途中の状態を全画面に戻そうとしないようにする
@@ -1163,7 +1166,7 @@ public class GuardApi {
                         if ($how) {
                             $stowed = $true
                             Show-Notice "コンソールを収納しました ($stowHotkey 長押しで全画面に戻す)"
-                            Log "左画面の見張り役: $stowHotkey 長押しによりコンソールを収納しました (窓を閉じました。EdgeBox は動いています。戻すには $stowHotkey 長押し)。"
+                            Log "左画面の見張り役: $stowHotkey 長押しによりコンソールを収納しました (窓を閉じました。Edge Box は動いています。戻すには $stowHotkey 長押し)。"
                         } else {
                             Show-Notice "コンソールを収納できませんでした ($hotkey で固定の解除/再固定)"
                             Log ("左画面の見張り役: $stowHotkey 長押し: コンソールを収納できませんでした (固定は解除扱い)。窓: " + (Get-ConsoleTopWindowDiag))
@@ -1197,7 +1200,7 @@ public class GuardApi {
                         Log "左画面の見張り役: $hotkey により、左画面の表示を立ち上げ直します (この見張り役も入れ替わります)。"
                         Start-Sleep -Seconds 20
                     } else {
-                        Show-Notice "左画面を EdgeBox の全画面で固定しました ($hotkey で解除)"
+                        Show-Notice "左画面を Edge Box の全画面で固定しました ($hotkey で解除)"
                         Log "左画面の見張り役: $hotkey により固定に戻しました。"
                     }
                 }
@@ -1215,7 +1218,7 @@ public class GuardApi {
                 #    (最大化しただけの窓は「全画面」とみなさない: 共通の Test-ConsoleFullScreenOn で判定)
                 $h = Get-ConsoleMain
                 if ($h -eq [IntPtr]::Zero) {
-                    # 0) コンソール窓そのものが閉じられた → EdgeBox が動いていれば表示を立ち上げ直す
+                    # 0) コンソール窓そのものが閉じられた → Edge Box が動いていれば表示を立ち上げ直す
                     #    (自動で閉じる設定のときは閉じたままにする。2 分に 1 回まで)
                     if (-not $missingSince) { $missingSince = Get-Date }
                     elseif (((Get-Date) - $missingSince).TotalSeconds -gt 15 -and ((Get-Date) - $lastRelaunch).TotalSeconds -gt 120 -and
@@ -1225,7 +1228,7 @@ public class GuardApi {
                         if ($vmState -eq "Running") {
                             $lastRelaunch = Get-Date; $missingSince = $null
                             Log "左画面の見張り役: コンソール窓が閉じられていたため、左画面の表示を立ち上げ直します。"
-                            # 立ち上げ直しの間は左画面を「EdgeBox 起動中」で覆う (組み立て中の窓を見せない)
+                            # 立ち上げ直しの間は左画面を「Edge Box 起動中」で覆う (組み立て中の窓を見せない)
                             Start-Process powershell.exe -WindowStyle Hidden -ArgumentList (
                                 "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" -VMName `"$VMName`" -LeftUrl console -RightUrl `"`" -KeepConsole " +
                                 "-CoverText `"画面表示を戻しています`"")
@@ -1310,7 +1313,7 @@ public class GuardApi {
 }
 
 # ============================================================
-#  コンソール (EdgeBox) の画面解像度
+#  コンソール (Edge Box) の画面解像度
 # ============================================================
 $ResolutionChoices = @(
     "自動 (モニターに合わせる)",
@@ -1336,7 +1339,7 @@ function Resolve-ResolutionText([string]$text) {
     return $null
 }
 
-# 解像度を EdgeBox に適用する。実行中なら再起動が要るので、その扱いを $OnRunning で決める
+# 解像度を Edge Box に適用する。実行中なら再起動が要るので、その扱いを $OnRunning で決める
 #   "ask" = 確認ダイアログ / "skip" = 何もしない
 function Set-ConsoleResolution([int]$w, [int]$h, [string]$OnRunning = "skip") {
     $vm = Get-VM -Name $VMName -ErrorAction SilentlyContinue
@@ -1346,18 +1349,18 @@ function Set-ConsoleResolution([int]$w, [int]$h, [string]$OnRunning = "skip") {
         return "コンソールの解像度を ${w}x${h} にしました。"
     }
     if ($OnRunning -ne "ask") {
-        return "EdgeBox が動作中のため、解像度 ${w}x${h} は保存だけしました (次回停止時に反映)。"
+        return "Edge Box が動作中のため、解像度 ${w}x${h} は保存だけしました (次回停止時に反映)。"
     }
     $r = [System.Windows.Forms.MessageBox]::Show(
-        "コンソールの解像度を ${w}x${h} にするには、EdgeBox をいったん終了して起動し直す必要があります。`n`n" +
+        "コンソールの解像度を ${w}x${h} にするには、Edge Box をいったん終了して起動し直す必要があります。`n`n" +
         "今すぐ再起動しますか?`n" +
-        "[はい]    EdgeBox を正常終了 → 解像度を変更 → 起動し直す`n" +
-        "[いいえ]  設定だけ保存する (次に EdgeBox を起動したときに反映)",
-        "EdgeBox 表示設定",
+        "[はい]    Edge Box を正常終了 → 解像度を変更 → 起動し直す`n" +
+        "[いいえ]  設定だけ保存する (次に Edge Box を起動したときに反映)",
+        "Edge Box 表示設定",
         [System.Windows.Forms.MessageBoxButtons]::YesNo,
         [System.Windows.Forms.MessageBoxIcon]::Question)
     if ($r -ne [System.Windows.Forms.DialogResult]::Yes) {
-        return "設定だけ保存しました。次に EdgeBox を起動したときに ${w}x${h} で表示されます。"
+        return "設定だけ保存しました。次に Edge Box を起動したときに ${w}x${h} で表示されます。"
     }
     Stop-VM -Name $VMName            # ACPI シャットダウン要求 (強制電源断ではない)
     $wsw = [System.Diagnostics.Stopwatch]::StartNew()
@@ -1366,15 +1369,15 @@ function Set-ConsoleResolution([int]$w, [int]$h, [string]$OnRunning = "skip") {
         Start-Sleep -Seconds 3
     }
     if ((Get-VM -Name $VMName).State -ne "Off") {
-        return "EdgeBox が3分以内に停止しませんでした。解像度は変更していません (強制終了はしていません)。"
+        return "Edge Box が3分以内に停止しませんでした。解像度は変更していません (強制終了はしていません)。"
     }
     Set-VMVideo -VMName $VMName -ResolutionType Single -HorizontalResolution $w -VerticalResolution $h
     Start-VM -Name $VMName
-    return "解像度を ${w}x${h} にして EdgeBox を起動し直しました。"
+    return "解像度を ${w}x${h} にして Edge Box を起動し直しました。"
 }
 
 # 『設定』の [画面表示] で指定されたコンソール解像度 (未設定なら「自動 = 左のモニターに合わせる」) を、
-# EdgeBox が停止中なら反映する (起動前に呼ぶ。実行中は何もしない)。同じ値ならそのまま。
+# Edge Box が停止中なら反映する (起動前に呼ぶ。実行中は何もしない)。同じ値ならそのまま。
 # 戻り値: 反映した内容の文字列 (何もしなければ "")
 function Set-SavedConsoleResolution {
     try {
@@ -1399,7 +1402,7 @@ if ($Settings) {
     Add-Type -AssemblyName System.Windows.Forms
     Add-Type -AssemblyName System.Drawing
     $form = New-Object System.Windows.Forms.Form
-    $form.Text = "EdgeBox 表示設定"
+    $form.Text = "Edge Box 表示設定"
     $form.Size = New-Object System.Drawing.Size(600, 505)
     $form.StartPosition = "CenterScreen"
     $form.FormBorderStyle = "FixedDialog"
@@ -1413,7 +1416,7 @@ if ($Settings) {
 
     # --- モニター表示 ---
     $grpMon = New-Object System.Windows.Forms.GroupBox
-    $grpMon.Text = "モニター表示 (URL を入力 / console = EdgeBox のコンソール画面 / 空欄 = 表示しない)"
+    $grpMon.Text = "モニター表示 (URL を入力 / console = Edge Box のコンソール画面 / 空欄 = 表示しない)"
     $grpMon.Location = New-Object System.Drawing.Point(15, 15)
     $grpMon.Size = New-Object System.Drawing.Size(555, 130)
 
@@ -1470,7 +1473,7 @@ if ($Settings) {
     $grpOp.Controls.Add($cbSF)
 
     $cbAC = New-Object System.Windows.Forms.CheckBox
-    $cbAC.Text = "EdgeBox の起動を確認したら、コンソール画面を自動で閉じる (通常はオフ。閉じても EdgeBox は動き続ける)"
+    $cbAC.Text = "Edge Box の起動を確認したら、コンソール画面を自動で閉じる (通常はオフ。閉じても Edge Box は動き続ける)"
     $cbAC.Location = New-Object System.Drawing.Point(15, 85)
     $cbAC.Size = New-Object System.Drawing.Size(530, 24)
     $cbAC.Checked = ($cfg.ConsoleAutoClose -eq $true)
@@ -1479,7 +1482,7 @@ if ($Settings) {
 
     # --- コンソールの表示サイズ ---
     $grpRes = New-Object System.Windows.Forms.GroupBox
-    $grpRes.Text = "コンソールの表示サイズ (EdgeBox 側の画面解像度)"
+    $grpRes.Text = "コンソールの表示サイズ (Edge Box 側の画面解像度)"
     $grpRes.Location = New-Object System.Drawing.Point(15, 285)
     $grpRes.Size = New-Object System.Drawing.Size(555, 115)
 
@@ -1508,7 +1511,7 @@ if ($Settings) {
     $lblRes.ForeColor = [System.Drawing.Color]::DimGray
     $grpRes.Controls.Add($lblRes)
 
-    $lblRes2 = New-Label "※ 変更は EdgeBox を起動し直したときに反映されます" 15 85
+    $lblRes2 = New-Label "※ 変更は Edge Box を起動し直したときに反映されます" 15 85
     $lblRes2.ForeColor = [System.Drawing.Color]::DimGray
     $grpRes.Controls.Add($lblRes2)
     $form.Controls.Add($grpRes)
@@ -1552,7 +1555,7 @@ if ($Settings) {
                 "解像度の指定『$resText』を解釈できませんでした。`n" +
                 "「1920x1080」のような形式か、一覧からの選択にしてください。`n`n" +
                 "解像度以外の設定は保存します。",
-                "EdgeBox 表示設定",
+                "Edge Box 表示設定",
                 [System.Windows.Forms.MessageBoxButtons]::OK,
                 [System.Windows.Forms.MessageBoxIcon]::Warning) | Out-Null
             $resText = [string]$cfg.ConsoleResolution
@@ -1560,7 +1563,7 @@ if ($Settings) {
         }
 
         $out = [ordered]@{
-            "_説明"             = "EdgeBox 表示の設定。『EdgeBox表示設定』アイコンから編集できます。"
+            "_説明"             = "Edge Box 表示の設定。『Edge Box表示設定』アイコンから編集できます。"
             "RightUrl"          = $tbR.Text.Trim()
             "RightFullScreen"   = $cbRF.Checked
             "LeftUrl"           = $tbL.Text.Trim()
@@ -1586,30 +1589,31 @@ if ($Settings) {
             try { $msg += "`n`n" + (Set-ConsoleResolution $res.W $res.H "ask") }
             catch { $msg += "`n`n解像度の変更に失敗しました: $($_.Exception.Message)" }
         }
-        [System.Windows.Forms.MessageBox]::Show($msg, "EdgeBox 表示設定") | Out-Null
+        [System.Windows.Forms.MessageBox]::Show($msg, "Edge Box 表示設定") | Out-Null
     }
     exit 0
 }
 
 # ============================================================
-#  デスクトップに『EdgeBox表示設定』アイコンを作成
+#  デスクトップに『Edge Box表示設定』アイコンを作成
 # ============================================================
 if ($Setup) {
-    $lnkPath = Join-Path ([Environment]::GetFolderPath("Desktop")) "EdgeBox表示設定.lnk"
+    Remove-Item (Join-Path ([Environment]::GetFolderPath("Desktop")) "EdgeBox表示設定.lnk") -Force -ErrorAction SilentlyContinue   # 旧名のアイコン
+    $lnkPath = Join-Path ([Environment]::GetFolderPath("Desktop")) "Edge Box表示設定.lnk"
     $shell = New-Object -ComObject WScript.Shell
     $lnk = $shell.CreateShortcut($lnkPath)
     $lnk.TargetPath = "powershell.exe"
     $lnk.Arguments  = "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$PSCommandPath`" -Settings"
     $lnk.WorkingDirectory = $PSScriptRoot
     $lnk.IconLocation = "shell32.dll,21"
-    $lnk.Description  = "EdgeBox 表示の設定コンソール"
+    $lnk.Description  = "Edge Box 表示の設定コンソール"
     $lnk.Save()
-    Write-Host "デスクトップに『EdgeBox表示設定』アイコンを作成しました。" -ForegroundColor Green
+    Write-Host "デスクトップに『Edge Box表示設定』アイコンを作成しました。" -ForegroundColor Green
     exit 0
 }
 
 # ============================================================
-#  コンソール解像度をモニターに合わせる (EdgeBox 停止中のみ)
+#  コンソール解像度をモニターに合わせる (Edge Box 停止中のみ)
 # ============================================================
 if ($ConsoleResolution) {
     $res = Resolve-ResolutionText $ConsoleResolution
@@ -1620,7 +1624,7 @@ if ($ConsoleResolution) {
     $vm = Get-VM -Name $VMName -ErrorAction SilentlyContinue
     if (-not $vm) { Write-Error "登録 '$VMName' がありません。"; exit 1 }
     if ($vm.State -ne "Off") {
-        Write-Error "EdgeBox を停止してから実行してください (.\05-shutdown-all.ps1 で EdgeBox だけ終了 → もう一度実行)。"
+        Write-Error "Edge Box を停止してから実行してください (.\05-shutdown-all.ps1 で Edge Box だけ終了 → もう一度実行)。"
         exit 1
     }
     Set-VMVideo -VMName $VMName -ResolutionType Single `
@@ -1629,12 +1633,12 @@ if ($ConsoleResolution) {
     $cfg | Add-Member -NotePropertyName ConsoleResolution -NotePropertyValue $ConsoleResolution -Force
     $cfg | ConvertTo-Json | Set-Content -Path $ConfigFile -Encoding UTF8
     Write-Host "コンソールの解像度を $($res.W)x$($res.H) に設定しました。" -ForegroundColor Green
-    Write-Host "次に EdgeBox を起動すると、この解像度で表示されます (.\02-start-field-vm.ps1)。"
+    Write-Host "次に Edge Box を起動すると、この解像度で表示されます (.\02-start-field-vm.ps1)。"
     exit 0
 }
 
 # ============================================================
-#  設定済みの解像度を EdgeBox に反映する (停止中のみ。02 / 10 が起動の直前に呼ぶ内部用)
+#  設定済みの解像度を Edge Box に反映する (停止中のみ。02 / 10 が起動の直前に呼ぶ内部用)
 # ============================================================
 if ($ApplyResolution) {
     $rmsg = Set-SavedConsoleResolution
@@ -1677,8 +1681,8 @@ if ($Install) {
     try { $trigger.Delay = "PT15S" } catch { }
     Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger `
         -Settings $taskSettings -RunLevel Highest -Force | Out-Null
-    # 「電源 ON → EdgeBox が自動起動 → サインイン → 画面表示」を成立させるには
-    # EdgeBox 側の自動起動も必要。未設定なら、ここで一緒に入れておく (実行中の EdgeBox にも設定できる)
+    # 「電源 ON → Edge Box が自動起動 → サインイン → 画面表示」を成立させるには
+    # Edge Box 側の自動起動も必要。未設定なら、ここで一緒に入れておく (実行中の Edge Box にも設定できる)
     $vmAuto = Get-VM -Name $VMName -ErrorAction SilentlyContinue
     if ($vmAuto) {
         if ($vmAuto.AutomaticStartAction -ne "Start") {
@@ -1686,17 +1690,17 @@ if ($Install) {
                 Set-VM -Name $VMName -AutomaticStartAction Start -AutomaticStartDelay 30
                 Write-Host "登録 '$VMName' を PC 起動時に自動で起動するよう設定しました (30 秒後)。" -ForegroundColor Green
             } catch {
-                Write-Host "EdgeBox の自動起動を設定できませんでした: $($_.Exception.Message)" -ForegroundColor Yellow
+                Write-Host "Edge Box の自動起動を設定できませんでした: $($_.Exception.Message)" -ForegroundColor Yellow
                 Write-Host "  手動で: Set-VM -Name $VMName -AutomaticStartAction Start -AutomaticStartDelay 30" -ForegroundColor Yellow
             }
         } else {
             Write-Host "登録 '$VMName' の自動起動は設定済みです。" -ForegroundColor Gray
         }
     } else {
-        Write-Host "登録 '$VMName' が見つからないため、EdgeBox の自動起動は設定していません。" -ForegroundColor Yellow
+        Write-Host "登録 '$VMName' が見つからないため、Edge Box の自動起動は設定していません。" -ForegroundColor Yellow
     }
-    Write-Host "登録しました。次回ログオンから自動で表示されます (サインインと同時に左画面を「EdgeBox 起動中」で覆い、全画面になったら外れます)。" -ForegroundColor Green
-    Write-Host "  表示内容の変更: 『EdgeBox表示設定』アイコン (再登録不要)"
+    Write-Host "登録しました。次回ログオンから自動で表示されます (サインインと同時に左画面を「Edge Box 起動中」で覆い、全画面になったら外れます)。" -ForegroundColor Green
+    Write-Host "  表示内容の変更: 『Edge Box表示設定』アイコン (再登録不要)"
     exit 0
 }
 if ($Uninstall) {
@@ -1712,7 +1716,7 @@ if ($Uninstall) {
     exit 0
 }
 if (-not $RightUrl -and -not $LeftUrl) {
-    Write-Error "表示する内容がありません。『EdgeBox表示設定』(-Settings) で設定してください。"
+    Write-Error "表示する内容がありません。『Edge Box表示設定』(-Settings) で設定してください。"
     exit 1
 }
 
@@ -1761,7 +1765,7 @@ if (-not $NoSplash) {
     }
 }
 
-# アイコン用のタスク (『EdgeBox 再起動』『EdgeBox 画面』『設定』『EdgeBox 起動』とログオン時の表示) の設定を直す。
+# アイコン用のタスク (『Edge Box 再起動』『Edge Box 画面』『設定』『Edge Box 起動』とログオン時の表示) の設定を直す。
 # 表示処理は見張り役などの常駐プロセスを残すため、タスクは「実行中」のままになる。旧設定 (時間制限 1 時間・
 # 多重起動不可) のままだと、1 時間後にタスクごと常駐プロセスが止められ、「実行中」の間はアイコンを押しても
 # 何も起きない。アイコンを作り直さなくても済むよう、表示処理 (管理者で動く) のたびに設定だけ直す
@@ -1820,7 +1824,7 @@ Remove-Item $SplashLeftOffFile -Force -ErrorAction SilentlyContinue
 $script:RightUrlPending = $false
 try {
 
-# --- EdgeBox の起動を待つ (止まっていれば起動する: 自動起動が働かなかった場合の保険) ---
+# --- Edge Box の起動を待つ (止まっていれば起動する: 自動起動が働かなかった場合の保険) ---
 $vm = Get-VM -Name $VMName -ErrorAction SilentlyContinue
 if ($vm -and $vm.State -eq "Off") {
     # 『設定』の解像度 (既定: 左のモニターに合わせる) を、停止中のいまのうちに反映する
@@ -1829,14 +1833,14 @@ if ($vm -and $vm.State -eq "Off") {
     # 予約された入出力の設定 (メモリの固定など) があれば、停止中のいまのうちに反映する
     $s11 = Join-Path $PSScriptRoot "11-io-passthrough.ps1"
     if (Test-Path $s11) { try { $r11 = & $s11 -VMName $VMName -ApplyPending -Quiet; if ($r11) { Log ([string]$r11) } } catch { } }
-    # CPU コア分割ツール (full モード) があれば、EdgeBox を CPU グループに固定してから起動する
-    if (Invoke-CpuPartitionBoot) { Log "CPU コア分割 (full): EdgeBox を CPU グループに固定する処理を先に行いました。" }
+    # CPU コア分割ツール (full モード) があれば、Edge Box を CPU グループに固定してから起動する
+    if (Invoke-CpuPartitionBoot) { Log "CPU コア分割 (full): Edge Box を CPU グループに固定する処理を先に行いました。" }
     $vm = Get-VM -Name $VMName -ErrorAction SilentlyContinue
     if ($vm -and $vm.State -eq "Running") {
-        Log "EdgeBox は起動済みです (コア分割の処理で起動)。"
+        Log "Edge Box は起動済みです (コア分割の処理で起動)。"
     } else {
-        Log "EdgeBox が起動していないため、ここで起動します。"
-        try { Start-VM -Name $VMName -ErrorAction Stop } catch { Log "警告: EdgeBox を起動できませんでした: $($_.Exception.Message)" }
+        Log "Edge Box が起動していないため、ここで起動します。"
+        try { Start-VM -Name $VMName -ErrorAction Stop } catch { Log "警告: Edge Box を起動できませんでした: $($_.Exception.Message)" }
     }
 }
 $sw = [System.Diagnostics.Stopwatch]::StartNew()
@@ -1845,7 +1849,7 @@ while ($sw.Elapsed.TotalSeconds -lt $TimeoutSec) {
     if ($vm -and $vm.State -eq "Running") { break }
     Start-Sleep -Seconds 5
 }
-Log ("EdgeBox の状態: " + $(if ($vm) { $vm.State } else { "見つかりません" }))
+Log ("Edge Box の状態: " + $(if ($vm) { $vm.State } else { "見つかりません" }))
 
 # --- モニターの位置 (X座標で左右を判定) ---
 # サインイン直後はまだ 2 枚目が認識されていないことがあるため、そろうまで待つ
@@ -1887,12 +1891,12 @@ function Wait-OneUrl([string]$u, [string]$label) {
     if (Wait-Url $u) { Log "$label URL が応答しました: $u"; return }
     Log "警告: $label URL が応答しません (それでも開きます): $u"
     if ($label -eq "右画面用") { $script:RightUrlPending = $true }
-    # 次の切り分けのために、EdgeBox 側のネットワークの様子を残す
+    # 次の切り分けのために、Edge Box 側のネットワークの様子を残す
     try {
         $nics = @(Get-VMNetworkAdapter -VMName $VMName -ErrorAction SilentlyContinue)
         $ips = @($nics | ForEach-Object { $_.IPAddresses }) -join ", "
         $sws = @($nics | ForEach-Object { $_.SwitchName }) -join ", "
-        Log ("  [診断] EdgeBox のネットワーク: スイッチ=" + $sws + " / IP=" + $(if ($ips) { $ips } else { "(報告なし)" }))
+        Log ("  [診断] Edge Box のネットワーク: スイッチ=" + $sws + " / IP=" + $(if ($ips) { $ips } else { "(報告なし)" }))
     } catch { }
 }
 function Wait-ForUrls {
@@ -2177,7 +2181,7 @@ function Get-WindowClassName([IntPtr]$h) {
 }
 
 # キーボードフォーカスをコンソールの映像の入力窓 (IHWindowClass) へ移す。
-# Ctrl+Alt+Break は RDP 部品がフォーカスを持っているときに効く。EdgeBox を起動した直後は
+# Ctrl+Alt+Break は RDP 部品がフォーカスを持っているときに効く。Edge Box を起動した直後は
 # フォーカスがツールバーなど別の場所にあることがあり、キーを送っても効かなかった。
 # 他プロセスの窓にフォーカスを置くため、そのスレッドの入力に相乗り (AttachThreadInput) する。
 # 移す前後のフォーカス先 (クラス名) を返す (記録用)
@@ -2229,7 +2233,7 @@ function Enter-ConsoleFullScreen($screen) {
     if ($hwnd -eq [IntPtr]::Zero) { return $false }
 
     # 接続が確立して映像の入力窓 (IHWindowClass) が出るまで待つ (最大 20 秒)。
-    # 入力窓が無いうちはキーを送っても受け付けられない (EdgeBox を起動した直後に効かなかった原因のひとつ)
+    # 入力窓が無いうちはキーを送っても受け付けられない (Edge Box を起動した直後に効かなかった原因のひとつ)
     $isw = [System.Diagnostics.Stopwatch]::StartNew()
     while ($isw.Elapsed.TotalSeconds -lt 20 -and (Get-ConsoleInputWindow) -eq [IntPtr]::Zero) { Start-Sleep -Milliseconds 500 }
     if ((Get-ConsoleInputWindow) -ne [IntPtr]::Zero) {
@@ -2334,7 +2338,7 @@ function Close-ConsoleGracefully {
 }
 
 # vmconnect が保存している表示設定ファイルを探す
-# (EdgeBox ごとの vmconnect.rdp.<VMID>.config、無ければ共通の vmconnect.config)
+# (Edge Box ごとの vmconnect.rdp.<VMID>.config、無ければ共通の vmconnect.config)
 function Get-ConsoleConfigFile {
     try {
         $vm = Get-VM -Name $VMName -ErrorAction SilentlyContinue
@@ -2397,7 +2401,7 @@ function Set-ConsoleSavedPosition([int]$x0, [int]$y0) {
     } catch { return $false }
 }
 
-# 全画面のときに上部へ出る接続バー (「localhost 上の EdgeBox」の帯) の表示/非表示を書き換える。
+# 全画面のときに上部へ出る接続バー (「localhost 上の Edge Box」の帯) の表示/非表示を書き換える。
 # RDP クライアントの DisplayConnectionBar / PinConnectionBar に相当する設定名を探して書く
 function Set-ConsoleSavedBar([bool]$hide) {
     try {
@@ -2466,7 +2470,7 @@ function Start-ConsoleWindow {
     return [IntPtr]::Zero
 }
 
-# --- EdgeBox のコンソール画面 (vmconnect) を指定モニターに表示 ---
+# --- Edge Box のコンソール画面 (vmconnect) を指定モニターに表示 ---
 # 全画面のときに上部へ出る接続バーは、RDP クライアントが出す別ウィンドウ。vmconnect の設定ファイルには
 # この項目が無い (実機の診断: ZoomLevel, ConnectionDialogServers, StartingPosition, ShowToolbar のみ) ため、
 # ウィンドウそのものを非表示にする。名前 (クラス名) は環境で違い (実機では BBarWindowClass では見つからなかった)、
@@ -2594,7 +2598,7 @@ function Open-Console($screen, [bool]$fullScreen) {
         Log "コンソール: 全画面モードの切り替えが効きませんでした。代替表示に切り替えます。"
         $script:ConsoleFallback = $true   # 仕上げの処理で全画面に戻そうとしない
         if ($cfg.ConsoleStripFrame -ne $false) {
-            # EdgeBox がいま実際に出している映像の解像度を調べる (設定値ではなく実測)
+            # Edge Box がいま実際に出している映像の解像度を調べる (設定値ではなく実測)
             $vw = 0; $vh = 0
             try {
                 $vm2 = Get-VM -Name $VMName -ErrorAction SilentlyContinue
@@ -2617,7 +2621,7 @@ function Open-Console($screen, [bool]$fullScreen) {
             if ($vw -le 0 -or $vw -gt $screen.Bounds.Width)  { $vw = [Math]::Min(1024, $screen.Bounds.Width) }
             if ($vh -le 0 -or $vh -gt $screen.Bounds.Height) { $vh = [Math]::Min(768,  $screen.Bounds.Height) }
             if ($vw -lt $screen.Bounds.Width) {
-                Log "コンソール: 映像がモニターより小さいため余白は黒になります (EdgeBox の再起動後はモニターと同じ大きさになります)。"
+                Log "コンソール: 映像がモニターより小さいため余白は黒になります (Edge Box の再起動後はモニターと同じ大きさになります)。"
             }
             $cx = $screen.Bounds.X + [int](($screen.Bounds.Width  - $vw) / 2)
             $cy = $screen.Bounds.Y + [int](($screen.Bounds.Height - $vh) / 2)
@@ -2679,7 +2683,7 @@ function Open-Display([string]$val, $screen, [string]$profile, [bool]$fullScreen
     else { Open-Kiosk $val $screen $profile $fullScreen }
 }
 
-# 左 = コンソールなら先に出して起動中画面を閉じる (EdgeBox は起動済みなのですぐ出せる)。
+# 左 = コンソールなら先に出して起動中画面を閉じる (Edge Box は起動済みなのですぐ出せる)。
 # 管理画面の応答待ちはそのあとに行う (長くかかっても左は見えている)
 if ($leftIsConsole) {
     # 覆い (起動中画面) が左画面に出てから、コンソールの窓を開く (覆いの下で組み立てて、途中の窓を見せない)
@@ -2742,7 +2746,7 @@ if ($hasBrowser -and ($cfg.EscEnabled -ne $false)) {
     Log "ESC キーでブラウザの全画面/最大化を解除できます (ブラウザ画面が前面のときのみ)。"
 }
 
-# --- EdgeBox 起動後のコンソール自動クローズ (起動確認だけ済ませて黒い画面を残さない) ---
+# --- Edge Box 起動後のコンソール自動クローズ (起動確認だけ済ませて黒い画面を残さない) ---
 $hasConsole = (($LeftUrl -match '^(console|コンソール)$') -or ($RightUrl -match '^(console|コンソール)$'))
 if ($hasConsole -and ($cfg.ConsoleAutoClose -ne $false) -and -not $KeepConsole) {
     $closeDelay = 30
@@ -2760,7 +2764,7 @@ if (($LeftUrl -match '^(console|コンソール)$') -and ($cfg.LeftGuard -ne $fa
         "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" -LeftGuard -VMName `"$VMName`"")
     $hk = if ($cfg.LeftGuardHotkey) { [string]$cfg.LeftGuardHotkey } else { "Alt+F11" }
     $sk = if ($cfg.StowHotkey) { [string]$cfg.StowHotkey } else { "Ctrl+Alt+K" }
-    Log "左画面を EdgeBox の全画面で固定します (他の窓は右画面へ。解除/再固定: $hk / 収納⇔全画面: $sk 長押し。『設定』の[画面表示]で変更可)。"
+    Log "左画面を Edge Box の全画面で固定します (他の窓は右画面へ。解除/再固定: $hk / 収納⇔全画面: $sk 長押し。『設定』の[画面表示]で変更可)。"
 }
 
 Log "===== 表示処理を完了 ====="

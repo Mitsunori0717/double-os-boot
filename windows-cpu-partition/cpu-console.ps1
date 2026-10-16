@@ -1,12 +1,12 @@
 ﻿<#
 .SYNOPSIS
     CPU コア割り当ての設定コンソール (GUI)。
-    P コア / E コアを画面で直接選んで、Windows とEdgeBox に振り分けます。
+    P コア / E コアを画面で直接選んで、Windows とEdge Box に振り分けます。
 
 .DESCRIPTION
     - この PC の実際のコア構成を検出して 1 コア = 1 タイルで表示します
       (Intel 12世代以降の P コア/E コアは、CPU が申告する効率クラスで判別)
-    - タイルをクリックするたびに Windows 用 → EdgeBox 用 → 未割当 と切り替わります
+    - タイルをクリックするたびに Windows 用 → Edge Box 用 → 未割当 と切り替わります
     - 選んだ内容が「動かない・矛盾している」場合は、その理由を表示して
       [この内容で適用] を押せないようにします (安全装置)
     - 適用そのものは同じフォルダの cpu-partition.ps1 が行います
@@ -23,7 +23,7 @@
 param(
     [string]$VMName = "EdgeBox",
     [switch]$Setup,
-    # EdgeBox に最低限割り当てるべき物理コア数 (安全装置)。E コア 8 個を EdgeBox 専用にする運用が既定
+    # Edge Box に最低限割り当てるべき物理コア数 (安全装置)。E コア 8 個を Edge Box 専用にする運用が既定
     [int]$MinGuestCores = 8
 )
 
@@ -41,8 +41,8 @@ $AppsEngine   = Join-Path $PSScriptRoot "cpu-apps.ps1"
 $AppsLog      = Join-Path $PSScriptRoot "cpu-apps-log.txt"
 # メモリ割り当ての検査基準 (cpu-partition.ps1 と同じ値)
 $MemHostReserveGB = 8    # Windows 側に最低限残す量
-$MemGuestMinGB    = 4    # EdgeBox の最低量
-$MemGuestRecGB    = 8    # EdgeBox の推奨量
+$MemGuestMinGB    = 4    # Edge Box の最低量
+$MemGuestRecGB    = 8    # Edge Box の推奨量
 $TaskName     = "CpuPartition-Console"
 
 function Test-Admin {
@@ -167,7 +167,7 @@ if ($Setup) {
         $lnk.Save()
     }
 
-    # --- リアルタイム監視『EdgeBox 監視』も同じ仕組みで登録する ---
+    # --- リアルタイム監視『Edge Box 監視』も同じ仕組みで登録する ---
     $monPath = Join-Path $PSScriptRoot "cpu-monitor.ps1"
     $monOk = $false
     if (Test-Path $monPath) {
@@ -180,13 +180,16 @@ if ($Setup) {
             Register-ScheduledTask -TaskName $monTask -Action $mAction -Settings $mts -RunLevel Highest -Force | Out-Null
             $mvbs = Join-Path $PSScriptRoot "launch-monitor.vbs"
             Set-Content -Path $mvbs -Encoding Default -Value @(
-                "' EdgeBox 監視 — 起動用ラッパー (黒い窓を出さない)",
+                "' Edge Box 監視 — 起動用ラッパー (黒い窓を出さない)",
                 "CreateObject(""WScript.Shell"").Run ""schtasks.exe /run /tn """"$monTask"""""", 0, False")
             $micoPath = Join-Path $PSScriptRoot "cpu-monitor.ico"
             $miconRef = "shell32.dll,22"
             try { New-ConsoleIcon $micoPath "monitor"; if (Test-Path $micoPath) { $miconRef = "$micoPath,0" } } catch { }
-            foreach ($lnkPath in @((Join-Path ([Environment]::GetFolderPath("Desktop"))  "EdgeBox 監視.lnk"),
-                                   (Join-Path ([Environment]::GetFolderPath("Programs")) "EdgeBox 監視.lnk"))) {
+            foreach ($dir in @([Environment]::GetFolderPath("Desktop"), [Environment]::GetFolderPath("Programs"))) {
+                Remove-Item (Join-Path $dir "EdgeBox 監視.lnk") -Force -ErrorAction SilentlyContinue   # 旧名のアイコン
+            }
+            foreach ($lnkPath in @((Join-Path ([Environment]::GetFolderPath("Desktop"))  "Edge Box 監視.lnk"),
+                                   (Join-Path ([Environment]::GetFolderPath("Programs")) "Edge Box 監視.lnk"))) {
                 $lnk = $shell.CreateShortcut($lnkPath)
                 $lnk.TargetPath       = Join-Path $env:SystemRoot "System32\wscript.exe"
                 $lnk.Arguments        = "`"$mvbs`""
@@ -197,14 +200,14 @@ if ($Setup) {
             }
             $monOk = $true
         } catch {
-            Write-Host "  (『EdgeBox 監視』の登録に失敗しました: $($_.Exception.Message))" -ForegroundColor Yellow
+            Write-Host "  (『Edge Box 監視』の登録に失敗しました: $($_.Exception.Message))" -ForegroundColor Yellow
         }
     }
 
     Write-Host "『CPU割り当て』を登録しました。" -ForegroundColor Green
     Write-Host "  - デスクトップのアイコン" -ForegroundColor Green
     Write-Host "  - スタートメニュー (「CPU」で検索しても出ます)" -ForegroundColor Green
-    if ($monOk) { Write-Host "『EdgeBox 監視』(各コアの負荷とメモリのリアルタイム表示) も同じ場所に登録しました。" -ForegroundColor Green }
+    if ($monOk) { Write-Host "『Edge Box 監視』(各コアの負荷とメモリのリアルタイム表示) も同じ場所に登録しました。" -ForegroundColor Green }
     Write-Host "  PowerShell を開く必要はありません。黒い窓も出ません。" -ForegroundColor Green
     Write-Host "  タスクバーに置くには、スタートメニューで右クリック →『タスクバーにピン留めする』" -ForegroundColor Cyan
     exit 0
@@ -430,7 +433,7 @@ function Update-Environment {
             try { $script:Vcpu = [int](Get-VMProcessor -VMName $script:VmNameSel).Count } catch { $script:Vcpu = 0 }
         }
     }
-    # メモリ: PC 全体と EdgeBox の設定値
+    # メモリ: PC 全体と Edge Box の設定値
     $script:MemTotalGB = 0.0; $script:MemVmGB = 0.0; $script:MemDynamic = $false
     try { $script:MemTotalGB = [Math]::Round(([double](Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory) / 1GB, 1) } catch { }
     if ($script:Vm) {
@@ -447,7 +450,7 @@ function Update-Environment {
 # ============================================================
 $script:VmNameSel = $VMName
 Update-Environment
-# その名前の登録が無ければ (名前を変えた等)、EdgeBox の物理ディスクを持つ登録か 1 つしかない登録を選ぶ
+# その名前の登録が無ければ (名前を変えた等)、Edge Box の物理ディスクを持つ登録か 1 つしかない登録を選ぶ
 if ($script:HyperVOk -and -not $script:Vm) {
     try {
         $all = @(Get-VM -ErrorAction SilentlyContinue)
@@ -479,7 +482,7 @@ $script:SavedCfg = $null
 if (Test-Path $ConfigFile) {
     try { $script:SavedCfg = Get-Content $ConfigFile -Raw -Encoding UTF8 | ConvertFrom-Json } catch { }
 }
-# 混成 CPU の既定の割り当て: 末尾の E コアを $MinGuestCores 個 (足りなければ全部) EdgeBox に、残りは Windows に
+# 混成 CPU の既定の割り当て: 末尾の E コアを $MinGuestCores 個 (足りなければ全部) Edge Box に、残りは Windows に
 function Set-DefaultHybridPlan {
     foreach ($c in $script:Cores) { $c.State = "Host" }
     $eTail = @($script:Cores | Where-Object { $_.Kind -eq "E" } | Sort-Object Id -Descending | Select-Object -First $MinGuestCores)
@@ -495,7 +498,7 @@ function Set-StatesFromLps($HostLps, $GuestLps) {
 if ($script:SavedCfg) {
     Set-StatesFromLps @([int[]]$script:SavedCfg.HostLps) @([int[]]$script:SavedCfg.GuestLps)
 } else {
-    # 既定の初期表示: 混成 CPU なら「末尾の E コア 8 個 = EdgeBox / 残り (P コア全部 + 先頭の E コア) = Windows」、
+    # 既定の初期表示: 混成 CPU なら「末尾の E コア 8 個 = Edge Box / 残り (P コア全部 + 先頭の E コア) = Windows」、
     # それ以外は前半/後半で半分ずつ
     if ($script:Hybrid) {
         Set-DefaultHybridPlan
@@ -520,7 +523,7 @@ if (-not ("Win.AppShell" -as [type])) {
 public static extern int SetCurrentProcessExplicitAppUserModelID(string AppID);
 '@ -ErrorAction SilentlyContinue
 }
-try { [Win.AppShell]::SetCurrentProcessExplicitAppUserModelID("EdgeBox.CpuConsole") | Out-Null } catch { }
+try { [Win.AppShell]::SetCurrentProcessExplicitAppUserModelID("Edge Box.CpuConsole") | Out-Null } catch { }
 
 function Get-AppIcon([string]$Style) {
     try {
@@ -620,7 +623,7 @@ function New-Tile($Core) {
         param($s, $e)
         $c = $script:Cores[[int]$s.Tag]
         if ($script:Hybrid -and $c.Kind -eq "P") {
-            # P コアは Windows 専用 (EdgeBox には割り当てない): Windows 用 ⇔ 未割当
+            # P コアは Windows 専用 (Edge Box には割り当てない): Windows 用 ⇔ 未割当
             $c.State = $(if ($c.State -eq "Host") { "None" } else { "Host" })
         } else {
             switch ($c.State) {
@@ -711,7 +714,7 @@ $form.Controls.Add($grpChk)
 
 # --- メモリの割り当て ---
 $grpMem = New-Object System.Windows.Forms.GroupBox
-$grpMem.Text = "メモリの割り当て (PC 全体のメモリを Windows と EdgeBox で分ける)"
+$grpMem.Text = "メモリの割り当て (PC 全体のメモリを Windows と Edge Box で分ける)"
 $grpMem.Location = New-Object System.Drawing.Point(12, 700)
 $grpMem.Size = New-Object System.Drawing.Size(940, 66)
 $script:lblMemPc = New-Lbl "" 14 24 240
@@ -840,7 +843,7 @@ function Update-Header {
         if (-not $st) { $fs = "完全分離: 準備中 (再起動待ち)" }
         elseif ($st.Bound) { $fs = "完全分離: ○ 成立   Windows は CPU $($st.HostLps) に固定 / $($script:VmNameSel) は CPU $($st.GuestLps) に固定" }
         elseif (-not $st.MinrootOk) { $fs = "完全分離: △ 未成立 (再起動待ち)" }
-        else { $fs = "完全分離: △ 未成立 (『EdgeBox 再起動』で直ることがあります。『EdgeBox 監視』で確認)" }
+        else { $fs = "完全分離: △ 未成立 (『Edge Box 再起動』で直ることがあります。『Edge Box 監視』で確認)" }
     } elseif ($script:SavedCfg -and $script:SavedCfg.Mode -eq "runtime") {
         $fs = "簡易分離: 適用済み (Windows と $($script:VmNameSel) のプロセスをそれぞれのコアに固定)"
     }
@@ -850,7 +853,7 @@ function Update-Header {
         $script:lblVm.Text = "状態: {0}    プロセッサ: {1}    メモリ: {2} GB{3}" -f $script:Vm.State, $script:Vcpu,
             $script:MemVmGB, $(if ($script:MemDynamic) { " (動的)" } else { "" })
     } elseif ($script:HyperVOk) {
-        $script:lblVm.Text = "この名前の EdgeBox が見つかりません"
+        $script:lblVm.Text = "この名前の Edge Box が見つかりません"
     } else {
         $script:lblVm.Text = "Hyper-V が有効ではありません"
     }
@@ -883,30 +886,30 @@ function Update-Validation {
         if (-not $script:VmNameSel) {
             $errors += "対象の 登録名を入力してください。"
         } else {
-            $warnings += "登録『$($script:VmNameSel)』はまだ見つかりません。この内容は保存され、EdgeBox を作成して起動した時点で自動的に適用されます。"
+            $warnings += "登録『$($script:VmNameSel)』はまだ見つかりません。この内容は保存され、Edge Box を作成して起動した時点で自動的に適用されます。"
         }
     }
 
     # --- 割り当ての量 ---
     if ($sel.GuestCores -lt 1) {
-        $errors += "$($script:VmNameSel) にコアが 1 つも割り当てられていません。このままでは $($script:VmNameSel) を起動できません (コアを 1 つ以上、EdgeBox 用にしてください)。"
+        $errors += "$($script:VmNameSel) にコアが 1 つも割り当てられていません。このままでは $($script:VmNameSel) を起動できません (コアを 1 つ以上、Edge Box 用にしてください)。"
     }
     if ($sel.HostCores -lt 2) {
-        $errors += "Windows 側が $($sel.HostCores) コアです。最低 2 コア必要です (EdgeBox のディスク/ネットワーク処理も Windows 側で動くため)。"
+        $errors += "Windows 側が $($sel.HostCores) コアです。最低 2 コア必要です (Edge Box のディスク/ネットワーク処理も Windows 側で動くため)。"
     } elseif ($sel.HostCores -lt 4) {
-        $warnings += "Windows 側が 4 コア未満です。EdgeBox の I/O 処理も Windows 側コアで動くため、$($script:VmNameSel) の通信・保存まで遅くなることがあります。"
+        $warnings += "Windows 側が 4 コア未満です。Edge Box の I/O 処理も Windows 側コアで動くため、$($script:VmNameSel) の通信・保存まで遅くなることがあります。"
     }
     if ($sel.NoneCores -gt 0) {
         $warnings += "未割当のコアが $($sel.NoneCores) 個あります (どちらからも積極的には使われません)。"
     }
     if ($sel.GuestLps.Count -gt 0 -and $sel.GuestLps.Count -lt 8) {
-        $warnings += "$($script:VmNameSel) 側が $($sel.GuestLps.Count) スレッドです (EdgeBox の元の構成 4 コア 8 スレッドを下回ります)。"
+        $warnings += "$($script:VmNameSel) 側が $($sel.GuestLps.Count) スレッドです (Edge Box の元の構成 4 コア 8 スレッドを下回ります)。"
     }
     if ($script:Hybrid) {
-        # EdgeBox は E コア専用。P コアは Windows 側に残す (混ざらない・速さの違うコアを混ぜない)
+        # Edge Box は E コア専用。P コアは Windows 側に残す (混ざらない・速さの違うコアを混ぜない)
         $gp0 = @($guestCoreObjs | Where-Object { $_.Kind -eq "P" })
-        if ($gp0.Count -gt 0) { $errors += "$($script:VmNameSel) に P コアは割り当てられません ($(($gp0 | ForEach-Object { $_.Label }) -join ', '))。EdgeBox は E コア専用です。" }
-        # EdgeBox 用の E コアは末尾に固めておく (full の minroot 条件 = Windows は先頭から連番 を満たすため)
+        if ($gp0.Count -gt 0) { $errors += "$($script:VmNameSel) に P コアは割り当てられません ($(($gp0 | ForEach-Object { $_.Label }) -join ', '))。Edge Box は E コア専用です。" }
+        # Edge Box 用の E コアは末尾に固めておく (full の minroot 条件 = Windows は先頭から連番 を満たすため)
         $eAll = @($script:Cores | Where-Object { $_.Kind -eq "E" } | Sort-Object Id)
         $firstGuest = -1
         for ($k = 0; $k -lt $eAll.Count; $k++) { if ($eAll[$k].State -eq "Guest") { $firstGuest = $k; break } }
@@ -950,7 +953,7 @@ function Update-Validation {
         if ($script:Vm.State -eq "Off") {
             $warnings += "プロセッサ数を $($script:Vcpu) から $($sel.GuestLps.Count) に自動調整します。"
         } else {
-            $warnings += "プロセッサ数 ($($script:Vcpu)) と割り当てスレッド数 ($($sel.GuestLps.Count)) が違います。EdgeBox 停止中に適用すると自動調整されます。"
+            $warnings += "プロセッサ数 ($($script:Vcpu)) と割り当てスレッド数 ($($sel.GuestLps.Count)) が違います。Edge Box 停止中に適用すると自動調整されます。"
         }
     }
     if ($script:UsedSnapshot) {
@@ -962,7 +965,7 @@ function Update-Validation {
         if (@($al | Where-Object { $sel.GuestLps -contains $_ }).Count -gt 0) { $appOnGuest += [string]$a.Name }
     }
     if ($appOnGuest.Count -gt 0) {
-        $warnings += "アプリ『$($appOnGuest -join '、')』が $($script:VmNameSel) 用コアに割り当てられています (EdgeBox と取り合いになります)。"
+        $warnings += "アプリ『$($appOnGuest -join '、')』が $($script:VmNameSel) 用コアに割り当てられています (Edge Box と取り合いになります)。"
     }
     $script:lblApps.Text = "登録: $($script:Apps.Count) 件" +
         $(if ($script:Apps.Count -gt 0) { "  (" + ((@($script:Apps | Select-Object -First 3 | ForEach-Object { $_.Name }) -join "、")) + $(if ($script:Apps.Count -gt 3) { " ほか" } else { "" }) + ")" } else { "" })
@@ -983,7 +986,7 @@ function Update-Validation {
         Add-Line "適用できます (上の注意点をご確認ください)。" ([System.Drawing.Color]::FromArgb(20, 120, 40))
     }
     $script:btnApply.Enabled = ($errors.Count -eq 0)
-    if ($script:VmMissing) { $script:btnApply.Text = "保存 (EdgeBox 検出後に自動適用)" }
+    if ($script:VmMissing) { $script:btnApply.Text = "保存 (Edge Box 検出後に自動適用)" }
     else { $script:btnApply.Text = "この内容で適用" }
 }
 
@@ -997,7 +1000,7 @@ function Update-MemoryUi {
     $script:lblMemVm.Text = "$($script:VmNameSel) に:"
     if (-not $script:Vm) {
         $script:lblMemHost.Text = ""
-        $script:lblMemNote.Text = "EdgeBox が見つからないため、メモリは変更できません (EdgeBox を作成・検出してから)。"
+        $script:lblMemNote.Text = "Edge Box が見つからないため、メモリは変更できません (Edge Box を作成・検出してから)。"
         $script:lblMemNote.ForeColor = [System.Drawing.Color]::DimGray
         $script:btnMem.Enabled = $false; $script:numMem.Enabled = $false
         return
@@ -1022,8 +1025,8 @@ function Update-MemoryUi {
         return
     }
     $st = if ($same) { "変更なし" }
-          elseif ([string]$script:Vm.State -ne "Off") { "EdgeBox は実行中のため、反映には EdgeBox の再起動が必要です (適用時に確認します)" }
-          else { "EdgeBox は停止中のため、すぐに反映できます" }
+          elseif ([string]$script:Vm.State -ne "Off") { "Edge Box は実行中のため、反映には Edge Box の再起動が必要です (適用時に確認します)" }
+          else { "Edge Box は停止中のため、すぐに反映できます" }
     $script:lblMemNote.Text = "$cur    " + $(if ($warns.Count -gt 0) { "[注意] " + ($warns -join " / ") + "    " } else { "" }) + $st
     $script:lblMemNote.ForeColor = if ($warns.Count -gt 0) { [System.Drawing.Color]::FromArgb(180, 95, 0) } else { [System.Drawing.Color]::DimGray }
     $script:btnMem.Enabled = (-not $same)
@@ -1046,7 +1049,7 @@ function Invoke-Engine([string[]]$EngineArgs) {
 }
 
 function Refresh-All {
-    Update-Environment                       # スケジューラ・bcd・EdgeBox 状態・メモリを読み直す
+    Update-Environment                       # スケジューラ・bcd・Edge Box 状態・メモリを読み直す
     $script:UnderMinroot = ($script:VisibleLps -lt $script:TotalLps)
     Update-Header
     Sync-MemoryControl
@@ -1069,7 +1072,7 @@ $script:cmbVm.Add_SelectedIndexChanged({
     if ($script:cmbVm.SelectedItem) { $script:VmNameSel = [string]$script:cmbVm.SelectedItem }
     Refresh-All
 })
-# 一覧に無い 登録名 (これから作る EdgeBox) も入力できるようにする
+# 一覧に無い 登録名 (これから作る Edge Box) も入力できるようにする
 $script:cmbVm.Add_Leave({
     $t = ([string]$script:cmbVm.Text).Trim()
     if ($t -and $t -ne $script:VmNameSel) { $script:VmNameSel = $t; Refresh-All }
@@ -1083,11 +1086,11 @@ $script:btnMem.Add_Click({
     $msg = "登録『$($script:VmNameSel)』のメモリを $($script:MemVmGB) GB → $g GB に変更します。`n" +
            "Windows 側に残るメモリ: $hostGB GB`n`n"
     if ($running) {
-        $msg += "EdgeBox は実行中です。反映には EdgeBox の再起動が必要です。`n" +
+        $msg += "Edge Box は実行中です。反映には Edge Box の再起動が必要です。`n" +
                 "今すぐ『停止 → 設定 → 起動』を行いますか?`n" +
                 "(収集が数分止まります。正常にシャットダウンできない場合は何も変更せず中止します)"
     } else {
-        $msg += "EdgeBox は停止中のため、すぐに反映されます。よろしいですか?"
+        $msg += "Edge Box は停止中のため、すぐに反映されます。よろしいですか?"
     }
     $r = [System.Windows.Forms.MessageBox]::Show($msg, "メモリの割り当て",
         [System.Windows.Forms.MessageBoxButtons]::YesNo, [System.Windows.Forms.MessageBoxIcon]::Question)
@@ -1124,7 +1127,7 @@ $script:btnApply.Add_Click({
     $mode = "full"          # 方式は完全分離のみ
     $hostText  = ConvertTo-LpRangeText $sel.HostLps
     $guestText = ConvertTo-LpRangeText $sel.GuestLps
-    $verb = if ($script:VmMissing) { "保存します (EdgeBox を作成・起動した時点で自動適用)" } else { "適用します" }
+    $verb = if ($script:VmMissing) { "保存します (Edge Box を作成・起動した時点で自動適用)" } else { "適用します" }
     $confirm = "次の内容で${verb}。`n`n" +
         "  Windows            : CPU $hostText  ($($sel.HostCores) コア)`n" +
         "  $($script:VmNameSel) : CPU $guestText  ($($sel.GuestCores) コア)`n`n" +
@@ -1162,8 +1165,8 @@ $script:btnApply.Add_Click({
     if ($mode -eq "full" -and $pending) {
         $r2 = [System.Windows.Forms.MessageBox]::Show(
             "設定を書き込みました。`n`n" +
-            "PC を再起動すると、EdgeBox を割り当てたコアに固定してから起動します (以後、起動のたびに自動)。`n" +
-            "成立したかは、この画面の上部か『EdgeBox 監視』の「分離の状態」で確認できます。`n`n" +
+            "PC を再起動すると、Edge Box を割り当てたコアに固定してから起動します (以後、起動のたびに自動)。`n" +
+            "成立したかは、この画面の上部か『Edge Box 監視』の「分離の状態」で確認できます。`n`n" +
             "今すぐ再起動しますか?", "CPU コア割り当て",
             [System.Windows.Forms.MessageBoxButtons]::YesNo, [System.Windows.Forms.MessageBoxIcon]::Question)
         if ($r2 -eq [System.Windows.Forms.DialogResult]::Yes) { Restart-Computer -Force }
@@ -1172,10 +1175,10 @@ $script:btnApply.Add_Click({
     if ($script:VmMissing) {
         Show-Info ("保存しました。`n`n  Windows            : CPU $hostText`n  $($script:VmNameSel) : CPU $guestText`n`n" +
             "登録『$($script:VmNameSel)』を作成して起動すると、この割り当てが自動で適用されます。`n" +
-            "(EdgeBox の起動を検出して自動で適用します)")
+            "(Edge Box の起動を検出して自動で適用します)")
     } else {
     Show-Info ("適用しました。`n`n  Windows            : CPU $hostText`n  $($script:VmNameSel) : CPU $guestText`n`n" +
-        "『EdgeBox 監視』の「分離の状態」で、実際にどのコアで動いているか確認できます。")
+        "『Edge Box 監視』の「分離の状態」で、実際にどのコアで動いているか確認できます。")
     }
 })
 
@@ -1207,7 +1210,7 @@ function Show-CoreChooser([int[]]$Preselect, [string]$Title, [int[]]$GuestLps) {
     $d.MaximizeBox = $false
     $d.Font = New-Object System.Drawing.Font("Meiryo UI", 9)
 
-    $lbl = New-Lbl "このアプリを動かすコアを選びます (複数選択可)。EdgeBox 用のコアは選べないため表示していません。" 12 10 660
+    $lbl = New-Lbl "このアプリを動かすコアを選びます (複数選択可)。Edge Box 用のコアは選べないため表示していません。" 12 10 660
     $d.Controls.Add($lbl)
 
     $fp = New-Object System.Windows.Forms.FlowLayoutPanel
@@ -1219,7 +1222,7 @@ function Show-CoreChooser([int[]]$Preselect, [string]$Title, [int[]]$GuestLps) {
 
     $boxes = @{}
     foreach ($c in $script:Cores) {
-        if (@($c.Lps | Where-Object { $GuestLps -contains $_ }).Count -gt 0) { continue }   # EdgeBox 用は選ばせない
+        if (@($c.Lps | Where-Object { $GuestLps -contains $_ }).Count -gt 0) { continue }   # Edge Box 用は選ばせない
         $cb = New-Object System.Windows.Forms.CheckBox
         $cb.Text = "{0}  (CPU {1})" -f $c.Label, (ConvertTo-LpRangeText $c.Lps)
         $cb.Size = New-Object System.Drawing.Size(158, 24)
@@ -1617,7 +1620,7 @@ function Show-AppsDialog {
         if ($a) { $cmbPri.SelectedItem = [string]$a.Priority }
     })
 
-    $note = New-Lbl "『高』は取り合いになったときに優先されます。EdgeBox 用のコアは避けてください (EdgeBox と取り合いになります)。" 12 448 850
+    $note = New-Lbl "『高』は取り合いになったときに優先されます。Edge Box 用のコアは避けてください (Edge Box と取り合いになります)。" 12 448 850
     $note.ForeColor = [System.Drawing.Color]::DimGray
     $d.Controls.Add($note)
 

@@ -4,7 +4,7 @@
 
 .DESCRIPTION
     cpu-apps.json に登録したアプリを、起動のたびに指定コアへ固定し直します。
-    EdgeBox のコア分割 (cpu-partition.ps1) とは独立して動き、対象は Windows 側のアプリだけです。
+    Edge Box のコア分割 (cpu-partition.ps1) とは独立して動き、対象は Windows 側のアプリだけです。
 
       - 割り当て: 選んだ論理 CPU にプロセスを固定 (プロセッサ アフィニティ)
       - 優先度  : 通常 / 高 / 低 を指定可能 (取り合いになったときの順番)
@@ -241,8 +241,8 @@ if ($apps.Count -eq 0) {
     exit 0
 }
 
-# アプリは Windows 用コアの中でだけ動かす: EdgeBox 用コア (cpu-partition.json の GuestLps) と、
-# Windows から見えない CPU (minroot で隠れている分) は指定から外す。EdgeBox の処理と混ざらないための決まり
+# アプリは Windows 用コアの中でだけ動かす: Edge Box 用コア (cpu-partition.json の GuestLps) と、
+# Windows から見えない CPU (minroot で隠れている分) は指定から外す。Edge Box の処理と混ざらないための決まり
 $guestMaskAll = [int64]0
 try {
     $pf = Join-Path $PSScriptRoot "cpu-partition.json"
@@ -257,7 +257,7 @@ foreach ($a in $apps) {
     if ($lps.Count -eq 0) { continue }
     $mask = Get-LpMask $lps
     $mask = ($mask -band (-bnot $guestMaskAll)) -band $visibleMask
-    if ($mask -eq 0) { Write-AppLog "  $($a.Name): 指定コアがすべて EdgeBox 用か見えない CPU のため適用しません (CPU $(ConvertTo-LpRangeText $lps))"; continue }
+    if ($mask -eq 0) { Write-AppLog "  $($a.Name): 指定コアがすべて Edge Box 用か見えない CPU のため適用しません (CPU $(ConvertTo-LpRangeText $lps))"; continue }
     $pri = Resolve-Priority ([string]$a.Priority)
     $procs = Get-MatchingProcesses $a
     if ($procs.Count -eq 0) { $miss++; continue }

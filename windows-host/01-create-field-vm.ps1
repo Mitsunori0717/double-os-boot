@@ -1,21 +1,21 @@
 ﻿<#
 .SYNOPSIS
-    EdgeBox (メーカー製の専用機 Linux) の物理ディスクを、
-    Windows 上の Hyper-V EdgeBox としてそのまま起動する定義を作成します。
+    Edge Box (メーカー製の専用機 Linux) の物理ディスクを、
+    Windows 上の Hyper-V Edge Box としてそのまま起動する定義を作成します。
 
 .DESCRIPTION
     - 対象ディスクを Windows からオフライン化し (誤操作・同時アクセス防止)、
-      無改造のまま EdgeBox に接続します (イメージのコピーや変換はしません)
-    - セキュアブートを無効化します (EdgeBox は独自の署名チェーンを持つため)
+      無改造のまま Edge Box に接続します (イメージのコピーや変換はしません)
+    - セキュアブートを無効化します (Edge Box は独自の署名チェーンを持つため)
     - メモリは固定割り当て、チェックポイントは無効 (物理ディスクのため)
-    - ネットワークは外部スイッチ推奨 (工作機械が EdgeBox に到達できる必要があるため)
+    - ネットワークは外部スイッチ推奨 (工作機械が Edge Box に到達できる必要があるため)
 
 .EXAMPLE
     # まずディスク番号と NIC 名を確認
     Get-Disk
     Get-NetAdapter
 
-    # EdgeBox のディスクが 0、有線LAN が "イーサネット" の場合
+    # Edge Box のディスクが 0、有線LAN が "イーサネット" の場合
     .\01-create-field-vm.ps1 -DiskNumber 0 -NetAdapterName "イーサネット"
 
 .NOTES
@@ -24,7 +24,7 @@
 #>
 [CmdletBinding()]
 param(
-    # EdgeBox が入っている物理ディスク番号 (Get-Disk で確認)
+    # Edge Box が入っている物理ディスク番号 (Get-Disk で確認)
     [Parameter(Mandatory = $true)]
     [int]$DiskNumber,
 
@@ -33,7 +33,7 @@ param(
     [int]$CpuCount    = 6,
 
     # 外部スイッチを作る物理 NIC 名 (Get-NetAdapter で確認)。IP アドレスでも指定できます。
-    # 省略時は Default Switch (NAT) になり、工作機械から EdgeBox に到達できないため
+    # 省略時は Default Switch (NAT) になり、工作機械から Edge Box に到達できないため
     # 収集運用では必ず指定を推奨
     [string]$NetAdapterName = "",
 
@@ -64,7 +64,7 @@ if (Get-VM -Name $VMName -ErrorAction SilentlyContinue) {
 # --- 安全確認: システムディスク (C:) ではないこと ---
 $sysDisk = (Get-Partition -DriveLetter C).DiskNumber
 if ($DiskNumber -eq $sysDisk) {
-    Write-Error "ディスク $DiskNumber は Windows のシステムディスクです。EdgeBox のディスク番号を指定してください。"
+    Write-Error "ディスク $DiskNumber は Windows のシステムディスクです。Edge Box のディスク番号を指定してください。"
     exit 1
 }
 
@@ -163,7 +163,7 @@ if ($SwitchName) {
         Write-Host "LAN アダプター『$NetAdapterName』が見つかりません。" -ForegroundColor Red
         if ($NetAdapterName -match '^\d{1,3}(\.\d{1,3}){3}$') {
             Write-Host "  IP アドレスで指定されましたが、その IP を持つアダプターはこの PC にありません。" -ForegroundColor Yellow
-            Write-Host "  (工作機械や EdgeBox 側の IP ではなく、この PC の LAN ポートを指定してください)" -ForegroundColor Yellow
+            Write-Host "  (工作機械や Edge Box 側の IP ではなく、この PC の LAN ポートを指定してください)" -ForegroundColor Yellow
         }
         Show-NetAdapters
         Show-VMSwitches
@@ -201,19 +201,19 @@ if ($SwitchName) {
         exit 1
     } else {
         $useSwitch = "Default Switch"
-        Write-Host "警告: Default Switch (NAT) を使用します。工作機械から EdgeBox に到達できません。" -ForegroundColor Yellow
+        Write-Host "警告: Default Switch (NAT) を使用します。工作機械から Edge Box に到達できません。" -ForegroundColor Yellow
         Write-Host "      収集運用では -NetAdapterName または -SwitchName を指定してください。"
     }
 }
 
-# --- 同じ物理ディスクを既に他の EdgeBox が使っていないか (同時使用は不可) ---
+# --- 同じ物理ディスクを既に他の Edge Box が使っていないか (同時使用は不可) ---
 foreach ($other in @(Get-VM -ErrorAction SilentlyContinue)) {
     foreach ($d in @(Get-VMHardDiskDrive -VMName $other.Name -ErrorAction SilentlyContinue)) {
         if ($d.DiskNumber -eq $DiskNumber) {
             Write-Host ""
             Write-Host "ディスク $DiskNumber は既に 登録『$($other.Name)』が使っています。" -ForegroundColor Red
-            Write-Host "  1 つの物理ディスクを 2 つの EdgeBox から同時に使うことはできません。" -ForegroundColor Yellow
-            Write-Host "  旧構成の EdgeBox が残っている場合は、先に削除してください: Remove-VM '$($other.Name)' -Force" -ForegroundColor Yellow
+            Write-Host "  1 つの物理ディスクを 2 つの Edge Box から同時に使うことはできません。" -ForegroundColor Yellow
+            Write-Host "  旧構成の Edge Box が残っている場合は、先に削除してください: Remove-VM '$($other.Name)' -Force" -ForegroundColor Yellow
             Write-Host "ディスクには何も変更していません。" -ForegroundColor Green
             exit 1
         }
@@ -224,7 +224,7 @@ $disk = Get-Disk -Number $DiskNumber
 Write-Host "対象ディスク:" -ForegroundColor Cyan
 Write-Host ("  番号 {0}: {1} ({2:N0} GB)" -f $disk.Number, $disk.FriendlyName, ($disk.Size / 1GB))
 if (-not $NoConfirm) {
-    $ans = Read-Host "このディスクを EdgeBox として起動します。よろしいですか? (y/N)"
+    $ans = Read-Host "このディスクを Edge Box として起動します。よろしいですか? (y/N)"
     if ($ans -ne "y") { exit 0 }
 }
 
@@ -253,7 +253,7 @@ try {
         -SwitchName $useSwitch | Out-Null
     $createdVm = $true
 
-    # EdgeBox は独自の署名済みブートチェーンを持つため、MS のセキュアブートは無効化
+    # Edge Box は独自の署名済みブートチェーンを持つため、MS のセキュアブートは無効化
     Set-VMFirmware -VMName $VMName -EnableSecureBoot Off
 
     Set-VMProcessor -VMName $VMName -Count $CpuCount
@@ -261,7 +261,7 @@ try {
     # 物理ディスクのためチェックポイントは使用不可。自動停止はシャットダウン要求に
     Set-VM -Name $VMName -CheckpointType Disabled -AutomaticStopAction ShutDown
 
-    # --- ディスクをオフライン化 (Windows 側から見えなくし、EdgeBox 専有にする) ---
+    # --- ディスクをオフライン化 (Windows 側から見えなくし、Edge Box 専有にする) ---
     if (-not $disk.IsOffline) {
         Write-Host "ディスクをオフライン化しています (Windows からの誤アクセス防止)..." -ForegroundColor Cyan
         Set-Disk -Number $DiskNumber -IsOffline $true
@@ -274,7 +274,7 @@ try {
     Set-VMFirmware -VMName $VMName -FirstBootDevice $bootDisk
 } catch {
     Write-Host ""
-    Write-Host "EdgeBox の作成に失敗しました: $($_.Exception.Message)" -ForegroundColor Red
+    Write-Host "Edge Box の作成に失敗しました: $($_.Exception.Message)" -ForegroundColor Red
     Write-Host "ここまでの変更を元に戻しています..." -ForegroundColor Yellow
     if ($createdVm) {
         Remove-VM -Name $VMName -Force -ErrorAction SilentlyContinue
@@ -303,6 +303,6 @@ Write-Host "起動するには: .\02-start-field-vm.ps1" -ForegroundColor Cyan
 Write-Host ""
 Write-Host "重要:" -ForegroundColor Yellow
 Write-Host "  - 初回起動でメーカーシステムが正常に立ち上がるか、ライセンス・機器認識に"
-Write-Host "    問題がないかを必ず確認してください (EdgeBox での動作はメーカーサポート外です)。"
-Write-Host "  - 問題があれば EdgeBox を削除し、README の手順でネイティブ起動に戻せます"
+Write-Host "    問題がないかを必ず確認してください (Edge Box での動作はメーカーサポート外です)。"
+Write-Host "  - 問題があれば Edge Box を削除し、README の手順でネイティブ起動に戻せます"
 Write-Host "    (ディスクは無改造なので、いつでも元の運用に戻れます)。"
