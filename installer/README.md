@@ -1,46 +1,29 @@
-# 新しい PC への導入 (EXE を作る / 使う)
+# 新しい PC への導入
 
-## 1. EXE を作る (作業用 PC で 1 回)
+`build-installer.cmd` をダブルクリックすると `EdgeBox-Setup.exe` ができます。
+Windows 標準の .NET Framework で自己展開 EXE を作ります。起動時に UAC が出ます。
 
-`build-installer.cmd` を**ダブルクリック**するだけです。
+新しい PC に EXE をコピーし、「管理者として実行」してください。
+`C:\EdgeBox` に一式を配置して、一括セットアップを起動します。
+セットアップは現在の状態を確認し、未完了の手順だけを実行します。
+必要なディスク・LAN の選択と自動サインインのパスワード入力以外は自動で進み、必要時には通常の方法で再起動します。
 
-```
-installer\EdgeBox-Setup.exe   ← これができます
-```
+一括の `setup-all.cmd` と、`setup` 内の番号別バッチを両方同梱します。
+失敗時は `C:\EdgeBox\setup\logs\日時-実行ID\summary.txt` に原因・対処法・再実行するバッチが出ます。
+既存の設定やログは配布物に含めず、既存 PC の更新時も端末固有の設定は残します。
+同梱対象は `windows-host`、`windows-cpu-partition`、`setup` のソースと説明書、およびルートの起動・更新バッチです。
 
-Windows に標準で入っている IExpress を使うため、追加のソフトは要りません。
-管理者権限も不要です (作るだけなので)。
-
-中身は `windows-host` と `windows-cpu-partition` の一式です。
-**この PC だけの設定や記録** (画面設定・CPU 割り当て・動作記録) は自動で除かれるため、
-そのまま別の PC に持っていけます。
-
-## 2. 新しい PC に導入する
-
-`EdgeBox-Setup.exe` をコピーし、**右クリック →「管理者として実行」**。
-
-やってくれること:
-
-| | 内容 |
-|---|---|
-| 1 | 一式を `C:\EdgeBox` に配置 (既にあれば入れ替え。**設定と記録は残す**) |
-| 2 | ダウンロードの印 (Mark of the Web) を外す |
-| 3 | デスクトップのアイコンを作る (Edge Box 起動 / 設定 / 全部シャットダウン / Edge Box 再起動・画面 / CPU割り当て) |
-
-この PC に固有の作業 (Hyper-V の有効化、Edge Box の作成、CPU の分離) は行いません。
-配置後、`C:\EdgeBox\windows-host\SETUP-STEPS.md` の①から順に進めてください。
-
-> Hyper-V がまだ有効でない PC では、Edge Box に関わるアイコンは作れません。
-> Hyper-V を有効にして再起動したあと、**この EXE をもう一度実行**すれば作られます。
-
-## 更新のときも同じ
-
-すでに運用している PC でも、新しい `EdgeBox-Setup.exe` を実行すれば中身が入れ替わります。
-画面設定・CPU 割り当て・自動サインインはそのまま残ります。
-
-## 配置先を変える
+ZIP だけを作って渡す場合は次を実行します。
 
 ```powershell
-# EXE を展開せずに中の install.ps1 を直接使う場合
-.\install.ps1 -InstallDir "D:\EdgeBox"
+powershell -NoProfile -ExecutionPolicy Bypass -File .\installer\build-installer.ps1 -ZipOnly
 ```
+
+生成された `installer\EdgeBox-Setup.zip` を新しい PC のローカルディスクへ展開して `setup-all.cmd` を実行します。
+ZIP と EXE の中のセットアップ一式は同じです。
+配布物には別 PC の設定・進捗・ログ・資格情報・取得済み実行ファイルを含めません。
+
+導入条件・番号一覧・再実行・ログについては [../setup/README.md](../setup/README.md)。
+FSBP が入った Edge Box の物理ディスクが別途必要です。FSBP 自体の導入やメーカー固有のアプリ設定は自動化しません。
+
+配置先を変える場合は、EXE と同じ payload.zip がある場所から `install.ps1 -InstallDir "D:\EdgeBox"` を実行できます。

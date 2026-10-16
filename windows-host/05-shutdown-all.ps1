@@ -17,7 +17,8 @@
 param(
     [string]$VMName = "EdgeBox",
     [switch]$NoConfirm,
-    [switch]$Setup
+    [switch]$Setup,
+    [ValidateRange(1,1800)][int]$TimeoutSec = 180
 )
 
 $ErrorActionPreference = "Stop"
@@ -79,32 +80,25 @@ if (-not $NoConfirm) {
     $shutdownWindows = ($res -eq [System.Windows.Forms.DialogResult]::Yes)
 }
 
+Import-Module (Join-Path $PSScriptRoot 'vm-shutdown.psm1') -Force
+$shutdownLog = Join-Path $PSScriptRoot 'shutdown-log.txt'
+function Write-ShutdownLog([string]$Message) {
+    Write-Host $Message
+    try { Add-Content -LiteralPath $shutdownLog -Encoding UTF8 -Value ((Get-Date -Format 'yyyy-MM-dd HH:mm:ss')+' '+$Message) } catch { }
+}
+Write-ShutdownLog '===== 終了開始 ====='
+function Close-ShutdownConsole {
 # 先にコンソール画面 (vmconnect) を閉じる。
 # 開いたままだと、停止後に画面側から Edge Box が自動で再起動されることがあるため
 Get-Process vmconnect -ErrorAction SilentlyContinue | ForEach-Object { [void]$_.CloseMainWindow() }
-Start-Sleep -Seconds 2
 Get-Process vmconnect -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-
-$vm = Get-VM -Name $VMName -ErrorAction SilentlyContinue
-if ($vm -and $vm.State -eq "Running") {
-    Write-Host "Edge Box にシャットダウン要求を送信しました。終了を待っています..."
-    Stop-VM -Name $VMName            # ACPI シャットダウン要求 (強制電源断ではない)
-    $sw = [System.Diagnostics.Stopwatch]::StartNew()
-    while ($sw.Elapsed.TotalSeconds -lt 180) {
-        if ((Get-VM -Name $VMName).State -eq "Off") { break }
-        Start-Sleep -Seconds 3
-    }
-    if ((Get-VM -Name $VMName).State -ne "Off") {
-        [System.Windows.Forms.MessageBox]::Show(
-            "Edge Box が3分以内に停止しませんでした。`nWindows のシャットダウンを中止します。`nコンソール画面で状態を確認してください (強制終了はしません)。",
-            "全部シャットダウン",
-            [System.Windows.Forms.MessageBoxButtons]::OK,
-            [System.Windows.Forms.MessageBoxIcon]::Warning) | Out-Null
-        exit 1
-    }
-    Write-Host "Edge Box が正常に終了しました。" -ForegroundColor Green
-} else {
-    Write-Host "Edge Box は既に停止しています。"
+}
+try {
+    Wait-EdgeBoxShutdown -VMName $VMName -TimeoutSec $TimeoutSec -Log {param($m) Write-ShutdownLog $m} -AfterRequest {Close-ShutdownConsole}
+} catch {
+    Write-ShutdownLog ('失敗: '+$_.Exception.Message)
+    [System.Windows.Forms.MessageBox]::Show($_.Exception.Message, '全部シャットダウン', 'OK', 'Warning') | Out-Null
+    exit 1
 }
 
 # --- 停止中のいまのうちに、予約していた入出力の設定 (メモリの固定など) を反映しておく ---
@@ -134,7 +128,10 @@ try {
 
 if ($shutdownWindows) {
     Write-Host "Windows をシャットダウンします..."
-    shutdown /s /t 10 /c "Edge Box の終了を確認しました。Windows をシャットダウンします。"
+    # /t > 0 は Windows の強制終了を暗黙に有効化するため、待ち時間 0・/f なしで要求する。
+    Write-ShutdownLog 'Windows へ通常のシャットダウンを要求（追加の 10 秒待ちは省略）。'
+    shutdown.exe /s /t 0 /c "Edge Box の終了を確認しました。Windows をシャットダウンします。"
+    if ($LASTEXITCODE -ne 0) { Write-ShutdownLog ('Windows の終了要求に失敗。終了コード: '+$LASTEXITCODE); exit 1 }
 } else {
     # 停止後しばらく見張り、何かに自動で再起動されたらもう一度止める (再発防止の保険)
     Write-Host "Edge Box の停止を確認しています (1分間)..."
@@ -147,12 +144,8 @@ if ($shutdownWindows) {
     if ($restarted) {
         Write-Warning "Edge Box が自動で再起動されたため、もう一度停止します..."
         Get-Process vmconnect -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-        Stop-VM -Name $VMName -ErrorAction SilentlyContinue
-        $sw3 = [System.Diagnostics.Stopwatch]::StartNew()
-        while ($sw3.Elapsed.TotalSeconds -lt 180) {
-            if ((Get-VM -Name $VMName).State -eq "Off") { break }
-            Start-Sleep -Seconds 3
-        }
+        try { Wait-EdgeBoxShutdown -VMName $VMName -TimeoutSec $TimeoutSec -Log {param($m) Write-ShutdownLog $m} }
+        catch { Write-ShutdownLog ('再停止に失敗: '+$_.Exception.Message); [System.Windows.Forms.MessageBox]::Show($_.Exception.Message,'全部シャットダウン') | Out-Null; exit 1 }
     }
     [System.Windows.Forms.MessageBox]::Show("Edge Box のみ終了しました。Windows はそのまま使えます。`n再開するには 02-start-field-vm.ps1 を実行してください。",
         "全部シャットダウン") | Out-Null

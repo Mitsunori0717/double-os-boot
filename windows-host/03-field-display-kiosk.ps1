@@ -392,12 +392,12 @@ if ($Splash) {
         $main = New-Object System.Windows.Forms.Label
         $main.Name = "main"
         $main.Dock = "Bottom"
-        $main.Height = 80
+        $main.Height = 112
         $main.Padding = New-Object System.Windows.Forms.Padding(0, 0, 0, 24)
         $main.TextAlign = "BottomCenter"
         $main.BackColor = [System.Drawing.Color]::Black
         $main.ForeColor = [System.Drawing.Color]::Gray
-        $main.Font = New-Object System.Drawing.Font("Meiryo UI", 12)
+        $main.Font = New-Object System.Drawing.Font("Meiryo UI", 20)
         $main.Text = $script:SplashMsg
         # 進み具合などの説明文は出さない。「Edge Box 起動中」だけ
         $f.Controls.Add($main)
@@ -1651,8 +1651,10 @@ if ($ApplyResolution) {
 function Register-SplashTask([string]$User) {
     if (-not $User) { $User = $env:USERNAME }
     $ts = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -MultipleInstances Parallel -ExecutionTimeLimit (New-TimeSpan -Seconds 0)
-    $a = New-ScheduledTaskAction -Execute "powershell.exe" `
-        -Argument "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$PSCommandPath`" -Splash"
+    # 読み込み・モジュール検出・コンパイルを伴う大きな PS1 をサインイン直後に起動しない。
+    # 専用 EXE は登録時に一度だけ生成し、ログオン時は直接実行する。
+    $exe = & (Join-Path $PSScriptRoot 'build-startup-cover.ps1')
+    $a = New-ScheduledTaskAction -Execute $exe -Argument ('"' + $PSScriptRoot + '"')
     $tr = New-ScheduledTaskTrigger -AtLogOn -User $User
     Register-ScheduledTask -TaskName "$TaskName-Splash" -Action $a -Trigger $tr -Settings $ts -RunLevel Highest -Force | Out-Null
 }
@@ -1685,7 +1687,13 @@ if ($Install) {
     # Edge Box 側の自動起動も必要。未設定なら、ここで一緒に入れておく (実行中の Edge Box にも設定できる)
     $vmAuto = Get-VM -Name $VMName -ErrorAction SilentlyContinue
     if ($vmAuto) {
-        if ($vmAuto.AutomaticStartAction -ne "Start") {
+        $cpuCfg = $null
+        $cpuFile = Join-Path (Split-Path $PSScriptRoot -Parent) 'windows-cpu-partition\cpu-partition.json'
+        if (Test-Path $cpuFile) { $cpuCfg = Get-Content $cpuFile -Raw -Encoding UTF8 | ConvertFrom-Json }
+        if ($cpuCfg -and $cpuCfg.Mode -eq 'full' -and $cpuCfg.ManageVmStart -and $cpuCfg.VMName -eq $VMName) {
+            Set-VM -Name $VMName -AutomaticStartAction Nothing -ErrorAction Stop
+            Write-Host 'CPU 固定後に起動する既存の CPU 起動タスクを使います。'
+        } elseif ($vmAuto.AutomaticStartAction -ne "Start") {
             try {
                 Set-VM -Name $VMName -AutomaticStartAction Start -AutomaticStartDelay 30
                 Write-Host "登録 '$VMName' を PC 起動時に自動で起動するよう設定しました (30 秒後)。" -ForegroundColor Green
@@ -1729,7 +1737,13 @@ Log "===== 表示処理を開始 (左=$LeftUrl / 右=$RightUrl) ====="
 
 # --- 起動中画面: 表示がそろうまで左画面を黒い画面で覆う ---
 # (何より先に出す。ログオンタスク EdgeBox-Display-Kiosk-Splash が先に出していればそれを使い、無ければここで出す)
+function Get-StartupCoverProcesses {
+    $prefix = Join-Path $PSScriptRoot 'startup-cover\'
+    @(Get-CimInstance Win32_Process -Filter "Name LIKE 'EdgeBox-StartupCover-%'" -ErrorAction SilentlyContinue |
+        Where-Object { $_.ExecutablePath -and $_.ExecutablePath.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase) })
+}
 function Stop-Splash {
+    Get-StartupCoverProcesses | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
     Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" -ErrorAction SilentlyContinue |
         Where-Object { $_.CommandLine -match '-Splash' -and $_.ProcessId -ne $PID } |
         ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
@@ -1737,6 +1751,7 @@ function Stop-Splash {
     Remove-Item $SplashReadyFile -Force -ErrorAction SilentlyContinue
 }
 function Test-SplashRunning {
+    if (@(Get-StartupCoverProcesses).Count) { return $true }
     $procs = @(Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" -ErrorAction SilentlyContinue |
         Where-Object { $_.CommandLine -match '-Splash' -and $_.ProcessId -ne $PID })
     return ($procs.Count -gt 0)
@@ -1803,7 +1818,9 @@ function Repair-SplashTask {
         $sT = Get-ScheduledTask -TaskName "$TaskName-Splash" -ErrorAction SilentlyContinue
         $delay = ""
         if ($sT) { $first = @($sT.Triggers) | Select-Object -First 1; $delay = [string]$first.Delay }
-        if ($sT -and (-not $delay -or $delay -eq "PT0S")) { return }
+        $fastExe = & (Join-Path $PSScriptRoot 'build-startup-cover.ps1') -PathOnly
+        $fast = $sT -and @($sT.Actions | Where-Object Execute -eq $fastExe).Count -gt 0 -and (Test-Path $fastExe)
+        if ($fast -and (-not $delay -or $delay -eq "PT0S")) { return }
         $mt = @($mainT.Triggers | Where-Object { $_.UserId }) | Select-Object -First 1
         Register-SplashTask ([string]$mt.UserId)
         Log ("起動中画面のログオンタスクを遅延なしで登録し直しました (" + $(if ($sT) { "旧設定の遅延: $delay" } else { "未登録でした" }) + ")。次回のサインインから、覆いがすぐに出ます。")

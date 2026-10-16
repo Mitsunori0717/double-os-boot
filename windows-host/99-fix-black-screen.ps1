@@ -36,6 +36,8 @@ function Test-Admin {
 }
 
 function Get-BlackWindows {
+    Get-CimInstance Win32_Process -Filter "Name LIKE 'EdgeBox-StartupCover-%'" -ErrorAction SilentlyContinue |
+        Where-Object { -not $_.ExecutablePath -or $_.ExecutablePath.StartsWith((Join-Path $PSScriptRoot 'startup-cover\'), [StringComparison]::OrdinalIgnoreCase) }
     @(Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" -ErrorAction SilentlyContinue |
         Where-Object { $_.CommandLine -match '-(Splash|Backdrop)' -and $_.ProcessId -ne $PID })
 }
@@ -45,7 +47,7 @@ $targets = Get-BlackWindows
 $closed = 0
 $denied = @()
 foreach ($t in $targets) {
-    $kind = if ($t.CommandLine -match '-Splash') { "起動中スプラッシュ" } else { "黒背景" }
+    $kind = if ($t.CommandLine -match '-Splash' -or $t.Name -like 'EdgeBox-StartupCover-*') { "起動中スプラッシュ" } else { "黒背景" }
     try {
         Stop-Process -Id $t.ProcessId -Force -ErrorAction Stop
         Write-Host "  閉じました: $kind (PID $($t.ProcessId))" -ForegroundColor Green

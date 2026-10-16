@@ -1,5 +1,5 @@
 @echo off
-chcp 932 >nul
+chcp 65001 >nul
 setlocal
 title Edge Box セットアップ EXE の作成
 
@@ -12,9 +12,12 @@ set "HERE=%~dp0"
 set "OUT=%HERE%EdgeBox-Setup.exe"
 
 powershell -NoProfile -ExecutionPolicy Bypass -File "%HERE%build-installer.ps1" -OutFile "%OUT%"
+set "buildExit=%errorlevel%"
 
 echo.
-if exist "%OUT%" (
+if not "%buildExit%"=="0" (
+  echo 作成に失敗しました。上の原因と調査用ファイルを確認してください。
+) else if exist "%OUT%" (
   echo 完成しました:
   echo   %OUT%
   echo.
@@ -24,3 +27,4 @@ if exist "%OUT%" (
 )
 echo.
 pause
+exit /b %buildExit%

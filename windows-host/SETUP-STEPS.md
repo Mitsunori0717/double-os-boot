@@ -1,5 +1,8 @@
 # 構成B セットアップ手順書 (①〜⑩)
 
+一括・番号別の導入はルートの `setup-all.cmd` を使えます。途中の状態を判定し、不足した設定だけを行います。
+失敗した番号の再実行方法とログは [../setup/README.md](../setup/README.md) を参照してください。以下は従来の手動操作です。
+
 対象環境: Windows 11 Pro (ディスク1=SanDisk) / Edge Box (ディスク0=KIOXIA) /
 LAN ポート5つ / 工作機械との接続は Ethernet。
 

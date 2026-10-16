@@ -11,3 +11,5 @@ launch-console-view.vbs
 launch-restart.vbs
 windows-update-lock.log
 quiet-windows-backup.json
+startup-cover/
+shutdown-log.txt

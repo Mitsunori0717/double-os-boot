@@ -262,3 +262,14 @@ CPU は完全分離で Edge Box 専用のコアの上で直接動いています
 - **GPU を増設しても Edge Box には直結できません** (GPU 直結 = DDA は Windows Server
   専用機能)。Edge Box は画面をネットワーク越しに提供するため Edge Box 側に GPU は不要です
 - BIOS の Fast Boot は有効にしないこと (F8 が使えなくなり、切り分けができなくなる)
+
+
+## 起動中画面と終了時間
+
+`03-field-display-kiosk.ps1 -Install` は起動中画面の専用 EXE をローカル生成し、サインイン時に遅延なしで直接起動します。大きな PowerShell スクリプトの読み込みを待たずに左画面を黒く覆い、下中央に「Edge Box 起動中」を 20 pt で表示します。コンソールが全画面になった合図で覆いを外します。ESC の 1 秒長押し、または `fix-black-screen.cmd` で解除できます。
+
+この処理は Windows のサインイン後に表示します。BIOS・Windows 起動ロゴ・サインイン前の画面を覆うものではありません。右画面は覆いません。再起動後の実際の表示開始時間は PC の起動状態・モニター認識に依存します。
+
+「全部シャットダウン」は FSBP に正常終了を要求し、停止を検出したら追加の 10 秒待ちを入れずに Windows の通常の終了へ進みます。`shutdown-log.txt` に要求時刻・VM 停止までの秒数・ホスト終了要求を記録します。最大待ち時間は要求を送った時点から既定 180 秒です。停止確認できなければ Windows の終了を中止します。
+
+VM の強制終了は物理機の電源断に相当し、未保存データを失う可能性があります（[Microsoft の Stop-VM の説明](https://learn.microsoft.com/en-us/powershell/module/hyper-v/stop-vm?view=windowsserver2025-ps)）。FSBP 内部のデータ保存・サービス停止自体は省略しません。

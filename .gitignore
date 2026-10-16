@@ -2,3 +2,9 @@
 update-token.txt
 # 入出力設定の予約 (端末固有)
 windows-host/io-pending.json
+setup/settings.json
+setup/resume-state.json
+setup/setup.lock
+setup/logs/
+installer/EdgeBox-Setup.zip
+installer/EdgeBox-Setup.exe

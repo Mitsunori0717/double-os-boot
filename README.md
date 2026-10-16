@@ -18,15 +18,19 @@ Windows 11 (ネイティブ動作 = 業務はフルスピード)
 | `windows-host/` | Edge Box の作成・起動・画面表示・自動サインイン・シャットダウン |
 | `windows-cpu-partition/` | CPU コアの完全分離、割り当て画面、リアルタイム監視 |
 | `installer/` | 新しい PC へ導入するための EXE を作るしくみ |
+| `setup/` | 実環境を判定して進める一括・番号別セットアップ、ログと再実行の案内 |
 
 ## 新しい PC への導入
 
 `installer\build-installer.cmd` をダブルクリックすると `EdgeBox-Setup.exe` ができます。
-これを新しい PC へ持っていって実行すれば、一式の配置とアイコン作成まで自動で終わります。
+これを新しい PC へ持っていって実行すると、一式を配置して一括セットアップへ進みます。
 くわしくは [installer/README.md](installer/README.md)。
 
-導入後の手順 (Hyper-V の有効化、Edge Box の作成、CPU の分離) は
-[windows-host/SETUP-STEPS.md](windows-host/SETUP-STEPS.md) の①から順に。
+ZIP を展開して使う場合はルートの `setup-all.cmd` を実行してください。
+途中まで設定済みでも、Hyper-V・VM・自動表示・自動サインイン・CPU 分離などを再確認して必要な設定だけを行います。
+失敗時は `setup/logs` の `summary.txt` に原因・対処法・再実行する番号別バッチを表示します。
+確認だけなら `setup/check-status.cmd`。詳しくは [setup/README.md](setup/README.md)。
+従来の手動手順は [windows-host/SETUP-STEPS.md](windows-host/SETUP-STEPS.md) に残しています。
 
 ## 日常の操作
 

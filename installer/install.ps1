@@ -1,18 +1,14 @@
 ﻿<#
 .SYNOPSIS
-    Edge Box 一式を新しい PC に配置し、デスクトップのアイコンを作ります。
+    Edge Box 一式を配置し、状態を自動判定する一括セットアップへ引き継ぎます。
     EdgeBox-Setup.exe の中から呼ばれます (単体でも実行できます)。
 
 .DESCRIPTION
     やること:
       1. 一式を C:\EdgeBox に配置する (既にあれば中身を入れ替え。設定と記録は残す)
       2. ダウンロードの印 (Mark of the Web) を外す
-      3. デスクトップのアイコンを作る
-         ※ Hyper-V がまだ無効な PC では、Edge Box に関わるアイコンは作れません。
-            その場合は Hyper-V を有効にして再起動したあと、もう一度この EXE を実行してください。
-
-    Edge Box の作成や CPU の分離といった、この PC に固有の作業は行いません。
-    配置後、C:\EdgeBox\windows-host\SETUP-STEPS.md の①から順に進めてください。
+      3. setup\setup-all.ps1 で未完了の設定だけを適用し、必要時に再起動します
+    失敗時の原因・対処法・再実行する番号別バッチは setup\logs に残ります。
 
 .EXAMPLE
     .\install.ps1
@@ -67,7 +63,9 @@ $archive = [System.IO.Compression.ZipFile]::OpenRead($zip)
 try {
     foreach ($entry in $archive.Entries) {
         if (-not $entry.Name) { continue }   # フォルダ
-        $dest = Join-Path $InstallDir $entry.FullName
+        $base = [IO.Path]::GetFullPath($InstallDir).TrimEnd('\') + '\'
+        $dest = [IO.Path]::GetFullPath((Join-Path $base $entry.FullName))
+        if (-not $dest.StartsWith($base,[StringComparison]::OrdinalIgnoreCase)) { throw '配布 ZIP に配置先の外を指す項目があります。' }
         New-Item -ItemType Directory -Path (Split-Path $dest -Parent) -Force | Out-Null
         [System.IO.Compression.ZipFileExtensions]::ExtractToFile($entry, $dest, $true)
     }
@@ -84,73 +82,14 @@ if ($keep.Count -gt 0) { Write-Host "      これまでの設定は残しまし�
 Write-Step "[2/3] ダウンロードの印を外しています..."
 Get-ChildItem $InstallDir -Recurse -File | Unblock-File -ErrorAction SilentlyContinue
 
-# --- 3. デスクトップのアイコン ---
-Write-Step "[3/3] デスクトップのアイコンを作っています..."
-$hostDir = Join-Path $InstallDir "windows-host"
-$cpuDir  = Join-Path $InstallDir "windows-cpu-partition"
-$ok = @(); $ng = @()
-
-function Invoke-Setup([string]$label, [string]$script, [string[]]$argv) {
-    $p = Join-Path $hostDir $script
-    if (-not (Test-Path $p)) { $script:ng += "$label (ファイルなし)"; return }
-    try {
-        & $p @argv *>&1 | Out-Null
-        $script:ok += $label
-    } catch {
-        $script:ng += "$label"
-    }
+# --- 3. 一括セットアップへ引き継ぐ ---
+Write-Step '[3/3] この PC の設定を確認し、未完了の手順を実行します...'
+$setup=Join-Path $InstallDir 'setup\setup-all.ps1'
+if (-not (Test-Path -LiteralPath $setup)) { throw 'setup フォルダがありません。最新の配布物を作成し直してください。' }
+# 子プロセスで実行する。設定済みなら何も変更せず、失敗時は番号別の再実行先を案内する。
+$child=Start-Process powershell.exe -NoNewWindow -Wait -PassThru -ArgumentList ('-NoProfile -ExecutionPolicy Bypass -File "'+$setup+'" -RestartIfNeeded -NoPause')
+if ($child.ExitCode -notin @(0,3010)) {
+    Write-Host ('未完了の設定があります。'+$InstallDir+'\setup\logs の最新の summary.txt を確認してください。') -ForegroundColor Yellow
 }
-
-Invoke-Setup "Edge Box 起動"        "00-field-launcher.ps1"       @("-Setup")
-Invoke-Setup "設定"                "08-settings-console.ps1"     @("-Setup")
-Invoke-Setup "全部シャットダウン"  "05-shutdown-all.ps1"         @("-Setup")
-Invoke-Setup "Edge Box 再起動/画面" "10-restart-edgebox.ps1"      @("-Setup")
-
-# Windows Update の自動更新・自動再起動を止める (収集が勝手に止まらないように)
-try {
-    $wuScript = Join-Path $hostDir "12-windows-update.ps1"
-    if (Test-Path $wuScript) {
-        & $wuScript -Quiet *>&1 | Out-Null
-        # 見張り役は -Quiet では登録しないため、ここで一度だけ通常実行して登録する
-        & $wuScript *>&1 | Out-Null
-        $ok += "Windows Update の自動更新を停止"
-    }
-} catch { $ng += "Windows Update の停止" }
-
-# 「PC のセットアップを完了しましょう」などの勧誘画面を止める (Edge Box の画面の前に出ないように)
-try {
-    $qScript = Join-Path $hostDir "13-quiet-windows.ps1"
-    if (Test-Path $qScript) { & $qScript *>&1 | Out-Null; $ok += "Windows の勧誘画面を停止" }
-} catch { $ng += "Windows の勧誘画面の停止" }
-
-# CPU 割り当て・監視のアイコン (Hyper-V が無くても作れる)
-try {
-    $cpuSetup = Join-Path $cpuDir "cpu-console.ps1"
-    if (Test-Path $cpuSetup) {
-        & $cpuSetup -Setup *>&1 | Out-Null
-        $ok += "CPU割り当て / Edge Box 監視"
-    }
-} catch { $ng += "CPU割り当て / Edge Box 監視" }
-
-Write-Host ""
-Write-Host "==============================================" -ForegroundColor Green
-Write-Host " 配置が終わりました"
-Write-Host "==============================================" -ForegroundColor Green
-if ($ok.Count -gt 0) { Write-Host "作成したアイコン: $($ok -join ' / ')" -ForegroundColor Green }
-if ($ng.Count -gt 0) {
-    Write-Host ""
-    Write-Host "作れなかったアイコン: $($ng -join ' / ')" -ForegroundColor Yellow
-    Write-Host "  Hyper-V がまだ有効でない可能性があります。有効にして再起動したあと、"
-    Write-Host "  この EXE をもう一度実行すると作られます。"
-}
-Write-Host ""
-Write-Host ""
-Write-Host "Windows Update は自動更新・自動再起動を止めてあります (収集が止まらないように)。" -ForegroundColor Yellow
-Write-Host "  更新を当てる: $hostDir\12-windows-update.ps1 -UpdateNow"
-Write-Host "  元に戻す    : $hostDir\12-windows-update.ps1 -Restore"
-Write-Host ""
-Write-Host "次の手順:" -ForegroundColor Cyan
-Write-Host "  $hostDir\SETUP-STEPS.md の①から順に進めてください。"
-Write-Host "  (Hyper-V の有効化 → Edge Box の作成 → CPU の完全分離)"
-Write-Host ""
-Read-Host "Enter キーで閉じます"
+Read-Host 'Enter キーで閉じます'
+exit $child.ExitCode

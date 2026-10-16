@@ -35,7 +35,8 @@ param(
     [switch]$Netplwiz,
     [switch]$Disable,
     [switch]$Status,
-    [string]$UserName
+    [string]$UserName,
+    [switch]$NoConfirm   # 一括導入用。パスワードは対話入力し、確認できなければ失敗として戻す
 )
 
 $ErrorActionPreference = "Stop"
@@ -541,8 +542,10 @@ Write-Host ""
 Write-Host "電源を入れた人は誰でも、この PC の Windows をそのまま操作できる状態になります。"
 Write-Host "PC の設置場所が管理されていることを確認してください。"
 Write-Host ""
-$ans = Read-Host "続けますか? (y/N)"
-if ($ans -ne "y") { Write-Host "中止しました。"; exit 0 }
+if (-not $NoConfirm) {
+    $ans = Read-Host "続けますか? (y/N)"
+    if ($ans -ne "y") { Write-Host "中止しました。"; exit 0 }
+}
 
 Write-Host ""
 Write-Host "$($acct.User) のサインイン用パスワードを入力してください (画面には表示されません)。"
@@ -550,6 +553,10 @@ $sec = Read-Host "パスワード" -AsSecureString
 $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($sec)
 try {
     $plain = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr)
+    if ($NoConfirm -and -not $plain) {
+        $blankCheck = Test-Password $acct.User $acct.Domain ''
+        if (-not $blankCheck.Ok) { throw '空のパスワードを確認できません。06-auto-logon.cmd を再実行してください。' }
+    }
     if ($plain) {
         Write-Host "パスワードを確認しています..."
         $chk = Test-Password $acct.User $acct.Domain $plain
@@ -557,6 +564,7 @@ try {
             Write-Host "パスワードを確認しました。" -ForegroundColor Green
         } else {
             $info = Get-LogonErrorInfo $chk.Error
+            if ($NoConfirm) { throw ("パスワードを確認できませんでした: " + $info.Text + "。06-auto-logon.cmd を再実行してください。") }
             Write-Host ""
             Write-Warning "パスワードの事前確認ができませんでした。理由: $($info.Text)"
             if ($info.PasswordLikelyOk) {
