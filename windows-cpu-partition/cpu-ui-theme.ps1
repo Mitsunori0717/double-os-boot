@@ -6,12 +6,14 @@
     cpu-console.ps1 / cpu-monitor.ps1 から読み込みます (単独では何もしません)。
     設定や割り当ての処理は一切持たず、表示に使う部品だけをまとめています。
 
-      配色      黒・ダークグレー基調。青 = Windows、橙 = Edge Box、緑 = 正常、赤 = エラー
+      配色      グレー基調 (背景 #616061 / サイドメニュー・カード #757475)。
+                青 = Windows、橙 = Edge Box、緑 = 正常、赤 = エラー。文字に使うときは、
+                灰色の上でも読めるよう同じ色を明るくしたもの (WinText など) を使う
       文字      日本語は Meiryo UI、英字の見出しは Segoe UI、数値は Cascadia Mono / Consolas
       部品      ボタン・コアのタイル・パネル・左メニュー・状態表示・入力欄の枠・一覧・確認ダイアログ
       アイコン  Windows 標準のアイコンフォント (Segoe Fluent Icons / Segoe MDL2 Assets)。
                 無い環境では同じ形を線で描きます
-      タイトルバー  Windows 10 (2004 以降) / 11 では黒にそろえます (使えない環境では標準のまま)
+      タイトルバー  Windows 10 (2004 以降) / 11 では背景と同じ色にそろえます (使えない環境では標準のまま)
 
     Windows PowerShell 5.1 の Add-Type (C# 5) でコンパイルできる書き方に限っています。
 #>
@@ -42,24 +44,35 @@ namespace CoreUi
     // ------------------------------------------------------------------
     public static class Theme
     {
-        public static Color Bg           = Rgb(0x080B0F);   // メイン背景
-        public static Color Bg2          = Rgb(0x0D1218);   // サイドバー・操作バー
-        public static Color Panel        = Rgb(0x111820);   // パネル
-        public static Color Raised       = Rgb(0x151D26);   // パネル内の一段明るい面
-        public static Color Control      = Rgb(0x1A232D);   // ボタン・入力欄
-        public static Color ControlHover = Rgb(0x212C38);
-        public static Color ControlDown  = Rgb(0x141B23);
-        public static Color Border       = Rgb(0x25313D);   // 境界線
-        public static Color BorderStrong = Rgb(0x354352);
-        public static Color Text         = Rgb(0xE5EAF0);   // メインテキスト
-        public static Color SubText      = Rgb(0x8A98A8);   // サブテキスト
-        public static Color Faint        = Rgb(0x5A6774);   // 無効・目盛り
-        public static Color Silver       = Rgb(0xC3CDD8);   // 選択・フォーカス (OS の色とは別)
+        public static Color Bg           = Rgb(0x616061);   // メイン背景
+        public static Color Bg2          = Rgb(0x757475);   // サイドメニュー・操作バー
+        public static Color Panel        = Rgb(0x757475);   // カード
+        public static Color Raised       = Rgb(0x807F80);   // カードの上で一段明るい面
+        public static Color Recess       = Rgb(0x6B6A6B);   // カードの上で一段沈んだ面 (未割当のタイル)
+        public static Color Inset        = Rgb(0x4C4B4C);   // 記録・検査結果・一覧の見出しの下地 (色付きの文字を読みやすく)
+        public static Color Deep         = Rgb(0x3E3D3E);   // 色付きの面の土台・主要ボタン
+        public static Color Control      = Rgb(0x5E5D5E);   // ボタン・入力欄
+        public static Color ControlHover = Rgb(0x686768);
+        public static Color ControlDown  = Rgb(0x555455);
+        public static Color Selection    = Rgb(0x575657);   // 一覧・選択欄で選んでいる行
+        public static Color Border       = Rgb(0x8E8D8E);   // 境界線
+        public static Color BorderStrong = Rgb(0xB5B4B5);
+        public static Color Text         = Rgb(0xFFFFFF);   // メインテキスト
+        public static Color SubText      = Rgb(0xEBEBEB);   // サブテキスト
+        public static Color Faint        = Rgb(0xA6A5A6);   // 無効
+        public static Color Silver       = Rgb(0xF2F2F2);   // 選択・フォーカス (OS の色とは別)
+        public static Color Ink          = Rgb(0x1C1C1C);   // 明るい面の上の印 (チェック・つまみ)
         public static Color Win          = Rgb(0x56B4FF);   // Windows
         public static Color Edge         = Rgb(0xF2A65A);   // Edge Box (Linux)
         public static Color Ok           = Rgb(0x43D9A3);   // 成功・稼働
         public static Color Err          = Rgb(0xFF626E);   // エラー
         public static Color Warn         = Rgb(0xE2C16B);   // 注意
+        // 文字に使う色 (上の色を明るくしたもの。灰色の面の上でも読める)
+        public static Color WinText      = Rgb(0xB4DDFF);
+        public static Color EdgeText     = Rgb(0xFAD2A6);
+        public static Color OkText       = Rgb(0xA6F3D4);
+        public static Color ErrText      = Rgb(0xFFC2C7);
+        public static Color WarnText     = Rgb(0xF5E1A6);
 
         public static string JpFamily = "Meiryo UI";
         public static string LatinFamily = "Segoe UI";
@@ -135,6 +148,19 @@ namespace CoreUi
                 case Tone.Win:  return Win;
                 case Tone.Edge: return Edge;
                 case Tone.Neutral: return Silver;
+                default:        return SubText;
+            }
+        }
+
+        public static Color ToneText(Tone t)
+        {
+            switch (t) {
+                case Tone.Ok:   return OkText;
+                case Tone.Warn: return WarnText;
+                case Tone.Err:  return ErrText;
+                case Tone.Win:  return WinText;
+                case Tone.Edge: return EdgeText;
+                case Tone.Neutral: return Text;
                 default:        return SubText;
             }
         }
@@ -229,7 +255,7 @@ namespace CoreUi
         // ロゴ: 枠の中に Windows (青) と Edge Box (橙) を細い隙間で分けて置く
         public static void DrawBrandMark(Graphics g, Rectangle r)
         {
-            FillRound(g, r, 3, Panel, BorderStrong);
+            FillRound(g, r, 3, Deep, BorderStrong);
             int pad = Math.Max(4, r.Width / 5);
             int gap = 2;
             int h = r.Height - pad * 2;
@@ -370,7 +396,7 @@ namespace CoreUi
     }
 
     // ------------------------------------------------------------------
-    //  Windows との連携 (タイトルバー・スクロールバーを黒にそろえる)
+    //  Windows との連携 (タイトルバーを背景の色に、スクロールバーを濃い色にそろえる)
     // ------------------------------------------------------------------
     public static class Native
     {
@@ -465,18 +491,18 @@ namespace CoreUi
             Color fill, border, text;
             Font font = Font;
             if (!Enabled) {
-                fill = Theme.Mix(back, Theme.Control, 0.45); border = Theme.Mix(back, Theme.Border, 0.7); text = Theme.Faint;
+                fill = Theme.Mix(back, Theme.Control, 0.5); border = Theme.Mix(back, Theme.Border, 0.5); text = Theme.Faint;
             } else if (kind == ButtonKind.Primary) {
                 font = Theme.UiBold;
-                fill = Theme.Mix(Theme.Control, Theme.Silver, down ? 0.06 : (hover ? 0.17 : 0.11));
-                border = hover ? Theme.Silver : Theme.Mix(Theme.Border, Theme.Silver, 0.62);
-                text = Color.White;
+                fill = down ? Theme.Mix(Theme.Deep, Theme.Ink, 0.3) : (hover ? Theme.Mix(Theme.Deep, Theme.Text, 0.08) : Theme.Deep);
+                border = hover ? Theme.Text : Theme.Mix(Theme.Border, Theme.Text, 0.55);
+                text = Theme.Text;
             } else if (kind == ButtonKind.Danger) {
-                fill = down ? Theme.ControlDown : (hover ? Theme.Mix(Theme.Control, Theme.Err, 0.10) : Theme.Control);
-                border = hover ? Theme.Err : Theme.Mix(Theme.Border, Theme.Err, 0.35);
-                text = hover ? Theme.Mix(Theme.Text, Theme.Err, 0.55) : Theme.Mix(Theme.Text, Theme.Err, 0.35);
+                fill = down ? Theme.ControlDown : (hover ? Theme.Mix(Theme.Control, Theme.Err, 0.18) : Theme.Control);
+                border = hover ? Theme.Err : Theme.Mix(Theme.Border, Theme.Err, 0.45);
+                text = hover ? Theme.Text : Theme.ErrText;
             } else if (kind == ButtonKind.Ghost) {
-                fill = down ? Theme.ControlDown : (hover ? Theme.Mix(back, Theme.Text, 0.05) : back);
+                fill = down ? Theme.ControlDown : (hover ? Theme.Mix(back, Theme.Text, 0.08) : back);
                 border = (hover || selected) ? Theme.Border : back;
                 text = (hover || selected) ? Theme.Text : Theme.SubText;
             } else {
@@ -485,8 +511,8 @@ namespace CoreUi
                 text = Theme.Text;
             }
             if (selected && Enabled && kind != ButtonKind.Primary) {
-                fill = Theme.Mix(Theme.Control, Theme.Silver, 0.13);
-                border = Theme.Mix(Theme.Border, Theme.Silver, 0.7);
+                fill = Theme.Mix(Theme.Deep, Theme.Control, 0.35);
+                border = Theme.Silver;
                 text = Theme.Text;
             }
             Rectangle body = new Rectangle(2, 2, Width - 4, Height - 4);
@@ -559,16 +585,17 @@ namespace CoreUi
             Color accent = side == 1 ? Theme.Win : (side == 2 ? Theme.Edge : Theme.SubText);
             Rectangle body = new Rectangle(2, 2, Width - 4, Height - 4);
 
-            Color fill = on ? Theme.Mix(Theme.Panel, accent, 0.085) : Theme.Bg2;
-            if (hover) { fill = Theme.Mix(fill, Theme.Text, 0.035); }
-            if (down)  { fill = Theme.Mix(fill, Theme.Bg, 0.5); }
-            Color border = on ? Theme.Mix(Theme.Border, accent, hover ? 0.95 : 0.5) : (hover ? Theme.BorderStrong : Theme.Border);
+            // 割り当て中は色付きの濃い面 (白い文字が読める)、未割当は一段沈んだ灰色
+            Color fill = on ? Theme.Mix(Theme.Deep, accent, 0.30) : Theme.Recess;
+            if (hover) { fill = Theme.Mix(fill, Theme.Text, 0.05); }
+            if (down)  { fill = Theme.Mix(fill, Theme.Ink, 0.3); }
+            Color border = on ? Theme.Mix(Theme.Border, accent, hover ? 0.95 : 0.6) : (hover ? Theme.BorderStrong : Theme.Border);
             Theme.FillRound(g, body, 3, fill, Color.Empty);
 
             if (on) {
                 // 上側だけごく薄く光らせる (割り当て中であることを控えめに示す)
                 Rectangle glow = new Rectangle(body.X + 1, body.Y + 1, body.Width - 2, Math.Max(2, body.Height / 2));
-                using (LinearGradientBrush lg = new LinearGradientBrush(glow, Theme.Alpha(accent, 30), Theme.Alpha(accent, 0), LinearGradientMode.Vertical)) {
+                using (LinearGradientBrush lg = new LinearGradientBrush(glow, Theme.Alpha(accent, 34), Theme.Alpha(accent, 0), LinearGradientMode.Vertical)) {
                     g.FillRectangle(lg, glow);
                 }
                 using (SolidBrush bar = new SolidBrush(accent)) { g.FillRectangle(bar, body.X + 1, body.Y + 5, 2, body.Height - 10); }
@@ -588,8 +615,8 @@ namespace CoreUi
             Font lf = Theme.IsAscii(coreLabel) ? Theme.MonoBold : Theme.UiBold;
             Theme.DrawText(g, coreLabel, lf, on ? Theme.Text : Theme.SubText, x, body.Y + 8);
             string tag = SideName(side);
-            if (on) { Theme.DrawSpaced(g, tag, Theme.Caps, accent, x, body.Y + 30, 0.6f); }
-            else    { Theme.DrawText(g, tag, Theme.UiSmall, Theme.Faint, x, body.Y + 29); }
+            if (on) { Theme.DrawSpaced(g, tag, Theme.Caps, side == 1 ? Theme.WinText : Theme.EdgeText, x, body.Y + 30, 0.6f); }
+            else    { Theme.DrawText(g, tag, Theme.UiSmall, Theme.SubText, x, body.Y + 29); }
 
             // スレッド (論理 CPU) を小さな枠で並べる
             int cy = body.Bottom - 22;
@@ -605,7 +632,7 @@ namespace CoreUi
             if (fits) {
                 for (int i = 0; i < threads.Length; i++) {
                     Rectangle c = new Rectangle(cx, cy, widths[i], 15);
-                    Theme.FillRound(g, c, 2, on ? Theme.Alpha(accent, 34) : Color.Empty, on ? Theme.Alpha(accent, 120) : Theme.Border);
+                    Theme.FillRound(g, c, 2, on ? Theme.Alpha(accent, 40) : Color.Empty, on ? Theme.Alpha(accent, 150) : Theme.Border);
                     Theme.DrawText(g, threads[i].ToString(), Theme.MonoSmall, on ? Theme.Text : Theme.SubText, c,
                         TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine);
                     cx += widths[i] + 3;
@@ -831,22 +858,22 @@ namespace CoreUi
             g.Clear(back);
             Rectangle body = new Rectangle(8, 3, Width - 17, Height - 6);
             if (selected) {
-                Theme.FillRound(g, body, 3, Theme.Mix(back, Theme.Text, 0.055), Theme.Mix(back, Theme.Border, 0.8));
+                Theme.FillRound(g, body, 3, Theme.Mix(back, Theme.Ink, 0.16), Theme.Mix(back, Theme.Border, 0.8));
                 using (SolidBrush b = new SolidBrush(Theme.Silver)) { g.FillRectangle(b, body.X, body.Y + 10, 2, body.Height - 20); }
                 Rectangle gl = new Rectangle(body.X + 2, body.Y + 10, 10, body.Height - 20);
                 using (LinearGradientBrush lg = new LinearGradientBrush(gl, Theme.Alpha(Theme.Silver, 42), Theme.Alpha(Theme.Silver, 0), LinearGradientMode.Horizontal)) {
                     g.FillRectangle(lg, gl);
                 }
             } else if (hover) {
-                Theme.FillRound(g, body, 3, Theme.Mix(back, Theme.Text, 0.03), Color.Empty);
+                Theme.FillRound(g, body, 3, Theme.Mix(back, Theme.Text, 0.06), Color.Empty);
             }
-            Color main = selected ? Theme.Text : (hover ? Theme.Mix(Theme.SubText, Theme.Text, 0.6) : Theme.Mix(Theme.SubText, Theme.Text, 0.25));
+            Color main = (selected || hover) ? Theme.Text : Theme.SubText;
             Icons.Draw(g, glyph, new Rectangle(body.X + 16, (Height - 18) / 2, 18, 18), selected ? Theme.Text : Theme.SubText);
             int tx = body.X + 48;
             bool hasSub = !string.IsNullOrEmpty(sub);
             Theme.DrawText(g, Text, Theme.Nav, main, tx, hasSub ? body.Y + 8 : (Height - 18) / 2);
             if (hasSub) {
-                Theme.DrawText(g, sub, Theme.UiSmall, selected ? Theme.SubText : Theme.Mix(Theme.SubText, back, 0.25),
+                Theme.DrawText(g, sub, Theme.UiSmall, Theme.SubText,
                     new Rectangle(tx, body.Y + 28, Math.Max(10, body.Right - tx - 6), 18), TextFormatFlags.Left | TextFormatFlags.SingleLine | TextFormatFlags.EndEllipsis);
             }
             if (Focused && ShowFocusCues) { Theme.FocusRing(g, new Rectangle(body.X - 2, body.Y - 2, body.Width + 4, body.Height + 4), 4); }
@@ -891,7 +918,7 @@ namespace CoreUi
             Color back = Theme.BackOf(Parent);
             g.Clear(back);
             Color c = Theme.ToneColor(tone);
-            Theme.FillRound(g, new Rectangle(0, 0, Width, Height), 3, Theme.Mix(back, c, 0.07), Theme.Mix(back, c, 0.38));
+            Theme.FillRound(g, new Rectangle(0, 0, Width, Height), 3, Theme.Mix(Theme.Mix(back, Theme.Deep, 0.35), c, 0.10), Theme.Mix(back, c, 0.6));
             SmoothingMode old = g.SmoothingMode;
             g.SmoothingMode = SmoothingMode.AntiAlias;
             int cy = Height / 2;
@@ -953,14 +980,14 @@ namespace CoreUi
                         float x0 = start * (cw + gap);
                         float x1 = (i - 1) * (cw + gap) + cw;
                         bool p = kinds[start] == "P";
-                        Color rc = p ? Theme.Mix(Theme.SubText, Theme.Text, 0.4) : Theme.Faint;
+                        Color rc = p ? Theme.Text : Theme.Faint;
                         using (Pen rp = new Pen(rc)) {
                             g.DrawLine(rp, x0, railY, x1, railY);
                             g.DrawLine(rp, x0, railY - 3, x0, railY);
                             g.DrawLine(rp, x1, railY - 3, x1, railY);
                         }
                         string lbl = p ? "P-CORE" : (kinds[start] == "E" ? "E-CORE" : "CORE");
-                        if (x1 - x0 > 50) { Theme.DrawSpaced(g, lbl, Theme.Caps, rc, (int)x0 + 2, 0, 1.2f); }
+                        if (x1 - x0 > 50) { Theme.DrawSpaced(g, lbl, Theme.Caps, Theme.SubText, (int)x0 + 2, 0, 1.2f); }
                         start = i;
                     }
                 }
@@ -974,10 +1001,10 @@ namespace CoreUi
                 RectangleF r = new RectangleF(x, top, cw, cellHeight);
                 Color c = sides[i] == 1 ? Theme.Win : (sides[i] == 2 ? Theme.Edge : Color.Empty);
                 if (c.IsEmpty) {
-                    using (SolidBrush b = new SolidBrush(Theme.Mix(back, Theme.Control, 0.6))) { g.FillRectangle(b, r); }
+                    using (SolidBrush b = new SolidBrush(Theme.Recess)) { g.FillRectangle(b, r); }
                     using (Pen p = new Pen(Theme.Border)) { g.DrawRectangle(p, r.X, r.Y, r.Width - 1, r.Height - 1); }
                 } else {
-                    using (SolidBrush b = new SolidBrush(Theme.Mix(back, c, 0.72))) { g.FillRectangle(b, r); }
+                    using (SolidBrush b = new SolidBrush(Theme.Mix(back, c, 0.82))) { g.FillRectangle(b, r); }
                     using (SolidBrush hi = new SolidBrush(Theme.Alpha(Color.White, 40))) { g.FillRectangle(hi, r.X, r.Y, r.Width, 1); }
                 }
             }
@@ -993,8 +1020,8 @@ namespace CoreUi
                 Size ts = Theme.Measure(g, t, Theme.MonoSmall);
                 if (x < lastRight + 6) { continue; }
                 Color tc = sides[i] == 1 ? Theme.Win : (sides[i] == 2 ? Theme.Edge : Theme.SubText);
-                using (Pen tp = new Pen(Theme.Alpha(tc, 160))) { g.DrawLine(tp, x, top + cellHeight + 1, x, top + cellHeight + 3); }
-                Theme.DrawText(g, t, Theme.MonoSmall, Theme.Mix(tc, Theme.SubText, 0.35), x, ly);
+                using (Pen tp = new Pen(tc)) { g.DrawLine(tp, x, top + cellHeight + 1, x, top + cellHeight + 3); }
+                Theme.DrawText(g, t, Theme.MonoSmall, sides[i] == 1 ? Theme.WinText : (sides[i] == 2 ? Theme.EdgeText : Theme.SubText), x, ly);
                 lastRight = x + ts.Width;
             }
             string last = IdText(n - 1);
@@ -1036,12 +1063,12 @@ namespace CoreUi
             g.Clear(back);
             Color c = Theme.ToneColor(tone);
             Rectangle r = new Rectangle(0, 0, Width, Height);
-            Theme.FillRound(g, r, 3, Theme.Mix(back, c, 0.05), Theme.Mix(Theme.Border, c, 0.32));
+            Theme.FillRound(g, r, 3, Theme.Mix(Theme.Deep, c, 0.22), Theme.Mix(Theme.Border, c, 0.45));
             using (SolidBrush bar = new SolidBrush(c)) { g.FillRectangle(bar, 1, 8, 2, Height - 16); }
             using (SolidBrush halo = new SolidBrush(Theme.Alpha(c, 40))) { g.FillRectangle(halo, 3, 8, 2, Height - 16); }
 
             int x = 20;
-            int cw = Theme.DrawSpaced(g, caption, Theme.CapsLarge, c, x, 14, 1.8f);
+            int cw = Theme.DrawSpaced(g, caption, Theme.CapsLarge, Theme.ToneText(tone), x, 14, 1.8f);
             if (name.Length > 0) {
                 Theme.DrawText(g, name, Theme.UiSmall, Theme.SubText, new Rectangle(x + cw + 12, 13, Math.Max(10, Width - x - cw - 24), 18),
                     TextFormatFlags.Left | TextFormatFlags.SingleLine | TextFormatFlags.EndEllipsis);
@@ -1057,7 +1084,7 @@ namespace CoreUi
             int bw2 = Theme.Measure(g, b, Theme.MonoNumber).Width;
             Theme.DrawText(g, "スレッド", Theme.Ui, Theme.SubText, bx + bw2 + 4, ny + 14);
 
-            using (Pen sp = new Pen(Theme.Mix(Theme.Border, c, 0.15))) { g.DrawLine(sp, x, Height - 34, Width - 16, Height - 34); }
+            using (Pen sp = new Pen(Theme.Mix(Theme.Mix(Theme.Deep, c, 0.22), Theme.Border, 0.6))) { g.DrawLine(sp, x, Height - 34, Width - 16, Height - 34); }
             Theme.DrawText(g, range.Length > 0 ? range : "CPU -", Theme.Mono, Theme.Text, x, Height - 25);
             if (mix.Length > 0) {
                 Size ms = Theme.Measure(g, mix, Theme.Mono);
@@ -1096,7 +1123,7 @@ namespace CoreUi
                     Theme.DrawText(g, names[i], Theme.UiSmall, Theme.SubText, x + 16, cy - 8);
                 } else {
                     using (SolidBrush b = new SolidBrush(cols[i])) { g.FillRectangle(b, sw); }
-                    Theme.DrawSpaced(g, names[i], Theme.Caps, Theme.Mix(cols[i], Theme.Text, 0.25), x + 16, cy - 7, 1.2f);
+                    Theme.DrawSpaced(g, names[i], Theme.Caps, i == 0 ? Theme.WinText : Theme.EdgeText, x + 16, cy - 7, 1.2f);
                 }
                 x += ws[i] + 18;
             }
@@ -1220,7 +1247,7 @@ namespace CoreUi
             Graphics g = e.Graphics;
             bool edit = (e.State & DrawItemState.ComboBoxEdit) != 0;
             bool sel = (e.State & DrawItemState.Selected) != 0 && !edit;
-            using (SolidBrush b = new SolidBrush(sel ? Theme.ControlHover : BackColor)) { g.FillRectangle(b, e.Bounds); }
+            using (SolidBrush b = new SolidBrush(sel ? Theme.Selection : BackColor)) { g.FillRectangle(b, e.Bounds); }
             if (sel) { using (SolidBrush a = new SolidBrush(Theme.Silver)) { g.FillRectangle(a, e.Bounds.X, e.Bounds.Y + 3, 2, e.Bounds.Height - 6); } }
             if (e.Index >= 0 && e.Index < Items.Count) {
                 Rectangle tr = new Rectangle(e.Bounds.X + (edit ? 2 : 8), e.Bounds.Y, e.Bounds.Width - 10, e.Bounds.Height);
@@ -1290,7 +1317,7 @@ namespace CoreUi
             if (Checked) {
                 SmoothingMode old = g.SmoothingMode;
                 g.SmoothingMode = SmoothingMode.AntiAlias;
-                using (Pen p = new Pen(Theme.Bg, 2f)) {
+                using (Pen p = new Pen(Theme.Ink, 2f)) {
                     g.DrawLines(p, new PointF[] { new PointF(box.X + 4, box.Y + 8.5f), new PointF(box.X + 7, box.Y + 11.5f), new PointF(box.X + 12.5f, box.Y + 5) });
                 }
                 g.SmoothingMode = old;
@@ -1330,7 +1357,7 @@ namespace CoreUi
             SmoothingMode old = g.SmoothingMode;
             g.SmoothingMode = SmoothingMode.AntiAlias;
             int kx = Checked ? track.Right - 14 : track.X + 3;
-            using (SolidBrush k = new SolidBrush(Checked ? Theme.Bg : Theme.SubText)) { g.FillEllipse(k, kx, track.Y + 3, 10, 10); }
+            using (SolidBrush k = new SolidBrush(Checked ? Theme.Ink : Theme.SubText)) { g.FillEllipse(k, kx, track.Y + 3, 10, 10); }
             g.SmoothingMode = old;
             if (Focused && ShowFocusCues) { Theme.FocusRing(g, Rectangle.Inflate(track, 3, 3), 10); }
             Theme.DrawText(g, Text, Font, ForeColor, new Rectangle(track.Right + 10, 0, Math.Max(1, Width - track.Right - 10), Height),
@@ -1379,7 +1406,7 @@ namespace CoreUi
         protected override void OnDrawColumnHeader(DrawListViewColumnHeaderEventArgs e)
         {
             Graphics g = e.Graphics;
-            using (SolidBrush b = new SolidBrush(Theme.Bg2)) { g.FillRectangle(b, e.Bounds); }
+            using (SolidBrush b = new SolidBrush(Theme.Inset)) { g.FillRectangle(b, e.Bounds); }
             using (Pen p = new Pen(Theme.Border)) {
                 g.DrawLine(p, e.Bounds.X, e.Bounds.Bottom - 1, e.Bounds.Right, e.Bounds.Bottom - 1);
                 g.DrawLine(p, e.Bounds.Right - 1, e.Bounds.Y + 5, e.Bounds.Right - 1, e.Bounds.Bottom - 6);
@@ -1397,7 +1424,7 @@ namespace CoreUi
         {
             Graphics g = e.Graphics;
             bool sel = e.Item.Selected;
-            Color bg = sel ? Theme.Mix(Theme.Panel, Theme.Silver, 0.12) : ((e.ItemIndex % 2) == 1 ? Theme.Mix(Theme.Panel, Theme.Bg, 0.4) : Theme.Panel);
+            Color bg = sel ? Theme.Selection : ((e.ItemIndex % 2) == 1 ? Theme.Mix(Theme.Panel, Theme.Bg, 0.4) : Theme.Panel);
             using (SolidBrush b = new SolidBrush(bg)) { g.FillRectangle(b, e.Bounds); }
             if (sel && e.ColumnIndex == 0) { using (SolidBrush a = new SolidBrush(Theme.Silver)) { g.FillRectangle(a, e.Bounds.X, e.Bounds.Y + 3, 2, e.Bounds.Height - 6); } }
             string t = e.SubItem != null ? e.SubItem.Text : "";
@@ -1426,7 +1453,7 @@ namespace CoreUi
             if (e.Index < 0) { return; }
             Graphics g = e.Graphics;
             bool sel = (e.State & DrawItemState.Selected) != 0;
-            using (SolidBrush b = new SolidBrush(sel ? Theme.Mix(Theme.Panel, Theme.Silver, 0.12) : ((e.Index % 2) == 1 ? Theme.Mix(Theme.Panel, Theme.Bg, 0.4) : Theme.Panel))) {
+            using (SolidBrush b = new SolidBrush(sel ? Theme.Selection : ((e.Index % 2) == 1 ? Theme.Mix(Theme.Panel, Theme.Bg, 0.4) : Theme.Panel))) {
                 g.FillRectangle(b, e.Bounds);
             }
             if (sel) { using (SolidBrush a = new SolidBrush(Theme.Silver)) { g.FillRectangle(a, e.Bounds.X, e.Bounds.Y + 3, 2, e.Bounds.Height - 6); } }
@@ -1456,9 +1483,9 @@ namespace CoreUi
             g.Clear(back);
             Color c = Theme.ToneColor(Tone);
             g.SmoothingMode = SmoothingMode.AntiAlias;
-            using (SolidBrush b = new SolidBrush(Theme.Mix(back, c, 0.10))) { g.FillEllipse(b, 1, 1, 31, 31); }
+            using (SolidBrush b = new SolidBrush(Theme.Mix(Theme.Deep, c, 0.18))) { g.FillEllipse(b, 1, 1, 31, 31); }
             using (Pen p = new Pen(Theme.Mix(back, c, 0.75), 1.2f)) { g.DrawEllipse(p, 1, 1, 31, 31); }
-            Theme.DrawText(g, Mark, Theme.MonoBold, c, new Rectangle(0, 0, 34, 34), TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine);
+            Theme.DrawText(g, Mark, Theme.MonoBold, Theme.ToneText(Tone), new Rectangle(0, 0, 34, 34), TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine);
         }
     }
 
@@ -1523,6 +1550,7 @@ namespace CoreUi
 
                 Strip bar = new Strip();
                 bar.Line = AnchorStyles.Top;
+                bar.BackColor = Theme.Bg;
                 bar.Dock = DockStyle.Bottom;
                 bar.Height = 62;
                 f.Controls.Add(bar);
@@ -1605,7 +1633,7 @@ namespace CoreUi
                 e.ToolTipSize = new Size(Math.Min(440, sz.Width + 20), sz.Height + 14);
             };
             tt.Draw += delegate(object s, DrawToolTipEventArgs e) {
-                using (SolidBrush b = new SolidBrush(Theme.Raised)) { e.Graphics.FillRectangle(b, e.Bounds); }
+                using (SolidBrush b = new SolidBrush(Theme.Inset)) { e.Graphics.FillRectangle(b, e.Bounds); }
                 using (Pen p = new Pen(Theme.BorderStrong)) { e.Graphics.DrawRectangle(p, 0, 0, e.Bounds.Width - 1, e.Bounds.Height - 1); }
                 TextRenderer.DrawText(e.Graphics, e.ToolTipText, Theme.Ui, new Rectangle(10, 7, e.Bounds.Width - 20, e.Bounds.Height - 14), Theme.Text,
                     TextFormatFlags.WordBreak | TextFormatFlags.NoPrefix | TextFormatFlags.Left);
@@ -1691,14 +1719,15 @@ function Show-UiMessage([string]$Text, [string]$Caption, [string]$Buttons = "OK"
         [System.Windows.Forms.MessageBoxButtons]$Buttons, [System.Windows.Forms.MessageBoxIcon]$Icon)
 }
 
-# アプリのアイコン (32px)。枠の中を Windows の青と Edge Box の橙に分ける
+# アプリのアイコン (32px)。枠の中を Windows の青と Edge Box の橙に分ける。
+# デスクトップのアイコン (cpu-console.ps1 -Setup) と同じ濃い色の本体にする (画面の配色とは別)
 function Get-UiAppIcon([string]$Style = "console") {
     try {
         $bmp = New-Object System.Drawing.Bitmap 32, 32
         $g = [System.Drawing.Graphics]::FromImage($bmp)
         $g.Clear([System.Drawing.Color]::Transparent)
-        $body = New-Object System.Drawing.SolidBrush ([CoreUi.Theme]::Panel)
-        $edge = New-Object System.Drawing.Pen ([CoreUi.Theme]::BorderStrong)
+        $body = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb(17, 24, 32))
+        $edge = New-Object System.Drawing.Pen ([System.Drawing.Color]::FromArgb(53, 67, 82))
         $win  = New-Object System.Drawing.SolidBrush ([CoreUi.Theme]::Win)
         $vm   = New-Object System.Drawing.SolidBrush ([CoreUi.Theme]::Edge)
         $g.FillRectangle($body, 2, 2, 28, 28)

@@ -505,11 +505,12 @@ function Get-Avg($Lps, [string]$Key) {
 
 # ============================================================ 描画
 
-# 色: 青 = Windows / 橙 = Edge Box / 灰 = ハイパーバイザー内部。背景はほぼ黒
+# 色: 青 = Windows / 橙 = Edge Box / 明るい灰 = ハイパーバイザー内部。背景は灰色 (#616061)。
+# 棒の空き部分は背景より一段濃くし、ハイパーバイザー内部 (明るい灰) と見分けられるようにする
 $ColWin  = [CoreUi.Theme]::Win
 $ColVm   = [CoreUi.Theme]::Edge
-$ColHv   = [System.Drawing.Color]::FromArgb(84, 98, 114)
-$ColFree = [CoreUi.Theme]::Control
+$ColHv   = [System.Drawing.Color]::FromArgb(196, 195, 196)
+$ColFree = [CoreUi.Theme]::Inset
 $BrWin   = New-Object System.Drawing.SolidBrush $ColWin
 $BrVm    = New-Object System.Drawing.SolidBrush $ColVm
 $BrHv    = New-Object System.Drawing.SolidBrush $ColHv
@@ -520,10 +521,13 @@ $BrFree  = New-Object System.Drawing.SolidBrush $ColFree
 $BrText  = New-Object System.Drawing.SolidBrush ([CoreUi.Theme]::Text)
 $BrGray  = New-Object System.Drawing.SolidBrush ([CoreUi.Theme]::SubText)
 # P / E の印は明るさで分ける (橙・青は Windows / Edge Box の色なので使わない)
-$BrP     = New-Object System.Drawing.SolidBrush ([CoreUi.Theme]::Silver)                          # P コアの印
-$BrE     = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb(122, 136, 152))   # E コアの印
-$BrBad   = New-Object System.Drawing.SolidBrush ([CoreUi.Theme]::Err)                             # 混ざっている印
-$BrGood  = New-Object System.Drawing.SolidBrush ([CoreUi.Theme]::Ok)                              # 分かれている印
+$BrP     = New-Object System.Drawing.SolidBrush ([CoreUi.Theme]::Text)                            # P コアの印
+$BrE     = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb(200, 200, 200))   # E コアの印
+$BrBad   = New-Object System.Drawing.SolidBrush ([CoreUi.Theme]::ErrText)                         # 混ざっている印 (文字)
+$BrGood  = New-Object System.Drawing.SolidBrush ([CoreUi.Theme]::OkText)                          # 分かれている印 (文字)
+# 文字に使う Windows / Edge Box の色 (灰色の背景の上でも読めるよう明るくしたもの)
+$BrWinText = New-Object System.Drawing.SolidBrush ([CoreUi.Theme]::WinText)
+$BrVmText  = New-Object System.Drawing.SolidBrush ([CoreUi.Theme]::EdgeText)
 $PenHost  = New-Object System.Drawing.Pen -ArgumentList @([CoreUi.Theme]::Mix([CoreUi.Theme]::Border, $ColWin, 0.8), [float]1.5)
 $PenGuest = New-Object System.Drawing.Pen -ArgumentList @([CoreUi.Theme]::Mix([CoreUi.Theme]::Border, $ColVm, 0.8), [float]1.5)
 $PenNone  = New-Object System.Drawing.Pen -ArgumentList @([CoreUi.Theme]::Border, [float]1)
@@ -679,11 +683,11 @@ function Draw-All($g, [int]$W, [int]$H) {
     } else {
         $l2 = "{0} : 平均 {1:N0}%   状態: {2}" -f $VMName, $vmAvg, $script:Mem.VmState
     }
-    $g.DrawString($l1, $FontBody, $BrWin, (PointF $pad 4))
-    $g.DrawString($l2, $FontBody, $BrVm,  (PointF $pad 22))
+    $g.DrawString($l1, $FontBody, $BrWinText, (PointF $pad 4))
+    $g.DrawString($l2, $FontBody, $BrVmText,  (PointF $pad 22))
     Draw-Legend $g ([Math]::Max($pad, $W - 400)) 8
     if (-not $script:lpName) {
-        $g.DrawString("ハイパーバイザーの性能カウンターが見つかりません (Hyper-V が無効か、カウンターの破損)。", $FontBody, [System.Drawing.Brushes]::Firebrick, (PointF $pad 44))
+        $g.DrawString("ハイパーバイザーの性能カウンターが見つかりません (Hyper-V が無効か、カウンターの破損)。", $FontBody, $BrBad, (PointF $pad 44))
     }
 
     # --- コア構成の見出し (P コア 8 / E コア 12 のように種類ごとの数と CPU 番号) ---

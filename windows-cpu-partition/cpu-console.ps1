@@ -51,7 +51,7 @@ function Test-Admin {
 }
 
 function Show-Info([string]$Text, [string]$Icon = "Information") {
-    # 画面の部品 (cpu-ui-theme.ps1) を読み込んだ後は、同じ黒い見た目のダイアログで出す
+    # 画面の部品 (cpu-ui-theme.ps1) を読み込んだ後は、画面と同じ見た目のダイアログで出す
     if ("CoreUi.MessageDialog" -as [type]) {
         [void](Show-UiMessage $Text "CPU コア割り当て" "OK" $Icon)
         return
@@ -693,7 +693,6 @@ $script:btnMon.Location = New-Object System.Drawing.Point(16, 12)
 $script:Tip.SetToolTip($script:btnMon, "各コアの負荷とメモリの使用量を毎秒表示する別ウィンドウ (『Edge Box 監視』) を開きます")
 $navFoot.Controls.Add($script:btnMon)
 $navHint = New-UiLabel "Ctrl+1〜5 で画面を切り替え" 18 60 188 "small"
-$navHint.ForeColor = [CoreUi.Theme]::Faint
 $navFoot.Controls.Add($navHint)
 $script:sidebar.Controls.Add($navFoot)
 
@@ -955,16 +954,26 @@ Add-Stack $grpSum @($script:stripCore, $sumGap, $sumH.Row, $sumG.Row) 0
 
 # --- 検査結果 ---
 $grpChk = New-Card "検査結果" "適用できるかを自動で確かめます" 214
+# 色付きの文字 (不可・注意) を読みやすくするため、一段濃い下地の上に出す
+function New-InsetBox {
+    $p = New-Object System.Windows.Forms.Panel
+    $p.Dock = "Fill"
+    $p.BackColor = [CoreUi.Theme]::Inset
+    $p.Padding = New-Object System.Windows.Forms.Padding(12, 10, 6, 8)
+    return $p
+}
 $script:rtb = New-Object System.Windows.Forms.RichTextBox
 $script:rtb.Dock = "Fill"
 $script:rtb.ReadOnly = $true
 $script:rtb.BorderStyle = "None"
-$script:rtb.BackColor = [CoreUi.Theme]::Panel
+$script:rtb.BackColor = [CoreUi.Theme]::Inset
 $script:rtb.ForeColor = [CoreUi.Theme]::Text
 $script:rtb.Font = [CoreUi.Theme]::Ui
 $script:rtb.DetectUrls = $false
 $script:rtb.Add_HandleCreated({ param($s, $e) [CoreUi.Native]::DarkScroll($s) })
-$grpChk.Controls.Add($script:rtb)
+$chkBox = New-InsetBox
+$chkBox.Controls.Add($script:rtb)
+$grpChk.Controls.Add($chkBox)
 
 $coreBottom = New-Columns 214 @(56, 44)
 Add-Column $coreBottom $grpSum 0
@@ -1078,13 +1087,15 @@ $script:rtbLog = New-Object System.Windows.Forms.RichTextBox
 $script:rtbLog.Dock = "Fill"
 $script:rtbLog.ReadOnly = $true
 $script:rtbLog.BorderStyle = "None"
-$script:rtbLog.BackColor = [CoreUi.Theme]::Panel
+$script:rtbLog.BackColor = [CoreUi.Theme]::Inset
 $script:rtbLog.ForeColor = [CoreUi.Theme]::Text
 $script:rtbLog.Font = [CoreUi.Theme]::Ui     # 記録は日本語が中心のため、日本語の字形を持つ文字で出す
 $script:rtbLog.DetectUrls = $false
 $script:rtbLog.WordWrap = $true
 $script:rtbLog.Add_HandleCreated({ param($s, $e) [CoreUi.Native]::DarkScroll($s) })
-$grpLog.Controls.Add($script:rtbLog)
+$logBox = New-InsetBox
+$logBox.Controls.Add($script:rtbLog)
+$grpLog.Controls.Add($logBox)
 $grpLog.Controls.Add($logBar)
 $grpLog.Dock = "Fill"
 $script:Pages["log"].Controls.Add($grpLog)
@@ -1119,7 +1130,7 @@ function Update-LogView {
         $info = Get-Item -LiteralPath $path
         $script:lblLogInfo.Text = "{0} 行   最終更新 {1:yyyy-MM-dd HH:mm:ss}" -f $lines.Count, $info.LastWriteTime
     } catch {
-        Add-RtbText $box ("記録を読めませんでした: " + $_.Exception.Message) ([CoreUi.Theme]::Err)
+        Add-RtbText $box ("記録を読めませんでした: " + $_.Exception.Message) ([CoreUi.Theme]::ErrText)
         return
     }
     $box.SuspendLayout()
@@ -1127,8 +1138,8 @@ function Update-LogView {
         $ts = ""; $body = [string]$ln
         if ($body -match '^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\s+(.*)$') { $ts = $Matches[1]; $body = $Matches[2] }
         $col = [CoreUi.Theme]::Text
-        if ($body -match '失敗|エラー|できません|できなかった|見つかりません|中止|(?i:error|failed)') { $col = [CoreUi.Theme]::Err }
-        elseif ($body -match '注意|警告|未成立|再起動待ち|(?i:warn)') { $col = [CoreUi.Theme]::Warn }
+        if ($body -match '失敗|エラー|できません|できなかった|見つかりません|中止|(?i:error|failed)') { $col = [CoreUi.Theme]::ErrText }
+        elseif ($body -match '注意|警告|未成立|再起動待ち|(?i:warn)') { $col = [CoreUi.Theme]::WarnText }
         if ($ts) { Add-RtbText $box ($ts + "  ") ([CoreUi.Theme]::SubText) }
         Add-RtbText $box ($body + "`n") $col
     }
@@ -1538,12 +1549,12 @@ function Update-Validation {
         $script:rtb.SelectionColor = $Color
         $script:rtb.AppendText($Text + "`r`n")
     }
-    foreach ($e in $errors)   { Add-Line ("[不可] " + $e) ([CoreUi.Theme]::Err) }
-    foreach ($w in $warnings) { Add-Line ("[注意] " + $w) ([CoreUi.Theme]::Warn) }
+    foreach ($e in $errors)   { Add-Line ("[不可] " + $e) ([CoreUi.Theme]::ErrText) }
+    foreach ($w in $warnings) { Add-Line ("[注意] " + $w) ([CoreUi.Theme]::WarnText) }
     if ($errors.Count -eq 0 -and $warnings.Count -eq 0) {
-        Add-Line "問題ありません。この内容で適用できます。" ([CoreUi.Theme]::Ok)
+        Add-Line "問題ありません。この内容で適用できます。" ([CoreUi.Theme]::OkText)
     } elseif ($errors.Count -eq 0) {
-        Add-Line "適用できます (上の注意点をご確認ください)。" ([CoreUi.Theme]::Ok)
+        Add-Line "適用できます (上の注意点をご確認ください)。" ([CoreUi.Theme]::OkText)
     }
     $script:btnApply.Enabled = ($errors.Count -eq 0)
     if ($script:VmMissing) { $script:btnApply.Text = "保存 (Edge Box 検出後に自動適用)" }
@@ -1584,7 +1595,7 @@ function Update-MemoryUi {
     $same = ($g -eq [int][Math]::Round($script:MemVmGB) -and -not $script:MemDynamic)
     if ($errs.Count -gt 0) {
         $script:lblMemNote.Text = "$cur    [不可] " + ($errs -join " / ")
-        $script:lblMemNote.ForeColor = [CoreUi.Theme]::Err
+        $script:lblMemNote.ForeColor = [CoreUi.Theme]::ErrText
         $script:btnMem.Enabled = $false
         return
     }
@@ -1592,7 +1603,7 @@ function Update-MemoryUi {
           elseif ([string]$script:Vm.State -ne "Off") { "Edge Box は実行中のため、反映には Edge Box の再起動が必要です (適用時に確認します)" }
           else { "Edge Box は停止中のため、すぐに反映できます" }
     $script:lblMemNote.Text = "$cur    " + $(if ($warns.Count -gt 0) { "[注意] " + ($warns -join " / ") + "    " } else { "" }) + $st
-    $script:lblMemNote.ForeColor = if ($warns.Count -gt 0) { [CoreUi.Theme]::Warn } else { [CoreUi.Theme]::SubText }
+    $script:lblMemNote.ForeColor = if ($warns.Count -gt 0) { [CoreUi.Theme]::WarnText } else { [CoreUi.Theme]::SubText }
     $script:btnMem.Enabled = (-not $same)
 }
 

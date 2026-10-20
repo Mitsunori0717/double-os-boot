@@ -261,17 +261,18 @@ public static extern int SetCurrentProcessExplicitAppUserModelID(string AppID);
 }
 try { [Win.AppShell]::SetCurrentProcessExplicitAppUserModelID("Edge Box.Settings") | Out-Null } catch { }
 
-# --- 見た目: 『CPU割り当て』と同じ黒基調 (このフォルダだけで完結させるため、ここで直接指定する) ---
-$UiBg      = [System.Drawing.Color]::FromArgb(8, 11, 15)      # 背景
-$UiBg2     = [System.Drawing.Color]::FromArgb(13, 18, 24)     # 操作バー
-$UiPanel   = [System.Drawing.Color]::FromArgb(17, 24, 32)     # パネル
-$UiControl = [System.Drawing.Color]::FromArgb(26, 35, 45)     # ボタン・入力欄
-$UiHover   = [System.Drawing.Color]::FromArgb(33, 44, 56)
-$UiBorder  = [System.Drawing.Color]::FromArgb(37, 49, 61)     # 境界線
-$UiStrong  = [System.Drawing.Color]::FromArgb(53, 67, 82)
-$UiText    = [System.Drawing.Color]::FromArgb(229, 234, 240)  # 文字
-$UiSub     = [System.Drawing.Color]::FromArgb(138, 152, 168)  # 補助の文字
-$UiSilver  = [System.Drawing.Color]::FromArgb(195, 205, 216)  # フォーカス
+# --- 見た目: 『CPU割り当て』と同じ配色 (このフォルダだけで完結させるため、ここで直接指定する) ---
+$UiBg      = [System.Drawing.Color]::FromArgb(97, 96, 97)     # 背景 #616061
+$UiBg2     = [System.Drawing.Color]::FromArgb(117, 116, 117)  # 操作バー #757475 (サイドメニューと同じ)
+$UiPanel   = [System.Drawing.Color]::FromArgb(117, 116, 117)  # カード #757475
+$UiControl = [System.Drawing.Color]::FromArgb(94, 93, 94)     # ボタン・入力欄
+$UiHover   = [System.Drawing.Color]::FromArgb(104, 103, 104)
+$UiDown    = [System.Drawing.Color]::FromArgb(85, 84, 85)
+$UiBorder  = [System.Drawing.Color]::FromArgb(142, 141, 142)  # 境界線
+$UiStrong  = [System.Drawing.Color]::FromArgb(181, 180, 181)
+$UiText    = [System.Drawing.Color]::FromArgb(255, 255, 255)  # 文字 (灰色の上で読めるよう白)
+$UiSub     = [System.Drawing.Color]::FromArgb(235, 235, 235)  # 補助の文字
+$UiSilver  = [System.Drawing.Color]::FromArgb(242, 242, 242)  # フォーカス
 $UiFont    = New-Object System.Drawing.Font("Meiryo UI", 9)
 $UiBold    = New-Object System.Drawing.Font("Meiryo UI", 9.75, [System.Drawing.FontStyle]::Bold)
 
@@ -281,8 +282,9 @@ function Get-AppIcon([string]$Style) {
         $bmp = New-Object System.Drawing.Bitmap 32, 32
         $g = [System.Drawing.Graphics]::FromImage($bmp)
         $g.Clear([System.Drawing.Color]::Transparent)
-        $body = New-Object System.Drawing.SolidBrush ($UiPanel)
-        $edge = New-Object System.Drawing.Pen ($UiStrong)
+        # アイコンは他のアイコンと同じ濃い色の本体 (画面の配色とは別)
+        $body = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb(17, 24, 32))
+        $edge = New-Object System.Drawing.Pen ([System.Drawing.Color]::FromArgb(53, 67, 82))
         $win  = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb(86, 180, 255))
         $vm   = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb(242, 166, 90))
         $g.FillRectangle($body, 2, 2, 28, 28)
@@ -304,7 +306,7 @@ function Get-AppIcon([string]$Style) {
     } catch { return $null }
 }
 
-# タイトルバーも黒にそろえる (Windows 10 2004 以降 / 11。使えない環境では標準のまま)
+# タイトルバーも背景の色にそろえる (Windows 10 2004 以降 / 11。使えない環境では標準のまま)
 if (-not ("EdgeBoxSettingsUi.Dwm" -as [type])) {
     Add-Type -Namespace EdgeBoxSettingsUi -Name Dwm -MemberDefinition @'
 [DllImport("dwmapi.dll")]
@@ -328,9 +330,9 @@ $form.Font = $UiFont
 $form.Add_HandleCreated({
     try {
         $on = 1;  [void][EdgeBoxSettingsUi.Dwm]::DwmSetWindowAttribute($form.Handle, 20, [ref]$on, 4)
-        $cap = 0x000F0B08; [void][EdgeBoxSettingsUi.Dwm]::DwmSetWindowAttribute($form.Handle, 35, [ref]$cap, 4)
-        $brd = 0x003D3125; [void][EdgeBoxSettingsUi.Dwm]::DwmSetWindowAttribute($form.Handle, 34, [ref]$brd, 4)
-        $txt = 0x00F0EAE5; [void][EdgeBoxSettingsUi.Dwm]::DwmSetWindowAttribute($form.Handle, 36, [ref]$txt, 4)
+        $cap = 0x00616061; [void][EdgeBoxSettingsUi.Dwm]::DwmSetWindowAttribute($form.Handle, 35, [ref]$cap, 4)
+        $brd = 0x008E8D8E; [void][EdgeBoxSettingsUi.Dwm]::DwmSetWindowAttribute($form.Handle, 34, [ref]$brd, 4)
+        $txt = 0x00FFFFFF; [void][EdgeBoxSettingsUi.Dwm]::DwmSetWindowAttribute($form.Handle, 36, [ref]$txt, 4)
     } catch { }
 })
 
@@ -385,11 +387,11 @@ function New-FlatButton($text, $x, $y, $w, [bool]$Primary = $false) {
     $b.Size = New-Object System.Drawing.Size($w, 34)
     $b.FlatStyle = "Flat"
     $b.UseVisualStyleBackColor = $false
-    $b.BackColor = $(if ($Primary) { [System.Drawing.Color]::FromArgb(43, 53, 64) } else { $UiControl })
-    $b.ForeColor = $(if ($Primary) { [System.Drawing.Color]::White } else { $UiText })
-    $b.FlatAppearance.BorderColor = $(if ($Primary) { [System.Drawing.Color]::FromArgb(138, 152, 168) } else { $UiBorder })
-    $b.FlatAppearance.MouseOverBackColor = $UiHover
-    $b.FlatAppearance.MouseDownBackColor = $UiBg2
+    $b.BackColor = $(if ($Primary) { [System.Drawing.Color]::FromArgb(62, 61, 62) } else { $UiControl })
+    $b.ForeColor = $UiText
+    $b.FlatAppearance.BorderColor = $(if ($Primary) { [System.Drawing.Color]::FromArgb(198, 198, 198) } else { $UiBorder })
+    $b.FlatAppearance.MouseOverBackColor = $(if ($Primary) { [System.Drawing.Color]::FromArgb(78, 77, 78) } else { $UiHover })
+    $b.FlatAppearance.MouseDownBackColor = $UiDown
     $b.Cursor = [System.Windows.Forms.Cursors]::Hand
     if ($Primary) { $b.Font = New-Object System.Drawing.Font("Meiryo UI", 9, [System.Drawing.FontStyle]::Bold) }
     return $b
