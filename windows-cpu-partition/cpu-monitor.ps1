@@ -4,10 +4,10 @@
 
 .DESCRIPTION
     ハイパーバイザーの性能カウンターを毎秒読み、論理 CPU ごとに
-        Edge Box の実行 (緑) / Windows 自身の実行 (青) / ハイパーバイザー内部 (灰)
+        Edge Box の実行 (橙) / Windows 自身の実行 (青) / ハイパーバイザー内部 (灰)
     を積み上げ棒で描きます。タスクマネージャーでは Edge Box の分が「vmmem」という
     1 つのプロセスにしか見えませんが、ここではコア単位で分かります。
-    枠の色は CPU 割り当ての計画 (青 = Windows 用 / 緑 = Edge Box 用) です。
+    枠の色は CPU 割り当ての計画 (青 = Windows 用 / 橙 = Edge Box 用) です。
 
     メモリは PC 全体を「Windows 使用中 / Edge Box 使用中 / 空き」に分けて表示します。
 
@@ -33,6 +33,15 @@ param(
 $ErrorActionPreference = "Stop"
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
+
+# 画面の見た目 (『CPU割り当て』と同じ配色・部品)。測定の処理は持たない
+try {
+    . (Join-Path $PSScriptRoot "cpu-ui-theme.ps1")
+} catch {
+    [System.Windows.Forms.MessageBox]::Show(("画面の部品 (cpu-ui-theme.ps1) を読み込めませんでした。update.cmd で更新してください。`n`n" + $_.Exception.Message),
+        "Edge Box 監視", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error) | Out-Null
+    exit 1
+}
 
 $ConfigFile   = Join-Path $PSScriptRoot "cpu-partition.json"
 $SnapshotFile = Join-Path $PSScriptRoot "cpu-topology.json"
@@ -496,26 +505,40 @@ function Get-Avg($Lps, [string]$Key) {
 
 # ============================================================ 描画
 
-$ColWin  = [System.Drawing.Color]::FromArgb(86, 140, 220)
-$ColVm   = [System.Drawing.Color]::FromArgb(96, 180, 120)
-$ColHv   = [System.Drawing.Color]::FromArgb(175, 175, 175)
-$ColFree = [System.Drawing.Color]::FromArgb(232, 232, 232)
+# 色: 青 = Windows / 橙 = Edge Box / 明るい灰 = ハイパーバイザー内部。背景は灰色 (#616061)。
+# 棒の空き部分は背景より一段濃くし、ハイパーバイザー内部 (明るい灰) と見分けられるようにする
+$ColWin  = [CoreUi.Theme]::Win
+$ColVm   = [CoreUi.Theme]::Edge
+$ColHv   = [System.Drawing.Color]::FromArgb(196, 195, 196)
+$ColFree = [CoreUi.Theme]::Inset
 $BrWin   = New-Object System.Drawing.SolidBrush $ColWin
 $BrVm    = New-Object System.Drawing.SolidBrush $ColVm
 $BrHv    = New-Object System.Drawing.SolidBrush $ColHv
+# 棒の塗りは少しだけ落ち着かせる (画面いっぱいに並ぶため、純色だと強すぎる)
+$BrWinBar = New-Object System.Drawing.SolidBrush ([CoreUi.Theme]::Mix([CoreUi.Theme]::Panel, $ColWin, 0.8))
+$BrVmBar  = New-Object System.Drawing.SolidBrush ([CoreUi.Theme]::Mix([CoreUi.Theme]::Panel, $ColVm, 0.82))
 $BrFree  = New-Object System.Drawing.SolidBrush $ColFree
-$BrText  = [System.Drawing.Brushes]::Black
-$BrGray  = [System.Drawing.Brushes]::DimGray
-$BrP     = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb(200, 110, 0))   # P コアの印
-$BrE     = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb(0, 130, 160))   # E コアの印
-$BrBad   = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb(200, 30, 30))   # 混ざっている印
-$BrGood  = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb(0, 130, 60))    # 分かれている印
-$PenHost  = New-Object System.Drawing.Pen -ArgumentList @($ColWin, [float]2)
-$PenGuest = New-Object System.Drawing.Pen -ArgumentList @($ColVm, [float]2)
-$PenNone  = New-Object System.Drawing.Pen -ArgumentList @([System.Drawing.Color]::Silver, [float]1)
-$FontTitle = New-Object System.Drawing.Font -ArgumentList @("Meiryo UI", [float]9, [System.Drawing.FontStyle]::Bold)
-$FontBody  = New-Object System.Drawing.Font -ArgumentList @("Meiryo UI", [float]9)
-$FontSmall = New-Object System.Drawing.Font -ArgumentList @("Meiryo UI", [float]7)
+$BrText  = New-Object System.Drawing.SolidBrush ([CoreUi.Theme]::Text)
+$BrGray  = New-Object System.Drawing.SolidBrush ([CoreUi.Theme]::SubText)
+# P / E の印は明るさで分ける (橙・青は Windows / Edge Box の色なので使わない)
+$BrP     = New-Object System.Drawing.SolidBrush ([CoreUi.Theme]::Text)                            # P コアの印
+$BrE     = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb(224, 224, 224))   # E コアの印
+$BrBad   = New-Object System.Drawing.SolidBrush ([CoreUi.Theme]::ErrText)                         # 混ざっている印 (文字)
+$BrGood  = New-Object System.Drawing.SolidBrush ([CoreUi.Theme]::OkText)                          # 分かれている印 (文字)
+# 混ざっている印は文字の色だけに頼らず、赤い下線と「△」も付ける (灰色の背景では淡い赤と白が見分けにくいため)
+$BrBadMark = New-Object System.Drawing.SolidBrush ([CoreUi.Theme]::Err)
+# 文字に使う Windows / Edge Box の色 (灰色の背景の上でも読めるよう明るくしたもの)
+$BrWinText = New-Object System.Drawing.SolidBrush ([CoreUi.Theme]::WinText)
+$BrVmText  = New-Object System.Drawing.SolidBrush ([CoreUi.Theme]::EdgeText)
+$PenHost  = New-Object System.Drawing.Pen -ArgumentList @([CoreUi.Theme]::Mix([CoreUi.Theme]::Border, $ColWin, 0.8), [float]1.5)
+$PenGuest = New-Object System.Drawing.Pen -ArgumentList @([CoreUi.Theme]::Mix([CoreUi.Theme]::Border, $ColVm, 0.8), [float]1.5)
+$PenNone  = New-Object System.Drawing.Pen -ArgumentList @([CoreUi.Theme]::Border, [float]1)
+$PenRule  = New-Object System.Drawing.Pen -ArgumentList @([CoreUi.Theme]::Border, [float]1)
+$FontTitle = [CoreUi.Theme]::UiBold
+$FontBody  = [CoreUi.Theme]::Ui
+$FontSmall = [CoreUi.Theme]::UiSmall
+$FontNum   = New-Object System.Drawing.Font -ArgumentList @([CoreUi.Theme]::MonoFamily, [float]9, [System.Drawing.FontStyle]::Bold)
+$FontPct   = [CoreUi.Theme]::Mono
 
 function Rect([int]$x, [int]$y, [int]$w, [int]$h) {
     if ($w -lt 0) { $w = 0 }; if ($h -lt 0) { $h = 0 }
@@ -549,8 +572,11 @@ function Draw-LpGrid($g, [int]$x, [int]$y, [int]$w, [int]$h, [string]$title, $on
     $lps = @(Get-LpList)
     if ($only) { $lps = @($lps | Where-Object { $only -contains $_.Lp }) }
     if ($title) {
-        $g.DrawString($title, $FontTitle, $BrText, (PointF $x $y))
-        $y += 20; $h -= 20
+        # 区画の見出し: 左に区画の色の印 (青 = Windows 用 / 橙 = Edge Box 用)
+        $mark = if ($side -eq "host") { $BrWin } elseif ($side -eq "guest") { $BrVm } else { $BrGray }
+        $g.FillRectangle($mark, (Rect $x ($y + 4) 3 12))
+        $g.DrawString($title, $FontTitle, $BrText, (PointF ($x + 9) $y))
+        $y += 22; $h -= 22
     }
     if ($lps.Count -eq 0) { $g.DrawString("(該当する CPU なし)", $FontBody, $BrGray, (PointF $x $y)); return }
     $minSlot = 54
@@ -568,12 +594,12 @@ function Draw-LpGrid($g, [int]$x, [int]$y, [int]$w, [int]$h, [string]$title, $on
         if ($st) { $vm = [double]$st.Vm; $win = [double]$st.Win; $hv = [double]$st.Hv }
         $total = $vm + $win + $hv
         # 上: 番号と種類
-        $g.DrawString(("CPU {0}" -f $e.Lp), $FontTitle, $BrText, (PointF ($sx + 2) $sy))
+        $g.DrawString(("CPU {0}" -f $e.Lp), $FontNum, $BrText, (PointF ($sx + 2) $sy))
         $brKind = if ($e.Kind -eq "P") { $BrP } elseif ($e.Kind -eq "E") { $BrE } else { $BrGray }
         $g.DrawString($e.Core, $FontSmall, $brKind, (PointF ($sx + 3) ($sy + 16)))
-        # 縦棒 (枠の色 = 割り当ての計画: 青 = Windows 用 / 緑 = Edge Box 用)
-        $barTop = $sy + 30
-        $barH = $rowH - 30 - 20
+        # 縦棒 (枠の色 = 割り当ての計画: 青 = Windows 用 / 橙 = Edge Box 用)
+        $barTop = $sy + 33
+        $barH = $rowH - 33 - 20
         if ($barH -lt 12) { $barH = 12 }
         $bx = $sx + 4; $bw = $slotW - 8
         $pen = $PenNone
@@ -585,13 +611,14 @@ function Draw-LpGrid($g, [int]$x, [int]$y, [int]$w, [int]$h, [string]$title, $on
         $hHv  = [int]($barH * $hv / 100.0)
         if (($hVm + $hWin + $hHv) -gt $barH) { $hHv = [Math]::Max(0, $barH - $hVm - $hWin) }
         $yy = $barTop + $barH
-        if ($hVm -gt 0)  { $yy -= $hVm;  $g.FillRectangle($BrVm,  (Rect $bx $yy $bw $hVm)) }
-        if ($hWin -gt 0) { $yy -= $hWin; $g.FillRectangle($BrWin, (Rect $bx $yy $bw $hWin)) }
+        if ($hVm -gt 0)  { $yy -= $hVm;  $g.FillRectangle($BrVmBar,  (Rect $bx $yy $bw $hVm)) }
+        if ($hWin -gt 0) { $yy -= $hWin; $g.FillRectangle($BrWinBar, (Rect $bx $yy $bw $hWin)) }
         if ($hHv -gt 0)  { $yy -= $hHv;  $g.FillRectangle($BrHv,  (Rect $bx $yy $bw $hHv)) }
         # 下: 使用率 (常に表示)。区画に合わない側の使用が 1% を超えていれば赤 (混ざっている印)
         $brPct = $BrText
         if (($side -eq "host" -and $vm -gt 1.0) -or ($side -eq "guest" -and $win -gt 1.0)) { $brPct = $BrBad }
-        $g.DrawString(("{0:N0}%" -f $total), $FontBody, $brPct, (PointF ($sx + 2) ($barTop + $barH + 2)))
+        $g.DrawString(("{0:N0}%" -f $total), $FontPct, $brPct, (PointF ($sx + 2) ($barTop + $barH + 3)))
+        if ($brPct -eq $BrBad) { $g.FillRectangle($BrBadMark, (Rect ($sx + 2) ($barTop + $barH + 17) $bw 2)) }
     }
 }
 
@@ -610,8 +637,8 @@ function Draw-Memory($g, [int]$x, [int]$y, [int]$w, [int]$h) {
         $winGB = [Math]::Max(0.0, ($tot - $m.FreeGB) - $vmGB)
         $wWin = [int]($w * $winGB / $tot)
         $wVm  = [int]($w * $vmGB / $tot)
-        $g.FillRectangle($BrWin, (Rect $x $barY $wWin $barH))
-        $g.FillRectangle($BrVm,  (Rect ($x + $wWin) $barY $wVm $barH))
+        $g.FillRectangle($BrWinBar, (Rect $x $barY $wWin $barH))
+        $g.FillRectangle($BrVmBar,  (Rect ($x + $wWin) $barY $wVm $barH))
         $g.DrawRectangle($PenNone, (Rect $x $barY $w $barH))
         # 1 行目: PC 全体の内訳 (Windows / Edge Box / 空き) とメモリの逼迫具合
         $winPct = if ($tot -gt 0) { 100.0 * ($tot - $m.FreeGB) / $tot } else { 0.0 }
@@ -619,7 +646,7 @@ function Draw-Memory($g, [int]$x, [int]$y, [int]$w, [int]$h) {
             $tot, $winGB, $VMName, $vmGB, $m.FreeGB, $winPct, $m.WinCommitPct, $m.WinPagesPerSec
         $brL1 = $BrText
         if ($m.WinCommitPct -ge 90 -or $m.WinPagesPerSec -ge 1000) { $brL1 = $BrBad }
-        $g.DrawString($l1, $FontBody, $brL1, (PointF $x ($barY + $barH + 4)))
+        $g.DrawString($(if ($brL1 -eq $BrBad) { "△ " + $l1 } else { $l1 }), $FontBody, $brL1, (PointF $x ($barY + $barH + 4)))
         # 2 行目: Edge Box 内部 (統合サービスの報告があるときだけ表示する。報告が無ければ割り当てだけ)
         if ($m.VmReported) {
             $usedIn = [Math]::Max(0.0, $m.VmVisibleGB - $m.VmAvailGB)
@@ -632,14 +659,14 @@ function Draw-Memory($g, [int]$x, [int]$y, [int]$w, [int]$h) {
                 $VMName, $m.VmAssignedGB
             $brL2 = $BrGray
         }
-        $g.DrawString($l2, $FontBody, $brL2, (PointF $x ($barY + $barH + 22)))
+        $g.DrawString($(if ($brL2 -eq $BrBad) { "△ " + $l2 } else { $l2 }), $FontBody, $brL2, (PointF $x ($barY + $barH + 22)))
     } else {
         $g.DrawString("メモリ情報を取得できません", $FontBody, $BrText, (PointF $x ($barY + $barH + 4)))
     }
 }
 
 function Draw-All($g, [int]$W, [int]$H) {
-    $g.Clear([System.Drawing.Color]::White)
+    $g.Clear([CoreUi.Theme]::Bg)
     $g.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::None
     $g.TextRenderingHint = [System.Drawing.Text.TextRenderingHint]::ClearTypeGridFit
     $pad = 10
@@ -659,11 +686,11 @@ function Draw-All($g, [int]$W, [int]$H) {
     } else {
         $l2 = "{0} : 平均 {1:N0}%   状態: {2}" -f $VMName, $vmAvg, $script:Mem.VmState
     }
-    $g.DrawString($l1, $FontBody, $BrWin, (PointF $pad 4))
-    $g.DrawString($l2, $FontBody, $BrVm,  (PointF $pad 22))
+    $g.DrawString($l1, $FontBody, $BrWinText, (PointF $pad 4))
+    $g.DrawString($l2, $FontBody, $BrVmText,  (PointF $pad 22))
     Draw-Legend $g ([Math]::Max($pad, $W - 400)) 8
     if (-not $script:lpName) {
-        $g.DrawString("ハイパーバイザーの性能カウンターが見つかりません (Hyper-V が無効か、カウンターの破損)。", $FontBody, [System.Drawing.Brushes]::Firebrick, (PointF $pad 44))
+        $g.DrawString("ハイパーバイザーの性能カウンターが見つかりません (Hyper-V が無効か、カウンターの破損)。", $FontBody, $BrBad, (PointF $pad 44))
     }
 
     # --- コア構成の見出し (P コア 8 / E コア 12 のように種類ごとの数と CPU 番号) ---
@@ -718,6 +745,7 @@ function Draw-All($g, [int]$W, [int]$H) {
     }
 
     # --- メモリ ---
+    $g.DrawLine($PenRule, $pad, ($H - $memH - 6), ($W - $pad), ($H - $memH - 6))
     Draw-Memory $g $pad ($H - $memH) ($W - 2 * $pad) ($memH - $pad)
 }
 
@@ -733,35 +761,9 @@ public static extern int SetCurrentProcessExplicitAppUserModelID(string AppID);
 }
 try { [Win.AppShell]::SetCurrentProcessExplicitAppUserModelID("Edge Box.Monitor") | Out-Null } catch { }
 
-function Get-AppIcon([string]$Style) {
-    try {
-        Add-Type -AssemblyName System.Drawing -ErrorAction Stop
-        $bmp = New-Object System.Drawing.Bitmap 32, 32
-        $g = [System.Drawing.Graphics]::FromImage($bmp)
-        $g.Clear([System.Drawing.Color]::Transparent)
-        $body = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb(38, 62, 110))
-        $win  = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb(80, 148, 232))
-        $vm   = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb(104, 196, 138))
-        $g.FillRectangle($body, 3, 3, 26, 26)
-        switch ($Style) {
-            "monitor" {
-                $g.FillRectangle($win, 8, 17, 5, 7); $g.FillRectangle($vm, 14, 10, 5, 14); $g.FillRectangle($win, 20, 19, 5, 5)
-            }
-            "settings" {
-                $g.FillRectangle($win, 8, 9, 16, 4); $g.FillRectangle($vm, 8, 16, 16, 4); $g.FillRectangle($win, 8, 23, 10, 3)
-            }
-            default {
-                $g.FillRectangle($win, 8, 8, 6, 16); $g.FillRectangle($vm, 18, 8, 6, 16)
-            }
-        }
-        $g.Dispose()
-        $ico = [System.Drawing.Icon]::FromHandle($bmp.GetHicon())
-        return $ico
-    } catch { return $null }
-}
-
 $form = New-Object System.Windows.Forms.Form
-$appIcon = Get-AppIcon "monitor"
+Initialize-UiForm $form
+$appIcon = Get-UiAppIcon "monitor"
 if ($appIcon) { $form.Icon = $appIcon }
 $form.Text = "$VMName 監視 — 各コアの負荷とメモリ"
 $form.ClientSize = New-Object System.Drawing.Size(1120, 600)
@@ -770,36 +772,33 @@ $form.FormBorderStyle = "FixedDialog"   # 大きさは固定
 $form.MaximizeBox = $false
 $form.MinimizeBox = $true              # 最小化してしまっておける
 $form.TopMost = [bool]$TopMost
-$form.Font = New-Object System.Drawing.Font -ArgumentList @("Meiryo UI", [float]9)
 
 # 上のバー: 更新間隔・常に手前・状態
-$top = New-Object System.Windows.Forms.Panel
+$top = New-Object CoreUi.Strip
+$top.Line = "Bottom"
 $top.Dock = "Top"
-$top.Height = 32
-$lblIv = New-Object System.Windows.Forms.Label
-$lblIv.Text = "更新間隔:"; $lblIv.AutoSize = $true
-$lblIv.Location = New-Object System.Drawing.Point(10, 8)
-$cmbIv = New-Object System.Windows.Forms.ComboBox
+$top.Height = 44
+$top.Width = $form.ClientSize.Width
+$lblIv = New-UiLabel "更新間隔" 14 13 0 "sub"
+$cmbIv = New-Object CoreUi.DarkComboBox
 $cmbIv.DropDownStyle = "DropDownList"
 [void]$cmbIv.Items.AddRange(@("1 秒", "2 秒", "5 秒"))
-$cmbIv.Location = New-Object System.Drawing.Point(72, 5)
-$cmbIv.Size = New-Object System.Drawing.Size(70, 24)
+$cmbIv.Location = New-Object System.Drawing.Point(78, 8)
+$cmbIv.Size = New-Object System.Drawing.Size(80, 28)
 $cmbIv.SelectedIndex = $(if ($IntervalMs -ge 5000) { 2 } elseif ($IntervalMs -ge 2000) { 1 } else { 0 })
-$chkTop = New-Object System.Windows.Forms.CheckBox
-$chkTop.Text = "常に手前に表示"; $chkTop.AutoSize = $true
-$chkTop.Location = New-Object System.Drawing.Point(160, 7)
+$chkTop = New-Object CoreUi.ToggleSwitch
+$chkTop.Text = "常に手前に表示"
+$chkTop.Location = New-Object System.Drawing.Point(176, 9)
+$chkTop.Size = New-Object System.Drawing.Size(160, 26)
 $chkTop.Checked = [bool]$TopMost
-$lblStatus = New-Object System.Windows.Forms.Label
-$lblStatus.Location = New-Object System.Drawing.Point(300, 8)
-$lblStatus.Size = New-Object System.Drawing.Size(680, 20)
-$lblStatus.ForeColor = [System.Drawing.Color]::DimGray
+$lblStatus = New-UiLabel "" 352 13 754 "small"
 $lblStatus.Anchor = "Top,Left,Right"
 $top.Controls.AddRange(@($lblIv, $cmbIv, $chkTop, $lblStatus))
 
 # 描画面 (ちらつき防止のため二重バッファ)
 $panel = New-Object System.Windows.Forms.Panel
 $panel.Dock = "Fill"
-$panel.BackColor = [System.Drawing.Color]::White
+$panel.BackColor = [CoreUi.Theme]::Bg
 try {
     $prop = $panel.GetType().GetProperty("DoubleBuffered",
         ([System.Reflection.BindingFlags]::Instance -bor [System.Reflection.BindingFlags]::NonPublic))
