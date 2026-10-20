@@ -86,7 +86,7 @@ function New-ConsoleIcon([string]$Path, [string]$Style = "console") {
     $g   = [System.Drawing.Graphics]::FromImage($bmp)
     $g.Clear([System.Drawing.Color]::Transparent)
 
-    # 画面と同じ配色: 黒いパッケージ、Windows = 青 / Edge Box = 橙
+    # アイコン: 濃いパッケージ (画面の配色とは別)、Windows = 青 / Edge Box = 橙
     $body = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb(17, 24, 32))
     $pins = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb(138, 152, 168))
     $win  = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb(86, 180, 255))
@@ -1557,6 +1557,9 @@ function Update-Validation {
     } elseif ($errors.Count -eq 0) {
         Add-Line "適用できます (上の注意点をご確認ください)。" ([CoreUi.Theme]::OkText)
     }
+    # 先頭 ([不可] の行) が見えるように戻す
+    $script:rtb.SelectionStart = 0
+    $script:rtb.ScrollToCaret()
     $script:btnApply.Enabled = ($errors.Count -eq 0)
     if ($script:VmMissing) { $script:btnApply.Text = "保存 (Edge Box 検出後に自動適用)" }
     else { $script:btnApply.Text = "この内容で適用" }
@@ -1578,6 +1581,7 @@ function Update-MemoryUi {
         $script:lblMemHost.Text = ""
         $script:lblMemNote.Text = "Edge Box が見つからないため、メモリは変更できません (Edge Box を作成・検出してから)。"
         $script:lblMemNote.ForeColor = [CoreUi.Theme]::SubText
+        $script:lblMemNote.Font = [CoreUi.Theme]::Ui
         $script:btnMem.Enabled = $false; $script:numMem.Enabled = $false
         return
     }
@@ -1596,7 +1600,9 @@ function Update-MemoryUi {
     $same = ($g -eq [int][Math]::Round($script:MemVmGB) -and -not $script:MemDynamic)
     if ($errs.Count -gt 0) {
         $script:lblMemNote.Text = "$cur    [不可] " + ($errs -join " / ")
-        $script:lblMemNote.ForeColor = [CoreUi.Theme]::ErrText
+        # カード (#757475) の上では色付きの文字は読みにくいため白で出し、[不可] は太字で目立たせる
+        $script:lblMemNote.ForeColor = [CoreUi.Theme]::Text
+        $script:lblMemNote.Font = [CoreUi.Theme]::UiBold
         $script:btnMem.Enabled = $false
         return
     }
@@ -1604,7 +1610,8 @@ function Update-MemoryUi {
           elseif ([string]$script:Vm.State -ne "Off") { "Edge Box は実行中のため、反映には Edge Box の再起動が必要です (適用時に確認します)" }
           else { "Edge Box は停止中のため、すぐに反映できます" }
     $script:lblMemNote.Text = "$cur    " + $(if ($warns.Count -gt 0) { "[注意] " + ($warns -join " / ") + "    " } else { "" }) + $st
-    $script:lblMemNote.ForeColor = if ($warns.Count -gt 0) { [CoreUi.Theme]::WarnText } else { [CoreUi.Theme]::SubText }
+    $script:lblMemNote.ForeColor = [CoreUi.Theme]::Text   # [注意] の有無は文字で示す (色付きの文字はカードの上で読みにくい)
+    $script:lblMemNote.Font = [CoreUi.Theme]::Ui
     $script:btnMem.Enabled = (-not $same)
 }
 

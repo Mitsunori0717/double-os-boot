@@ -55,11 +55,12 @@ namespace CoreUi
         public static Color Control      = Rgb(0x5E5D5E);   // ボタン・入力欄
         public static Color ControlHover = Rgb(0x686768);
         public static Color ControlDown  = Rgb(0x555455);
-        public static Color Selection    = Rgb(0x575657);   // 一覧・選択欄で選んでいる行
+        public static Color Selection    = Rgb(0x3E3D3E);   // 一覧・選択欄で選んでいる行 (縞の行と見分けられる濃さ)
         public static Color Border       = Rgb(0x8E8D8E);   // 境界線
         public static Color BorderStrong = Rgb(0xB5B4B5);
         public static Color Text         = Rgb(0xFFFFFF);   // メインテキスト
-        public static Color SubText      = Rgb(0xEBEBEB);   // サブテキスト
+        public static Color SubText      = Rgb(0xFFFFFF);   // サブテキスト (#757475 の上で読めるのは白だけのため、
+                                                            //   見出しとの差は文字の大きさ・太さで付ける)
         public static Color Faint        = Rgb(0xA6A5A6);   // 無効
         public static Color Silver       = Rgb(0xF2F2F2);   // 選択・フォーカス (OS の色とは別)
         public static Color Ink          = Rgb(0x1C1C1C);   // 明るい面の上の印 (チェック・つまみ)
@@ -69,10 +70,10 @@ namespace CoreUi
         public static Color Err          = Rgb(0xFF626E);   // エラー
         public static Color Warn         = Rgb(0xE2C16B);   // 注意
         // 文字に使う色 (上の色を明るくしたもの。灰色の面の上でも読める)
-        public static Color WinText      = Rgb(0xB4DDFF);
-        public static Color EdgeText     = Rgb(0xFAD2A6);
+        public static Color WinText      = Rgb(0xC0E2FF);
+        public static Color EdgeText     = Rgb(0xFBD8B2);
         public static Color OkText       = Rgb(0xA6F3D4);
-        public static Color ErrText      = Rgb(0xFFC2C7);
+        public static Color ErrText      = Rgb(0xFFD4D8);
         public static Color WarnText     = Rgb(0xF5E1A6);
 
         public static string JpFamily = "Meiryo UI";
@@ -502,7 +503,7 @@ namespace CoreUi
                 border = hover ? Theme.Text : Theme.Mix(Theme.Border, Theme.Text, 0.55);
                 text = Theme.Text;
             } else if (kind == ButtonKind.Danger) {
-                fill = down ? Theme.ControlDown : (hover ? Theme.Mix(Theme.Control, Theme.Err, 0.18) : Theme.Control);
+                fill = down ? Theme.ControlDown : (hover ? Theme.Mix(Theme.Deep, Theme.Err, 0.25) : Theme.Mix(Theme.Deep, Theme.Err, 0.15));
                 border = hover ? Theme.Err : Theme.Mix(Theme.Border, Theme.Err, 0.45);
                 text = hover ? Theme.Text : Theme.ErrText;
             } else if (kind == ButtonKind.Ghost) {
@@ -511,7 +512,7 @@ namespace CoreUi
                 text = (hover || selected) ? Theme.Text : Theme.SubText;
             } else {
                 fill = down ? Theme.ControlDown : (hover ? Theme.ControlHover : Theme.Control);
-                border = hover ? Theme.BorderStrong : Theme.Border;
+                border = hover ? Theme.Silver : Theme.BorderStrong;   // 背景と同じ濃さの面でも輪郭が見えるよう明るい枠
                 text = Theme.Text;
             }
             if (selected && Enabled && kind != ButtonKind.Primary) {
@@ -593,7 +594,7 @@ namespace CoreUi
             Color fill = on ? Theme.Mix(Theme.Deep, accent, 0.30) : Theme.Recess;
             if (hover) { fill = Theme.Mix(fill, Theme.Text, 0.05); }
             if (down)  { fill = Theme.Mix(fill, Theme.Ink, 0.3); }
-            Color border = on ? Theme.Mix(Theme.Border, accent, hover ? 0.95 : 0.6) : (hover ? Theme.BorderStrong : Theme.Border);
+            Color border = on ? Theme.Mix(Theme.Border, accent, hover ? 0.95 : 0.6) : (hover ? Theme.Silver : Theme.BorderStrong);
             Theme.FillRound(g, body, 3, fill, Color.Empty);
 
             if (on) {
@@ -636,7 +637,7 @@ namespace CoreUi
             if (fits) {
                 for (int i = 0; i < threads.Length; i++) {
                     Rectangle c = new Rectangle(cx, cy, widths[i], 15);
-                    Theme.FillRound(g, c, 2, on ? Theme.Alpha(accent, 40) : Color.Empty, on ? Theme.Alpha(accent, 150) : Theme.Border);
+                    Theme.FillRound(g, c, 2, on ? Theme.Alpha(accent, 40) : Color.Empty, on ? Theme.Alpha(accent, 150) : Theme.BorderStrong);
                     Theme.DrawText(g, threads[i].ToString(), Theme.MonoSmall, on ? Theme.Text : Theme.SubText, c,
                         TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine);
                     cx += widths[i] + 3;
@@ -705,7 +706,7 @@ namespace CoreUi
         }
     }
 
-    // ページの下地 (ほぼ黒 + ごく薄い点の格子)
+    // ページの下地 (背景色 + ごく薄い点の格子)
     public class Backdrop : Panel
     {
         bool dots = true;
@@ -1026,8 +1027,9 @@ namespace CoreUi
                 Size ts = Theme.Measure(g, t, Theme.MonoSmall);
                 if (x < lastRight + 6) { continue; }
                 Color tc = sides[i] == 1 ? Theme.Win : (sides[i] == 2 ? Theme.Edge : Theme.SubText);
-                using (Pen tp = new Pen(tc)) { g.DrawLine(tp, x, top + cellHeight + 1, x, top + cellHeight + 3); }
-                Theme.DrawText(g, t, Theme.MonoSmall, sides[i] == 1 ? Theme.WinText : (sides[i] == 2 ? Theme.EdgeText : Theme.SubText), x, ly);
+                // 番号は白 (読みやすさ優先)。どちら側かは上のマスの色と、この目盛りの色で示す
+                using (Pen tp = new Pen(tc, 2f)) { g.DrawLine(tp, x + 1, top + cellHeight + 1, x + 1, top + cellHeight + 4); }
+                Theme.DrawText(g, t, Theme.MonoSmall, Theme.Text, x, ly);
                 lastRight = x + ts.Width;
             }
             string last = IdText(n - 1);
@@ -1227,7 +1229,7 @@ namespace CoreUi
 
         protected override void OnPaint(PaintEventArgs e)
         {
-            Color c = !Enabled ? Theme.Mix(Theme.Border, Theme.Bg, 0.3) : (focused ? Theme.Silver : Theme.Border);
+            Color c = !Enabled ? Theme.Mix(Theme.Border, Theme.Bg, 0.3) : (focused ? Theme.Silver : Theme.BorderStrong);
             using (Pen p = new Pen(c)) { e.Graphics.DrawRectangle(p, 0, 0, Width - 1, Height - 1); }
         }
     }
@@ -1254,7 +1256,7 @@ namespace CoreUi
             bool edit = (e.State & DrawItemState.ComboBoxEdit) != 0;
             bool sel = (e.State & DrawItemState.Selected) != 0 && !edit;
             using (SolidBrush b = new SolidBrush(sel ? Theme.Selection : BackColor)) { g.FillRectangle(b, e.Bounds); }
-            if (sel) { using (SolidBrush a = new SolidBrush(Theme.Silver)) { g.FillRectangle(a, e.Bounds.X, e.Bounds.Y + 3, 2, e.Bounds.Height - 6); } }
+            if (sel) { using (SolidBrush a = new SolidBrush(Theme.Silver)) { g.FillRectangle(a, e.Bounds.X, e.Bounds.Y + 3, 3, e.Bounds.Height - 6); } }
             if (e.Index >= 0 && e.Index < Items.Count) {
                 Rectangle tr = new Rectangle(e.Bounds.X + (edit ? 2 : 8), e.Bounds.Y, e.Bounds.Width - 10, e.Bounds.Height);
                 Theme.DrawText(g, GetItemText(Items[e.Index]), Font, Enabled ? ForeColor : Theme.Faint, tr,
@@ -1274,7 +1276,7 @@ namespace CoreUi
             if (m.Msg == 0x000F && DropDownStyle != ComboBoxStyle.Simple) {   // WM_PAINT の後に枠と ▼ を描き直す
                 using (Graphics g = Graphics.FromHwnd(Handle)) {
                     Rectangle r = ClientRectangle;
-                    Color border = !Enabled ? Theme.Mix(Theme.Border, Theme.Bg, 0.3) : (focusedNow ? Theme.Silver : (hover ? Theme.BorderStrong : Theme.Border));
+                    Color border = !Enabled ? Theme.Mix(Theme.Border, Theme.Bg, 0.3) : ((focusedNow || hover) ? Theme.Silver : Theme.BorderStrong);
                     using (Pen inner = new Pen(BackColor)) { g.DrawRectangle(inner, 1, 1, r.Width - 3, r.Height - 3); }
                     using (Pen p = new Pen(border)) { g.DrawRectangle(p, 0, 0, r.Width - 1, r.Height - 1); }
                     int bw = SystemInformation.VerticalScrollBarWidth + 2;
@@ -1371,7 +1373,7 @@ namespace CoreUi
         }
     }
 
-    // 一覧 (詳細表示の ListView を黒で描く)
+    // 一覧 (詳細表示の ListView を画面の配色で描く)
     public class DarkListView : ListView
     {
         const int LVM_GETHEADER = 0x101F;
@@ -1432,7 +1434,7 @@ namespace CoreUi
             bool sel = e.Item.Selected;
             Color bg = sel ? Theme.Selection : ((e.ItemIndex % 2) == 1 ? Theme.Mix(Theme.Panel, Theme.Bg, 0.4) : Theme.Panel);
             using (SolidBrush b = new SolidBrush(bg)) { g.FillRectangle(b, e.Bounds); }
-            if (sel && e.ColumnIndex == 0) { using (SolidBrush a = new SolidBrush(Theme.Silver)) { g.FillRectangle(a, e.Bounds.X, e.Bounds.Y + 3, 2, e.Bounds.Height - 6); } }
+            if (sel && e.ColumnIndex == 0) { using (SolidBrush a = new SolidBrush(Theme.Silver)) { g.FillRectangle(a, e.Bounds.X, e.Bounds.Y + 3, 3, e.Bounds.Height - 6); } }
             string t = e.SubItem != null ? e.SubItem.Text : "";
             Rectangle tr = new Rectangle(e.Bounds.X + 9, e.Bounds.Y, Math.Max(1, e.Bounds.Width - 14), e.Bounds.Height);
             Theme.DrawText(g, t, Font, e.ColumnIndex == 0 || sel ? Theme.Text : Theme.Mix(Theme.SubText, Theme.Text, 0.35), tr,
@@ -1440,7 +1442,7 @@ namespace CoreUi
         }
     }
 
-    // 一覧 (1 列の ListBox を黒で描く)
+    // 一覧 (1 列の ListBox を画面の配色で描く)
     public class DarkListBox : ListBox
     {
         public DarkListBox()
@@ -1462,7 +1464,7 @@ namespace CoreUi
             using (SolidBrush b = new SolidBrush(sel ? Theme.Selection : ((e.Index % 2) == 1 ? Theme.Mix(Theme.Panel, Theme.Bg, 0.4) : Theme.Panel))) {
                 g.FillRectangle(b, e.Bounds);
             }
-            if (sel) { using (SolidBrush a = new SolidBrush(Theme.Silver)) { g.FillRectangle(a, e.Bounds.X, e.Bounds.Y + 3, 2, e.Bounds.Height - 6); } }
+            if (sel) { using (SolidBrush a = new SolidBrush(Theme.Silver)) { g.FillRectangle(a, e.Bounds.X, e.Bounds.Y + 3, 3, e.Bounds.Height - 6); } }
             Rectangle tr = new Rectangle(e.Bounds.X + 10, e.Bounds.Y, e.Bounds.Width - 14, e.Bounds.Height);
             Theme.DrawText(g, GetItemText(Items[e.Index]), Font, Theme.Text, tr,
                 TextFormatFlags.VerticalCenter | TextFormatFlags.Left | TextFormatFlags.SingleLine | TextFormatFlags.EndEllipsis);
@@ -1615,7 +1617,7 @@ namespace CoreUi
     }
 
     // ------------------------------------------------------------------
-    //  画面全体の仕上げ (黒い見出し・ツールチップ)
+    //  画面全体の仕上げ (タイトルバー・ツールチップ)
     // ------------------------------------------------------------------
     public static class Styler
     {

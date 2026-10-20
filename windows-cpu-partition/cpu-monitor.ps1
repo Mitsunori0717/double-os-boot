@@ -522,9 +522,11 @@ $BrText  = New-Object System.Drawing.SolidBrush ([CoreUi.Theme]::Text)
 $BrGray  = New-Object System.Drawing.SolidBrush ([CoreUi.Theme]::SubText)
 # P / E の印は明るさで分ける (橙・青は Windows / Edge Box の色なので使わない)
 $BrP     = New-Object System.Drawing.SolidBrush ([CoreUi.Theme]::Text)                            # P コアの印
-$BrE     = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb(200, 200, 200))   # E コアの印
+$BrE     = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb(224, 224, 224))   # E コアの印
 $BrBad   = New-Object System.Drawing.SolidBrush ([CoreUi.Theme]::ErrText)                         # 混ざっている印 (文字)
 $BrGood  = New-Object System.Drawing.SolidBrush ([CoreUi.Theme]::OkText)                          # 分かれている印 (文字)
+# 混ざっている印は文字の色だけに頼らず、赤い下線と「△」も付ける (灰色の背景では淡い赤と白が見分けにくいため)
+$BrBadMark = New-Object System.Drawing.SolidBrush ([CoreUi.Theme]::Err)
 # 文字に使う Windows / Edge Box の色 (灰色の背景の上でも読めるよう明るくしたもの)
 $BrWinText = New-Object System.Drawing.SolidBrush ([CoreUi.Theme]::WinText)
 $BrVmText  = New-Object System.Drawing.SolidBrush ([CoreUi.Theme]::EdgeText)
@@ -595,7 +597,7 @@ function Draw-LpGrid($g, [int]$x, [int]$y, [int]$w, [int]$h, [string]$title, $on
         $g.DrawString(("CPU {0}" -f $e.Lp), $FontNum, $BrText, (PointF ($sx + 2) $sy))
         $brKind = if ($e.Kind -eq "P") { $BrP } elseif ($e.Kind -eq "E") { $BrE } else { $BrGray }
         $g.DrawString($e.Core, $FontSmall, $brKind, (PointF ($sx + 3) ($sy + 16)))
-        # 縦棒 (枠の色 = 割り当ての計画: 青 = Windows 用 / 緑 = Edge Box 用)
+        # 縦棒 (枠の色 = 割り当ての計画: 青 = Windows 用 / 橙 = Edge Box 用)
         $barTop = $sy + 33
         $barH = $rowH - 33 - 20
         if ($barH -lt 12) { $barH = 12 }
@@ -616,6 +618,7 @@ function Draw-LpGrid($g, [int]$x, [int]$y, [int]$w, [int]$h, [string]$title, $on
         $brPct = $BrText
         if (($side -eq "host" -and $vm -gt 1.0) -or ($side -eq "guest" -and $win -gt 1.0)) { $brPct = $BrBad }
         $g.DrawString(("{0:N0}%" -f $total), $FontPct, $brPct, (PointF ($sx + 2) ($barTop + $barH + 3)))
+        if ($brPct -eq $BrBad) { $g.FillRectangle($BrBadMark, (Rect ($sx + 2) ($barTop + $barH + 17) $bw 2)) }
     }
 }
 
@@ -643,7 +646,7 @@ function Draw-Memory($g, [int]$x, [int]$y, [int]$w, [int]$h) {
             $tot, $winGB, $VMName, $vmGB, $m.FreeGB, $winPct, $m.WinCommitPct, $m.WinPagesPerSec
         $brL1 = $BrText
         if ($m.WinCommitPct -ge 90 -or $m.WinPagesPerSec -ge 1000) { $brL1 = $BrBad }
-        $g.DrawString($l1, $FontBody, $brL1, (PointF $x ($barY + $barH + 4)))
+        $g.DrawString($(if ($brL1 -eq $BrBad) { "△ " + $l1 } else { $l1 }), $FontBody, $brL1, (PointF $x ($barY + $barH + 4)))
         # 2 行目: Edge Box 内部 (統合サービスの報告があるときだけ表示する。報告が無ければ割り当てだけ)
         if ($m.VmReported) {
             $usedIn = [Math]::Max(0.0, $m.VmVisibleGB - $m.VmAvailGB)
@@ -656,7 +659,7 @@ function Draw-Memory($g, [int]$x, [int]$y, [int]$w, [int]$h) {
                 $VMName, $m.VmAssignedGB
             $brL2 = $BrGray
         }
-        $g.DrawString($l2, $FontBody, $brL2, (PointF $x ($barY + $barH + 22)))
+        $g.DrawString($(if ($brL2 -eq $BrBad) { "△ " + $l2 } else { $l2 }), $FontBody, $brL2, (PointF $x ($barY + $barH + 22)))
     } else {
         $g.DrawString("メモリ情報を取得できません", $FontBody, $BrText, (PointF $x ($barY + $barH + 4)))
     }

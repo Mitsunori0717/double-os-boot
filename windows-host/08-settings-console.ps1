@@ -263,7 +263,7 @@ try { [Win.AppShell]::SetCurrentProcessExplicitAppUserModelID("Edge Box.Settings
 
 # --- 見た目: 『CPU割り当て』と同じ配色 (このフォルダだけで完結させるため、ここで直接指定する) ---
 $UiBg      = [System.Drawing.Color]::FromArgb(97, 96, 97)     # 背景 #616061
-$UiBg2     = [System.Drawing.Color]::FromArgb(117, 116, 117)  # 操作バー #757475 (サイドメニューと同じ)
+$UiBg2     = [System.Drawing.Color]::FromArgb(117, 116, 117)  # 操作バー #757475 (『CPU割り当て』の操作バーと同じ)
 $UiPanel   = [System.Drawing.Color]::FromArgb(117, 116, 117)  # カード #757475
 $UiControl = [System.Drawing.Color]::FromArgb(94, 93, 94)     # ボタン・入力欄
 $UiHover   = [System.Drawing.Color]::FromArgb(104, 103, 104)
@@ -271,7 +271,7 @@ $UiDown    = [System.Drawing.Color]::FromArgb(85, 84, 85)
 $UiBorder  = [System.Drawing.Color]::FromArgb(142, 141, 142)  # 境界線
 $UiStrong  = [System.Drawing.Color]::FromArgb(181, 180, 181)
 $UiText    = [System.Drawing.Color]::FromArgb(255, 255, 255)  # 文字 (灰色の上で読めるよう白)
-$UiSub     = [System.Drawing.Color]::FromArgb(235, 235, 235)  # 補助の文字
+$UiSub     = [System.Drawing.Color]::FromArgb(255, 255, 255)  # 補助の文字 (#757475 の上で読めるのは白だけのため白)
 $UiSilver  = [System.Drawing.Color]::FromArgb(242, 242, 242)  # フォーカス
 $UiFont    = New-Object System.Drawing.Font("Meiryo UI", 9)
 $UiBold    = New-Object System.Drawing.Font("Meiryo UI", 9.75, [System.Drawing.FontStyle]::Bold)
@@ -357,6 +357,30 @@ function New-Check($text, $x, $y, $w, $checked) {
     $c.BackColor = $UiBg
     $c.ForeColor = $UiText
     $c.Cursor = [System.Windows.Forms.Cursors]::Hand
+    # 標準の平らな四角は灰色の上で見えにくいため、四角と文字をここで描き直す (状態と操作は CheckBox のまま)
+    $c.Add_Paint({
+        param($s, $e)
+        $g = $e.Graphics
+        $g.Clear($s.BackColor)
+        $y = [int](($s.Height - 14) / 2)
+        $b = New-Object System.Drawing.SolidBrush ($(if ($s.Checked) { $UiSilver } else { $UiControl }))
+        $g.FillRectangle($b, 1, $y, 14, 14); $b.Dispose()
+        $p = New-Object System.Drawing.Pen ($(if ($s.Checked) { $UiSilver } else { $UiStrong }))
+        $g.DrawRectangle($p, 1, $y, 13, 13); $p.Dispose()
+        if ($s.Checked) {
+            $g.SmoothingMode = "AntiAlias"
+            $k = New-Object System.Drawing.Pen ([System.Drawing.Color]::FromArgb(28, 28, 28)), 2
+            $g.DrawLines($k, [System.Drawing.PointF[]]@(
+                (New-Object System.Drawing.PointF(4, ($y + 7))),
+                (New-Object System.Drawing.PointF(6.5, ($y + 10))),
+                (New-Object System.Drawing.PointF(11.5, ($y + 3.5)))))
+            $k.Dispose()
+            $g.SmoothingMode = "Default"
+        }
+        if ($s.Focused) { [System.Windows.Forms.ControlPaint]::DrawFocusRectangle($g, (New-Object System.Drawing.Rectangle(0, ($y - 1), 16, 16))) }
+        [System.Windows.Forms.TextRenderer]::DrawText($g, $s.Text, $s.Font, (New-Object System.Drawing.Rectangle(22, 0, ($s.Width - 22), $s.Height)),
+            $s.ForeColor, [System.Windows.Forms.TextFormatFlags]"VerticalCenter, Left, SingleLine, EndEllipsis, NoPrefix")
+    })
     return $c
 }
 # 入力欄: 細い枠の中に置く (フォーカス中は枠を明るく)
