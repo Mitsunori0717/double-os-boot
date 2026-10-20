@@ -654,6 +654,7 @@ $script:header.Add_Resize({ try { Update-HeaderLayout } catch { } })
 
 # --- 左メニュー ---
 $script:sidebar = New-Object CoreUi.Strip
+$script:sidebar.BackColor = [CoreUi.Theme]::Sidebar
 $script:sidebar.Line = "Right"
 $script:sidebar.Dock = "Left"
 $script:sidebar.Width = 220
@@ -687,7 +688,7 @@ Add-Stack $script:sidebar $navList 2
 $navFoot = New-Object System.Windows.Forms.Panel
 $navFoot.Dock = "Bottom"
 $navFoot.Height = 104
-$navFoot.BackColor = [CoreUi.Theme]::Bg2
+$navFoot.BackColor = [CoreUi.Theme]::Sidebar
 $script:btnMon = New-UiButton "リアルタイム監視" 188 "Default" "monitor"
 $script:btnMon.Location = New-Object System.Drawing.Point(16, 12)
 $script:Tip.SetToolTip($script:btnMon, "各コアの負荷とメモリの使用量を毎秒表示する別ウィンドウ (『Edge Box 監視』) を開きます")

@@ -6,7 +6,7 @@
     cpu-console.ps1 / cpu-monitor.ps1 から読み込みます (単独では何もしません)。
     設定や割り当ての処理は一切持たず、表示に使う部品だけをまとめています。
 
-      配色      グレー基調 (背景 #616061 / サイドメニュー・カード #757475)。
+      配色      グレー基調 (背景 #616061 / サイドメニュー #424142 / カード #757475)。
                 青 = Windows、橙 = Edge Box、緑 = 正常、赤 = エラー。文字に使うときは、
                 灰色の上でも読めるよう同じ色を明るくしたもの (WinText など) を使う
       文字      日本語は Meiryo UI、英字の見出しは Segoe UI、数値は Cascadia Mono / Consolas
@@ -45,7 +45,8 @@ namespace CoreUi
     public static class Theme
     {
         public static Color Bg           = Rgb(0x616061);   // メイン背景
-        public static Color Bg2          = Rgb(0x757475);   // サイドメニュー・操作バー
+        public static Color Sidebar      = Rgb(0x424142);   // サイドメニュー
+        public static Color Bg2          = Rgb(0x757475);   // 操作バー・監視の上部バー
         public static Color Panel        = Rgb(0x757475);   // カード
         public static Color Raised       = Rgb(0x807F80);   // カードの上で一段明るい面
         public static Color Recess       = Rgb(0x6B6A6B);   // カードの上で一段沈んだ面 (未割当のタイル)
@@ -138,6 +139,9 @@ namespace CoreUi
         }
 
         public static Color Alpha(Color c, int a) { return Color.FromArgb(Math.Max(0, Math.Min(255, a)), c.R, c.G, c.B); }
+
+        // 濃い面か (濃い面の上では選択・ホバーを明るく、明るい面の上では濃くして示す)
+        public static bool IsDark(Color c) { return (0.299 * c.R + 0.587 * c.G + 0.114 * c.B) / 255.0 < 0.35; }
 
         public static Color ToneColor(Tone t)
         {
@@ -837,7 +841,7 @@ namespace CoreUi
             FlatStyle = FlatStyle.Flat;
             FlatAppearance.BorderSize = 0;
             UseVisualStyleBackColor = false;
-            BackColor = Theme.Bg2;
+            BackColor = Theme.Sidebar;
             Cursor = Cursors.Hand;
             Height = 54;
         }
@@ -857,15 +861,17 @@ namespace CoreUi
             Color back = Theme.BackOf(Parent);
             g.Clear(back);
             Rectangle body = new Rectangle(8, 3, Width - 17, Height - 6);
+            bool dark = Theme.IsDark(back);
             if (selected) {
-                Theme.FillRound(g, body, 3, Theme.Mix(back, Theme.Ink, 0.16), Theme.Mix(back, Theme.Border, 0.8));
+                Theme.FillRound(g, body, 3, dark ? Theme.Mix(back, Theme.Text, 0.10) : Theme.Mix(back, Theme.Ink, 0.16),
+                    Theme.Mix(back, Theme.Border, dark ? 0.45 : 0.8));
                 using (SolidBrush b = new SolidBrush(Theme.Silver)) { g.FillRectangle(b, body.X, body.Y + 10, 2, body.Height - 20); }
                 Rectangle gl = new Rectangle(body.X + 2, body.Y + 10, 10, body.Height - 20);
                 using (LinearGradientBrush lg = new LinearGradientBrush(gl, Theme.Alpha(Theme.Silver, 42), Theme.Alpha(Theme.Silver, 0), LinearGradientMode.Horizontal)) {
                     g.FillRectangle(lg, gl);
                 }
             } else if (hover) {
-                Theme.FillRound(g, body, 3, Theme.Mix(back, Theme.Text, 0.06), Color.Empty);
+                Theme.FillRound(g, body, 3, Theme.Mix(back, Theme.Text, dark ? 0.05 : 0.06), Color.Empty);
             }
             Color main = (selected || hover) ? Theme.Text : Theme.SubText;
             Icons.Draw(g, glyph, new Rectangle(body.X + 16, (Height - 18) / 2, 18, 18), selected ? Theme.Text : Theme.SubText);
