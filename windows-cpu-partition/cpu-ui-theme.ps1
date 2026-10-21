@@ -817,6 +817,7 @@ namespace CoreUi
         public SideBrand()
         {
             SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
+            TabStop = false;
             Height = 78;
         }
         protected override void OnTextChanged(EventArgs e) { base.OnTextChanged(e); Invalidate(); }

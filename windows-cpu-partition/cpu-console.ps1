@@ -6,7 +6,7 @@
 .DESCRIPTION
     - この PC の実際のコア構成を検出して 1 コア = 1 タイルで表示します
       (Intel 12世代以降の P コア/E コアは、CPU が申告する効率クラスで判別)
-    - タイルをクリックするたびに Windows 用 → Edge Box 用 → 未割当 と切り替わります
+    - 各コアは Windows 用か Edge Box 用のどちらか。クリックで切り替えられるのは分割の境目の両側のタイルだけです
     - 選んだ内容が「動かない・矛盾している」場合は、その理由を表示して
       [この内容で適用] を押せないようにします (安全装置)
     - 適用そのものは同じフォルダの cpu-partition.ps1 が行います
@@ -209,7 +209,7 @@ if ($Setup) {
                 $lnk.Arguments        = "`"$mvbs`""
                 $lnk.WorkingDirectory = $PSScriptRoot
                 $lnk.IconLocation     = $miconRef
-                $lnk.Description      = "各コアの負荷とメモリの使用量をリアルタイムで表示"
+                $lnk.Description      = "各コアの負荷をリアルタイムで表示"
                 $lnk.Save()
             }
             $monOk = $true
@@ -221,7 +221,7 @@ if ($Setup) {
     Write-Host "『CPU割り当て』を登録しました。" -ForegroundColor Green
     Write-Host "  - デスクトップのアイコン" -ForegroundColor Green
     Write-Host "  - スタートメニュー (「CPU」で検索しても出ます)" -ForegroundColor Green
-    if ($monOk) { Write-Host "『Edge Box 監視』(各コアの負荷とメモリのリアルタイム表示) も同じ場所に登録しました。" -ForegroundColor Green }
+    if ($monOk) { Write-Host "『Edge Box 監視』(各コアの負荷のリアルタイム表示) も同じ場所に登録しました。" -ForegroundColor Green }
     Write-Host "  PowerShell を開く必要はありません。黒い窓も出ません。" -ForegroundColor Green
     Write-Host "  タスクバーに置くには、スタートメニューで右クリック →『タスクバーにピン留めする』" -ForegroundColor Cyan
     exit 0

@@ -173,7 +173,7 @@ function Show-AppsDialog {
 
 function Update-PreviewConsole {
     $sel=Get-Selection
-    $script:rtb.Text="[サンプル] この画面の操作はプレビュー内だけで反映されます。`r`n[注意] 未割当のコア: $($sel.NoneCores) 個`r`n実機の設定・VM・アプリへの適用は行いません。"
+    $script:rtb.Text="[サンプル] この画面の操作はプレビュー内だけで反映されます。`r`n[サンプル] Windows: $($sel.HostCores) コア / Edge Box: $($sel.GuestCores) コア`r`n実機の設定・VM・アプリへの適用は行いません。"
     $script:chipVerdict.Text='プレビュー';$script:chipVerdict.Tone='Ok'
     $script:chipChange.Text='サンプル データ';$script:chipChange.Tone='Muted'
     Update-FooterLayout

@@ -35,7 +35,7 @@
         手順は「-Apply -Mode full → 再起動」だけ。再起動後は起動タスク 'CpuPartition-Boot' が
         CPU グループの作成と Edge Box の固定を自動で行い、以後も起動のたびに作り直します
         (CPU グループは再起動で消えるため)。成立状態は cpu-full-status.json に書き、
-        『Edge Box 監視』と設定コンソールに表示します。
+        引数なしの実行 (現状表示) で確認できます。
         ※ スケジューラ変更はクライアント版 Windows では Microsoft の公式
            サポート外の構成です (動作実績は広くあります)。工場 PC のような
            専用用途向けで、-Undo でいつでも既定へ戻せます。
@@ -1037,7 +1037,7 @@ if ($BootApply) {
 # ============================================================ -Watch (常駐・内部用)
 #   3 秒ごとに見回り: (1) 10 秒に 1 回 vmmem / vmwp の固定を確かめ直す
 #                     (2) Edge Box 用コアに掛かっている Windows 側のプロセスを Windows 用コアへ戻す
-#   状態は cpu-contain-status.json に書き、監視画面『Edge Box 監視』がそれを表示する
+#   状態は cpu-contain-status.json に書き、現状表示 (引数なしの実行) がそれを表示する
 
 if ($Watch) {
     Write-PinLog "Watch: 常駐を開始 (PID $PID)"
@@ -1795,7 +1795,7 @@ if ($Mode -eq "runtime") {
         Write-Host "  - Windows 側のプロセスは常駐が 3 秒ごとに CPU $hostText へ固定し直します (新しいプロセスも数秒で戻る)"
         Write-Host "  - 残るのは固定できない保護プロセスとカーネル・割り込みの分だけ (通常 1% 未満)。それも無くすには -Mode full"
     }
-    Write-Host "  - 効き具合の実測: .\cpu-partition.ps1 -Verify  / 常時の確認: 『Edge Box 監視』の「分離の状態」" -ForegroundColor Cyan
+    Write-Host "  - 効き具合の実測: .\cpu-partition.ps1 -Verify  / 常時の確認: 『Edge Box 監視』の区画ごとの色 (Windows 用に橙・Edge Box 用に青が載らないこと)" -ForegroundColor Cyan
     exit 0
 }
 
@@ -1868,7 +1868,7 @@ if (-not $bcdReady) {
 
     Write-Host ""
     Write-Host "書き込みました。PC を再起動してください。再起動後は自動で完了します。" -ForegroundColor Green
-    Write-Host "  成立の確認: .\cpu-partition.ps1 (現状表示) または『Edge Box 監視』の「分離の状態」" -ForegroundColor Cyan
+    Write-Host "  成立の確認: .\cpu-partition.ps1 (現状表示)。各コアの動きは『Edge Box 監視』の区画ごとの色 (Windows 用に橙・Edge Box 用に青が載らないこと)" -ForegroundColor Cyan
     exit 0
 }
 
@@ -1901,4 +1901,4 @@ if ($bound) {
     Write-Host "  - 起動タスク '$BootTaskName' が 5 分ごとに固定を試し直します。Edge Box 停止中に効くこともあります"
 }
 Write-Host ""
-Write-Host "確認: 『Edge Box 監視』の「分離の状態」、または .\cpu-partition.ps1 -Verify" -ForegroundColor Cyan
+Write-Host "確認: 『Edge Box 監視』の区画ごとの色 (Windows 用に橙・Edge Box 用に青が載らないこと)、または .\cpu-partition.ps1 -Verify" -ForegroundColor Cyan
