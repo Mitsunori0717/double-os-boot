@@ -101,7 +101,7 @@ Restart-Computer                                                          # 再�
 黒いコンソール窓も UAC の確認も出ません (管理者権限付きのタスクを経由するため)。
 
 ```
- 左メニュー   CNC SCREEN CORE SPLIT (アプリ名)
+ 左メニュー   CNCSCREEN CORE SPLIT (アプリ名)
               HOME / SETTING / MONITOR (『Edge Box 監視』を開く)
  HOME
    P コア (性能重視)  8 コア / 16 スレッド

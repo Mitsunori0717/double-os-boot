@@ -19,7 +19,7 @@
 #>
 
 # 画面に出すアプリ名と版 (アプリ名は仮。変えるときはここだけ直す)
-$UiAppName     = "CNC SCREEN CORE SPLIT"
+$UiAppName     = "CNCSCREEN CORE SPLIT"
 $UiAppVersion  = "2.0.0"
 $UiAppTagline  = "CORE PARTITION CONSOLE"
 
