@@ -13,7 +13,7 @@ try {
     # プレビューのソースと同梱フォントだけを収録する。画像・ログ・作業用の ZIP・トークンは含めない。
     foreach ($file in Get-ChildItem -LiteralPath $PSScriptRoot -Recurse -File) {
         $relative = $file.FullName.Substring($root.Length).Replace('\', '/')
-        if (-not ($file.Extension -in @('.ps1', '.cmd', '.md', '.json') -or $relative -match '(^|/)fonts/[^/]+\.(ttf|txt)$')) { continue }
+        if (-not ($file.Extension -in @('.ps1', '.cmd', '.md', '.json') -or $relative -match '(^|/)fonts/[^/]+\.(ttf|txt)$' -or $relative -match '(^|/)images/[^/]+\.png$')) { continue }
         if ($relative -match '(^|/)(output|screenshots|logs|backups|\.git)(/|$)') { continue }
         [void][IO.Compression.ZipFileExtensions]::CreateEntryFromFile($archive, $file.FullName, ('ui-preview/' + $relative))
     }

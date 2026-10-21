@@ -48,9 +48,11 @@ try {
         Get-ChildItem -LiteralPath $src -File | Where-Object { $_.Extension -in @('.ps1','.psm1','.cmd','.md','.cs') } |
             ForEach-Object { Copy-Item -LiteralPath $_.FullName -Destination $destDir -Force }
     }
-    # アプリ名の字体 (同梱フォントとそのライセンス)
-    $fonts = Join-Path $root "windows-cpu-partition\fonts"
-    if (Test-Path -LiteralPath $fonts) { Copy-Item -LiteralPath $fonts -Destination (Join-Path $payloadDir "windows-cpu-partition") -Recurse -Force }
+    # アプリ名の字体 (同梱フォントとそのライセンス) とアプリ名の横のアイコン
+    foreach ($asset in @("fonts", "images")) {
+        $assetDir = Join-Path $root "windows-cpu-partition\$asset"
+        if (Test-Path -LiteralPath $assetDir) { Copy-Item -LiteralPath $assetDir -Destination (Join-Path $payloadDir "windows-cpu-partition") -Recurse -Force }
+    }
     foreach ($f in @('start.cmd','setup-all.cmd','update.cmd','update.ps1')) { Copy-Item -LiteralPath (Join-Path $root $f) -Destination $payloadDir -Force }
     $readme = Join-Path $root "README.md"
     if (Test-Path $readme) { Copy-Item $readme $payloadDir -Force }
