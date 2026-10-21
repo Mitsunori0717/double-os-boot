@@ -101,30 +101,26 @@ Restart-Computer                                                          # 再�
 黒いコンソール窓も UAC の確認も出ません (管理者権限付きのタスクを経由するため)。
 
 ```
- ヘッダー     ロゴ・アプリ名・版                         [● 完全分離 · 成立] [● EdgeBox · Running]
- 左メニュー   Home / Core Split / Settings / Log / System      (下に [リアルタイム監視])
+ ヘッダー     ロゴ・アプリ名・版
+ 左メニュー   Core Split / Settings      (下に [リアルタイム監視])
  Core Split   ■ WINDOWS  ■ EDGE BOX  □ 未割当
-   P コア (性能重視)  8 コア / 16 スレッド · Windows 専用
+   P コア (性能重視)  8 コア / 16 スレッド
      [P0 WINDOWS 0 1] [P1 WINDOWS 2 3] ... [P7 WINDOWS 14 15]
    E コア (効率重視)  12 コア / 12 スレッド
      [E0 WINDOWS 16] ... [E3 WINDOWS 19] [E4 EDGE BOX 20] ... [E11 EDGE BOX 27]
-   この内容で割り当てます   CPU 0-27 の並び (青 = Windows / 橙 = Edge Box / 枠だけ = 未割当)
-     Windows : 12 コア / 20 スレッド (P 8 / E 4)  CPU 0-19
-     EdgeBox : 8 コア / 8 スレッド (P 0 / E 8)   CPU 20-27
    検査結果                 適用できます
  操作バー     [● 適用できます] [● 適用済みの内容と同じです]     [分割を解除] | [この内容で適用] [閉じる]
 ```
 
 | 画面 (左メニュー) | 内容 |
 |---|---|
-| **Home** | 現在の割り当て (論理 CPU の並びと、Windows / Edge Box それぞれのコア数・スレッド数)、分離の状態・Edge Box の状態・Windows が使う CPU |
-| **Core Split** | コアのタイル (1 物理コア = 1 枚)、割り当ての内容、検査結果 |
-| **Settings** | 対象の登録名、メモリの割り当て、アプリの割り当て |
-| **Log** | `cpu-partition-log.txt` / `cpu-apps-log.txt` の末尾 (失敗は赤、注意は黄で表示) |
-| **System** | CPU の構成 (P コア / E コアと CPU 番号)、Windows が使う CPU、Hyper-V と Edge Box の構成 |
+| **Core Split** (開いたときの画面) | コアのタイル (1 物理コア = 1 枚)、検査結果 |
+| **Settings** | 対象の登録名と Edge Box の状態、メモリの割り当て、アプリの割り当て |
+
+分離が成立しているかは『Edge Box 監視』([リアルタイム監視]) で確認できます。記録は `cpu-partition-log.txt` / `cpu-apps-log.txt` に残ります。
 
 - 下の操作バー ([分割を解除] [この内容で適用] [閉じる]、必要なときだけ [完全分離用に並べ直す]) はどの画面からでも使えます。Esc でも閉じます
-- 画面の切り替えは左メニューのほか Ctrl+1〜5 でもできます。ウィンドウの大きさは自由に変えられ、狭いときはタイルが折り返します
+- 画面の切り替えは左メニューのほか Ctrl+1 (Core Split) / Ctrl+2 (Settings) でもできます。ウィンドウの大きさは自由に変えられ、狭いときはタイルが折り返します
 - 色の意味はどの画面でも同じです: 青 = Windows、橙 = Edge Box、緑 = 正常・適用できる、赤 = エラー・適用できない
 - P コア / E コアの区別は CPU 自身が申告する効率クラスから取得します (型番の決め打ちではありません)
 - **タイルをクリック**するたびに Windows 用 → Edge Box 用 → 未割当 と切り替わります (P コアは Windows 用 ⇔ 未割当)

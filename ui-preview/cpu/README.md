@@ -10,7 +10,7 @@ powershell -NoProfile -Sta -ExecutionPolicy Bypass -File .\preview-cpu.ps1 -Scre
 
 | 指定 | 表示する画面 |
 |---|---|
-| `Console` | Home / Core Split / Settings / Log / System |
+| `Console` | Core Split / Settings |
 | `Monitor` | CPU・メモリの監視 |
 | `Apps` | アプリの割り当て。追加ボタンから下記の選択画面も開けます |
 | `CoreChooser` | アプリのコア選択 |

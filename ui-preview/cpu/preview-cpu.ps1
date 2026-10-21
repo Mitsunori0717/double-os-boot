@@ -175,25 +175,9 @@ function Show-AppsDialog {
 
 function Update-PreviewConsole {
     $sel=Get-Selection
-    $list=@($script:Cores | ForEach-Object {
-        $side=switch($_.State){'Host'{1}'Guest'{2}default{0}}
-        $kind=$_.Kind
-        foreach($lp in $_.Lps){[pscustomobject]@{Lp=$lp;Side=$side;Kind=$kind}}
-    } | Sort-Object Lp)
-    $ids=[int[]]@($list | ForEach-Object {$_.Lp})
-    $sides=[int[]]@($list | ForEach-Object {$_.Side})
-    $kinds=[string[]]@($list | ForEach-Object {$_.Kind})
-    $script:stripHome.SetData($ids,$sides,$kinds)
-    $script:stripCore.SetData($ids,$sides,$kinds)
-    $script:blkHost.SetValues($sel.HostCores,$sel.HostLps.Count,'P 8 / E 4',('CPU '+(ConvertTo-LpRangeText $sel.HostLps)))
-    $script:blkGuest.SetValues($sel.GuestCores,$sel.GuestLps.Count,'E 8',('CPU '+(ConvertTo-LpRangeText $sel.GuestLps)))
-    $script:blkGuest.NameText='登録名: EdgeBox (サンプル)'
-    $script:lblSumH.Text='Windows : '+$sel.HostCores+' コア / '+$sel.HostLps.Count+' スレッド  CPU '+(ConvertTo-LpRangeText $sel.HostLps)
-    $script:lblSumG.Text='Edge Box : '+$sel.GuestCores+' コア / '+$sel.GuestLps.Count+' スレッド  CPU '+(ConvertTo-LpRangeText $sel.GuestLps)
     $script:rtb.Text="[サンプル] この画面の操作はプレビュー内だけで反映されます。`r`n[注意] 未割当のコア: $($sel.NoneCores) 個`r`n実機の設定・VM・アプリへの適用は行いません。"
     $script:chipVerdict.Text='プレビュー';$script:chipVerdict.Tone='Ok'
     $script:chipChange.Text='サンプル データ';$script:chipChange.Tone='Muted'
-    $script:cardHero.Meta='プレビュー用のサンプル'
     Update-FooterLayout
 }
 function Update-Validation { Update-PreviewConsole }
@@ -244,23 +228,7 @@ function Show-PreviewConsole {
     try {
         . (Join-Path $script:PreviewRoot 'console-layout.ps1')
         $form.Text='Edge Box プレビュー | CPU コア割り当て'
-        # Override the copied log presentation's real file reader before page navigation.
-        function Update-LogView {
-            $script:btnLogCpu.Selected=($script:LogKind -ne 'apps');$script:btnLogApps.Selected=($script:LogKind -eq 'apps')
-            $grpLog.Meta='プレビュー用のサンプル';$script:lblLogInfo.Text='サンプル 3 行'
-            $script:rtbLog.Text="2026-01-01 09:00:00  Edge Box の画面プレビューを開始しました。`r`n2026-01-01 09:00:01  サンプルの CPU とメモリを表示しました。`r`n2026-01-01 09:00:02  実機の設定は変更されません。"
-        }
-        $script:chipSplit.Text='完全分離 · 成立';$script:chipSplit.Tone='Ok'
-        $script:chipVm.Text='Edge Box · Running';$script:chipVm.Tone='Ok'
-        Update-HeaderLayout
-        $script:stSplit.Chip.Text='完全分離 · 成立';$script:stSplit.Chip.Tone='Ok'
-        $script:stSplit.Label.Text='Windows と Edge Box のコアを分離しています (サンプル)。'
-        $script:stVm.Chip.Text='Running';$script:stVm.Chip.Tone='Ok';$script:stVm.Label.Text='8 プロセッサ / 8 GB'
-        $script:stWin.Chip.Text='CPU 20 論理';$script:stWin.Chip.Tone='Win';$script:stWin.Label.Text='P コア 8 + E コア 4'
-        $script:lblCpu1.Text='サンプル CPU — P コア 8 + E コア 12 / 28 スレッド'
-        $script:lblCpu2.Text='Windows が使う CPU: 20 論理';$script:lblCpu3.Text='完全分離: ○ 成立 (サンプル)'
         $script:lblVm.Text='状態: Running    プロセッサ: 8    メモリ: 8 GB'
-        $script:lblSysHv.Text='有効 (サンプル)';$script:lblSysVmName.Text='EdgeBox';$script:lblSysVm.Text=$script:lblVm.Text;$script:lblSysMem.Text='32 GB'
         $script:lblMemPc.Text='この PC のメモリ: 32 GB';$script:lblMemVm.Text='Edge Box に:'
         $script:lblMemHost.Text='→ Windows に残る: 24 GB';$script:lblMemNote.Text='現在の設定: 8 GB (サンプル)';$script:memBar.SetValues(32,8)
         $script:lblApps.Text='登録: 3 件 (プレビュー)'
@@ -271,11 +239,11 @@ function Show-PreviewConsole {
         $script:btnMem.Add_Click({$script:memBar.SetValues(32,[double]$script:numMem.Value);$script:lblMemHost.Text='→ Windows に残る: '+(32-[int]$script:numMem.Value)+' GB (プレビュー)'})
         Sync-AllTiles
         Update-PreviewConsole
-        Show-Page 'home'
+        Show-Page 'core'
         if($SmokeTest){
             $form.StartPosition='Manual';$form.Location=New-Object System.Drawing.Point -30000,-30000;$form.ShowInTaskbar=$false
             $form.Show();[System.Windows.Forms.Application]::DoEvents()
-            foreach($key in @('home','core','settings','log','system')){Show-Page $key;Update-CoreLayout;Update-HeaderLayout;Save-PreviewImage $form ('cpu-console-'+$key)}
+            foreach($key in @('core','settings')){Show-Page $key;Update-CoreLayout;Save-PreviewImage $form ('cpu-console-'+$key)}
             Show-Page 'core'
             [System.Windows.Forms.Application]::DoEvents()
             $script:Tiles[12].PerformClick()
