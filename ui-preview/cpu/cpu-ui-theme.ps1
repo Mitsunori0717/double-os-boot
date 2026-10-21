@@ -118,9 +118,11 @@ namespace CoreUi
 
         // アプリ名 (左メニュー最上部) の字体と字間。Eurostile がこの PC に入っていればそれを使い、
         // 無ければ同梱の Michroma (Eurostile 系の幅広い角形の字体。SIL Open Font License) を使う。
-        // どちらも使えなければ Brand に戻す。読み込んだ字体は画面を閉じるまで保持する
+        // どちらも使えなければ標準の字体の太字に戻す。読み込んだ字体は画面を閉じるまで保持する。
+        // 太字の無い字体 (Michroma など) は、文字を WordmarkBolden px (96 dpi 換算) 横にずらして重ね、縦の線を太くして描く
         public static Font Wordmark;
         public static float WordmarkSpacing = 2.4f;
+        public static float WordmarkBolden = 0f;
         static PrivateFontCollection wordmarkFonts;
         public static void LoadWordmark(string bundledFile)
         {
@@ -133,8 +135,10 @@ namespace CoreUi
                 }
                 if (found != null) {
                     FontFamily ff = new FontFamily(found);
-                    Wordmark = new Font(ff, 12f, ff.IsStyleAvailable(FontStyle.Bold) ? FontStyle.Bold : FontStyle.Regular);
+                    bool bold = ff.IsStyleAvailable(FontStyle.Bold);
+                    Wordmark = new Font(ff, 12f, bold ? FontStyle.Bold : FontStyle.Regular);
                     WordmarkSpacing = 1.6f;
+                    WordmarkBolden = bold ? 0f : 1.3f;
                     return;
                 }
             } catch { }
@@ -144,13 +148,15 @@ namespace CoreUi
                     wordmarkFonts.AddFontFile(bundledFile);
                     if (wordmarkFonts.Families.Length > 0) {
                         Wordmark = new Font(wordmarkFonts.Families[0], 10f, FontStyle.Regular);
-                        WordmarkSpacing = 1f;
+                        WordmarkSpacing = 2f;
+                        WordmarkBolden = 1.1f;
                         return;
                     }
                 }
             } catch { }
-            Wordmark = Brand;
+            Wordmark = new Font(LatinFamily, 11f, FontStyle.Bold);
             WordmarkSpacing = 2.4f;
+            WordmarkBolden = 0f;
         }
 
         static Font Semi(float size)
@@ -860,16 +866,30 @@ namespace CoreUi
 
         static Font WordFont { get { return Theme.Wordmark ?? Theme.Brand; } }
 
-        // 字間を広げて 1 行を描く (draw = false なら幅を測るだけ)。同梱の字体は GDI からは見えないため GDI+ で描く
+        // 字間を広げて 1 行を描く (draw = false なら幅を測るだけ)。同梱の字体は GDI からは見えないため GDI+ で描く。
+        // 太らせる場合は文字の輪郭を図形にし、横にずらして 2 回塗る (Windows の自動太字と同じ考え方。
+        // 縦の線だけが太くなるため、S や E の横のすき間はつぶれない)
         static int Spaced(Graphics g, string s, Color c, float x, float y, bool draw)
         {
             float cx = x;
+            float bolden = Theme.WordmarkBolden * g.DpiX / 96f;
+            float em = WordFont.SizeInPoints * g.DpiY / 72f;
             using (SolidBrush b = new SolidBrush(c))
             using (StringFormat sf = (StringFormat)StringFormat.GenericTypographic.Clone()) {
                 sf.FormatFlags |= StringFormatFlags.MeasureTrailingSpaces;
                 foreach (char ch in s) {
                     string one = ch.ToString();
-                    if (draw) { g.DrawString(one, WordFont, b, cx, y, sf); }
+                    if (draw && bolden <= 0f) { g.DrawString(one, WordFont, b, cx, y, sf); }
+                    else if (draw) {
+                        using (GraphicsPath path = new GraphicsPath())
+                        using (Matrix shift = new Matrix()) {
+                            path.AddString(one, WordFont.FontFamily, (int)WordFont.Style, em, new PointF(cx, y), sf);
+                            g.FillPath(b, path);
+                            shift.Translate(bolden, 0f);
+                            path.Transform(shift);
+                            g.FillPath(b, path);
+                        }
+                    }
                     cx += g.MeasureString(one, WordFont, PointF.Empty, sf).Width + Theme.WordmarkSpacing;
                 }
             }
@@ -894,13 +914,15 @@ namespace CoreUi
             Graphics g = e.Graphics;
             g.Clear(Theme.BackOf(Parent));
             g.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
+            g.SmoothingMode = SmoothingMode.AntiAlias;
             const int mark = 26;
             int x = 22, tx = x + mark + 12;
             int lineH = (int)Math.Ceiling(WordFont.GetHeight(g)) + 4;
             List<string> lines = Lines(g, Math.Max(40, Width - tx - 14));
             int top = (Height - Math.Max(1, lines.Count) * lineH) / 2 + 2;
-            Theme.DrawBrandMark(g, new Rectangle(x, (Height - mark) / 2, mark, mark));
             for (int i = 0; i < lines.Count; i++) { Spaced(g, lines[i], Theme.Text, tx, top + i * lineH, true); }
+            g.SmoothingMode = SmoothingMode.None;
+            Theme.DrawBrandMark(g, new Rectangle(x, (Height - mark) / 2, mark, mark));
             using (Pen p = new Pen(Theme.Border)) { g.DrawLine(p, 16, Height - 1, Width - 17, Height - 1); }
         }
     }
