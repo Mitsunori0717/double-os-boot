@@ -5,7 +5,7 @@
       "targetFile": "windows-cpu-partition/cpu-ui-theme.ps1",
       "startMarker": null,
       "endMarker": null,
-      "baselineHash": "e8a1217d31d4e2b161f2f9ec70245dd29dbc1b332e7fb70df9ed1ffcf2e06361"
+      "baselineHash": "6a7a2118021f6715c01c779cc58078bc1a0c270909df980f8d11eee6a57d656e"
     },
     {
       "designFile": "cpu/console-layout.ps1",

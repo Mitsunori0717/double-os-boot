@@ -119,7 +119,7 @@ Restart-Computer                                                          # 再�
 | **MONITOR** | 『Edge Box 監視』を別ウィンドウで開く (画面は切り替わらない) |
 
 各コアの動きは『Edge Box 監視』([MONITOR]) で確認できます。記録は `cpu-partition-log.txt` / `cpu-apps-log.txt` に残ります。
-アプリ名は `cpu-ui-theme.ps1` の `$UiAppName` で変えられます。アプリ名の字体は、Eurostile がその PC に入っていれば Eurostile、無ければ同梱の Michroma (Eurostile 系の字体。`fonts\` に同梱、SIL Open Font License 1.1。全文は `fonts\OFL.txt`) です。
+アプリ名は `cpu-ui-theme.ps1` の `$UiAppName` で変えられます。アプリ名の字体は、Eurostile がその PC に入っていれば Eurostile、無ければ同梱の Michroma (Eurostile 系の字体。`fonts\` に同梱、SIL Open Font License 1.1。全文は `fonts\OFL.txt`) です。アプリのアイコン (アプリ名の横・タイトルバー・タスクバー・デスクトップとスタートメニューの『CPU割り当て』) は `images\app-icon.png` / `images\app-icon.ico` です。ショートカットのアイコンは `setup.cmd` を実行したときに切り替わります。
 
 - 下の操作バー ([分割を解除] [この内容で適用] [閉じる]、必要なときだけ [完全分離用に並べ直す]) はどの画面からでも使えます。Esc でも閉じます。[分割を解除] は「Edge Box が起動しなくなります」という注意を出し、[はい] のときだけ解除します
 - 画面の切り替えは左メニューのほか Ctrl+1 (HOME) / Ctrl+2 (SETTING) でもできます。ウィンドウの大きさは自由に変えられ、狭いときはタイルが折り返します

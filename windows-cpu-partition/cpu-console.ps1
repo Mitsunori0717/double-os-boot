@@ -153,12 +153,17 @@ if ($Setup) {
     Set-Content -Path $vbsPath -Value $vbs -Encoding Default
 
     $icoPath = Join-Path $PSScriptRoot "cpu-console.ico"
+    $appIco  = Join-Path $PSScriptRoot "images\app-icon.ico"   # アプリのアイコン (同梱。あればこれを使う)
     $iconRef = "shell32.dll,27"
-    try {
-        New-ConsoleIcon $icoPath
-        if (Test-Path $icoPath) { $iconRef = "$icoPath,0" }
-    } catch {
-        Write-Host "  (アイコンを作成できなかったため、標準のアイコンを使います)" -ForegroundColor Yellow
+    if (Test-Path -LiteralPath $appIco) {
+        $iconRef = "$appIco,0"
+    } else {
+        try {
+            New-ConsoleIcon $icoPath
+            if (Test-Path $icoPath) { $iconRef = "$icoPath,0" }
+        } catch {
+            Write-Host "  (アイコンを作成できなかったため、標準のアイコンを使います)" -ForegroundColor Yellow
+        }
     }
 
     # デスクトップとスタートメニューの両方に置く。
