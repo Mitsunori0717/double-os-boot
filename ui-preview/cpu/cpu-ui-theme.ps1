@@ -7,7 +7,7 @@
     設定や割り当ての処理は一切持たず、表示に使う部品だけをまとめています。
 
       配色      グレー基調 (背景 #616061 / サイドメニュー #424142 / カード #757475)。
-                青 = Windows、橙 = Edge Box、緑 = 正常、赤 = エラー。文字に使うときは、
+                青 = Windows、緑 = Edge Box、ミントグリーン = 正常、赤 = エラー。文字に使うときは、
                 灰色の上でも読めるよう同じ色を明るくしたもの (WinText など) を使う
       文字      日本語は Meiryo UI、英字の見出しは Segoe UI、数値は Cascadia Mono / Consolas
       部品      ボタン・コアのタイル・パネル・左メニュー・状態表示・入力欄の枠・一覧・確認ダイアログ
@@ -65,13 +65,13 @@ namespace CoreUi
         public static Color Silver       = Rgb(0xF2F2F2);   // 選択・フォーカス (OS の色とは別)
         public static Color Ink          = Rgb(0x1C1C1C);   // 明るい面の上の印 (チェック・つまみ)
         public static Color Win          = Rgb(0x56B4FF);   // Windows
-        public static Color Edge         = Rgb(0xF2A65A);   // Edge Box (Linux)
+        public static Color Edge         = Rgb(0x6CC851);   // Edge Box (Linux): 緑 (成功の緑 Ok より黄み寄りにして見分ける)
         public static Color Ok           = Rgb(0x43D9A3);   // 成功・稼働
         public static Color Err          = Rgb(0xFF626E);   // エラー
         public static Color Warn         = Rgb(0xE2C16B);   // 注意
         // 文字に使う色 (上の色を明るくしたもの。灰色の面の上でも読める)
         public static Color WinText      = Rgb(0xC0E2FF);
-        public static Color EdgeText     = Rgb(0xFBD8B2);
+        public static Color EdgeText     = Rgb(0xC6EFB8);
         public static Color OkText       = Rgb(0xA6F3D4);
         public static Color ErrText      = Rgb(0xFFD4D8);
         public static Color WarnText     = Rgb(0xF5E1A6);
@@ -114,6 +114,43 @@ namespace CoreUi
             MonoSmall = new Font(MonoFamily, 8f);
             MonoBold  = new Font(MonoFamily, 11f, FontStyle.Bold);
             MonoNumber = new Font(MonoFamily, 20f);
+        }
+
+        // アプリ名 (左メニュー最上部) の字体と字間。Eurostile がこの PC に入っていればそれを使い、
+        // 無ければ同梱の Michroma (Eurostile 系の幅広い角形の字体。SIL Open Font License) を使う。
+        // どちらも使えなければ Brand に戻す。読み込んだ字体は画面を閉じるまで保持する
+        public static Font Wordmark;
+        public static float WordmarkSpacing = 2.4f;
+        static PrivateFontCollection wordmarkFonts;
+        public static void LoadWordmark(string bundledFile)
+        {
+            if (Wordmark != null) { return; }
+            try {
+                string found = null;
+                foreach (FontFamily f in new InstalledFontCollection().Families) {
+                    if (f.Name.Equals("Eurostile", StringComparison.OrdinalIgnoreCase)) { found = f.Name; break; }
+                    if (found == null && f.Name.StartsWith("Eurostile", StringComparison.OrdinalIgnoreCase)) { found = f.Name; }
+                }
+                if (found != null) {
+                    FontFamily ff = new FontFamily(found);
+                    Wordmark = new Font(ff, 12f, ff.IsStyleAvailable(FontStyle.Bold) ? FontStyle.Bold : FontStyle.Regular);
+                    WordmarkSpacing = 1.6f;
+                    return;
+                }
+            } catch { }
+            try {
+                if (!string.IsNullOrEmpty(bundledFile)) {
+                    wordmarkFonts = new PrivateFontCollection();
+                    wordmarkFonts.AddFontFile(bundledFile);
+                    if (wordmarkFonts.Families.Length > 0) {
+                        Wordmark = new Font(wordmarkFonts.Families[0], 10f, FontStyle.Regular);
+                        WordmarkSpacing = 1f;
+                        return;
+                    }
+                }
+            } catch { }
+            Wordmark = Brand;
+            WordmarkSpacing = 2.4f;
         }
 
         static Font Semi(float size)
@@ -257,7 +294,7 @@ namespace CoreUi
             return (int)Math.Round(Math.Max(0, w - spacing));
         }
 
-        // ロゴ: 枠の中に Windows (青) と Edge Box (橙) を細い隙間で分けて置く
+        // ロゴ: 枠の中に Windows (青) と Edge Box (緑) を細い隙間で分けて置く
         public static void DrawBrandMark(Graphics g, Rectangle r)
         {
             FillRound(g, r, 3, Deep, BorderStrong);
@@ -813,7 +850,6 @@ namespace CoreUi
     // ------------------------------------------------------------------
     public class SideBrand : Control
     {
-        const float Spacing = 2.4f;
         public SideBrand()
         {
             SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
@@ -822,13 +858,31 @@ namespace CoreUi
         }
         protected override void OnTextChanged(EventArgs e) { base.OnTextChanged(e); Invalidate(); }
 
+        static Font WordFont { get { return Theme.Wordmark ?? Theme.Brand; } }
+
+        // 字間を広げて 1 行を描く (draw = false なら幅を測るだけ)。同梱の字体は GDI からは見えないため GDI+ で描く
+        static int Spaced(Graphics g, string s, Color c, float x, float y, bool draw)
+        {
+            float cx = x;
+            using (SolidBrush b = new SolidBrush(c))
+            using (StringFormat sf = (StringFormat)StringFormat.GenericTypographic.Clone()) {
+                sf.FormatFlags |= StringFormatFlags.MeasureTrailingSpaces;
+                foreach (char ch in s) {
+                    string one = ch.ToString();
+                    if (draw) { g.DrawString(one, WordFont, b, cx, y, sf); }
+                    cx += g.MeasureString(one, WordFont, PointF.Empty, sf).Width + Theme.WordmarkSpacing;
+                }
+            }
+            return (int)Math.Ceiling(Math.Max(0f, cx - Theme.WordmarkSpacing - x));
+        }
+
         List<string> Lines(Graphics g, int width)
         {
             List<string> lines = new List<string>();
             string cur = "";
             foreach (string w in (Text ?? "").Split(new char[] { ' ' }, StringSplitOptions.RemoveEmptyEntries)) {
                 string next = cur.Length == 0 ? w : cur + " " + w;
-                if (cur.Length > 0 && Theme.MeasureSpaced(g, next, Theme.Brand, Spacing) > width) { lines.Add(cur); cur = w; }
+                if (cur.Length > 0 && Spaced(g, next, Color.Empty, 0, 0, false) > width) { lines.Add(cur); cur = w; }
                 else { cur = next; }
             }
             if (cur.Length > 0) { lines.Add(cur); }
@@ -839,12 +893,14 @@ namespace CoreUi
         {
             Graphics g = e.Graphics;
             g.Clear(Theme.BackOf(Parent));
-            const int mark = 26, lineH = 20;
+            g.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
+            const int mark = 26;
             int x = 22, tx = x + mark + 12;
+            int lineH = (int)Math.Ceiling(WordFont.GetHeight(g)) + 4;
             List<string> lines = Lines(g, Math.Max(40, Width - tx - 14));
             int top = (Height - Math.Max(1, lines.Count) * lineH) / 2 + 2;
             Theme.DrawBrandMark(g, new Rectangle(x, (Height - mark) / 2, mark, mark));
-            for (int i = 0; i < lines.Count; i++) { Theme.DrawSpaced(g, lines[i], Theme.Brand, Theme.Text, tx, top + i * lineH, Spacing); }
+            for (int i = 0; i < lines.Count; i++) { Spaced(g, lines[i], Theme.Text, tx, top + i * lineH, true); }
             using (Pen p = new Pen(Theme.Border)) { g.DrawLine(p, 16, Height - 1, Width - 17, Height - 1); }
         }
     }
@@ -979,7 +1035,7 @@ namespace CoreUi
     }
 
     // ------------------------------------------------------------------
-    //  論理 CPU の並び (番号順。青 = Windows / 橙 = Edge Box / 枠だけ = 未割当)
+    //  論理 CPU の並び (番号順。青 = Windows / 緑 = Edge Box / 枠だけ = 未割当)
     // ------------------------------------------------------------------
     public class CoreStrip : Control
     {
@@ -1703,6 +1759,9 @@ namespace CoreUi
         Add-Type -TypeDefinition $uiSource -ReferencedAssemblies @("System", "System.Windows.Forms", "System.Drawing") -IgnoreWarnings -ErrorAction Stop
     }
 }
+# アプリ名の字体 (同梱: fonts\Michroma-Regular.ttf。無ければ Eurostile か標準の字体で表示する)
+$uiWordmarkFile = Join-Path $PSScriptRoot "fonts\Michroma-Regular.ttf"
+try { [CoreUi.Theme]::LoadWordmark($(if (Test-Path -LiteralPath $uiWordmarkFile) { $uiWordmarkFile } else { "" })) } catch { }
 
 # ============================================================
 #  PowerShell 側の小さな部品
@@ -1768,7 +1827,7 @@ function Show-UiMessage([string]$Text, [string]$Caption, [string]$Buttons = "OK"
         [System.Windows.Forms.MessageBoxButtons]$Buttons, [System.Windows.Forms.MessageBoxIcon]$Icon)
 }
 
-# アプリのアイコン (32px)。枠の中を Windows の青と Edge Box の橙に分ける。
+# アプリのアイコン (32px)。枠の中を Windows の青と Edge Box の緑に分ける。
 # デスクトップのアイコン (cpu-console.ps1 -Setup) と同じ濃い色の本体にする (画面の配色とは別)
 function Get-UiAppIcon([string]$Style = "console") {
     try {

@@ -286,7 +286,7 @@ function Get-AppIcon([string]$Style) {
         $body = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb(17, 24, 32))
         $edge = New-Object System.Drawing.Pen ([System.Drawing.Color]::FromArgb(53, 67, 82))
         $win  = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb(86, 180, 255))
-        $vm   = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb(242, 166, 90))
+        $vm   = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb(108, 200, 81))   # Edge Box = 緑
         $g.FillRectangle($body, 2, 2, 28, 28)
         $g.DrawRectangle($edge, 2, 2, 27, 27)
         switch ($Style) {

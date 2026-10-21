@@ -17,7 +17,7 @@ LAN ポート5つ / 工作機械との接続は Ethernet。
 | ⑦ | IP 確認: `Get-VMNetworkAdapter -VMName EdgeBox`。ブラウザで管理画面を開く | 管理画面が開き収集再開 |
 | ⑧ | Windows 側 Edge Box アプリの接続先に ⑦ の IP を設定 | アプリからデータが見える |
 | ⑨ | 起動時の自動表示 + Edge Box 自動起動: `.\03-field-display-kiosk.ps1 -Install` (登録名が EdgeBox でなくても自動で見つける) | 電源ONだけで収集開始・左に Edge Box 全画面・右は通常のデスクトップ |
-| ⑩ | CPU の完全分離: `..\windows-cpu-partition\setup.cmd` → 『CPU割り当て』で [この内容で適用] → 再起動 | `cpu-partition.ps1` の現状表示が「完全分割 成立」・『Edge Box 監視』で Windows 用に橙、Edge Box 用に青が載らない |
+| ⑩ | CPU の完全分離: `..\windows-cpu-partition\setup.cmd` → 『CPU割り当て』で [この内容で適用] → 再起動 | `cpu-partition.ps1` の現状表示が「完全分割 成立」・『Edge Box 監視』で Windows 用に緑、Edge Box 用に青が載らない |
 | ⑪ | 予行: F8 からネイティブ起動できることを確認。撤退手順 (`Remove-VM` + `Set-Disk -IsOffline $false`) を把握 | ネイティブ起動を1回確認 |
 
 ## いちばん簡単な導入・起動 (①〜⑥をまとめて行う)
@@ -72,7 +72,7 @@ cd ..\windows-cpu-partition
 .\cpu-partition.ps1 -Undo                             # 全解除 (その後 1 回再起動)
 ```
 
-成立の確認は `cpu-partition.ps1` の現状表示 (「完全分割 成立」) と、『Edge Box 監視』の区画ごとの色 (Windows 用に橙、Edge Box 用に青が載らず、使用率が赤くならない)。
+成立の確認は `cpu-partition.ps1` の現状表示 (「完全分割 成立」) と、『Edge Box 監視』の区画ごとの色 (Windows 用に緑、Edge Box 用に青が載らず、使用率が赤くならない)。
 
 > 旧手順の `Set-VMProcessor -VMName EdgeBox -Reserve 100` は、クライアント版 Windows の
 > 既定構成 (root スケジューラ) では **機能しない** ことが判明したため撤回
