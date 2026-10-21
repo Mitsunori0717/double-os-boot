@@ -10,8 +10,8 @@ powershell -NoProfile -Sta -ExecutionPolicy Bypass -File .\preview-cpu.ps1 -Scre
 
 | 指定 | 表示する画面 |
 |---|---|
-| `Console` | Core Split / Settings |
-| `Monitor` | CPU・メモリの監視 |
+| `Console` | HOME / SETTING |
+| `Monitor` | 各スレッドの負荷の監視 |
 | `Apps` | アプリの割り当て。追加ボタンから下記の選択画面も開けます |
 | `CoreChooser` | アプリのコア選択 |
 | `Processes` | 実行中のアプリ選択 |
@@ -36,7 +36,7 @@ powershell -NoProfile -Sta -ExecutionPolicy Bypass -File .\preview-cpu.ps1 -Scre
 
 `preview-cpu.ps1` はサンプルデータ・安全な代替処理・確認用の起動処理です。`manifest.json` は統合先と元データのハッシュを記録しています。この 2 ファイルは通常のデザイン調整では編集しません。本番の処理をプレビューへ追加しないでください。
 
-プレビューでは表示名を「Edge Box」にしています。既存の VM 名、タスク名、ファイル名、クラス名はそのままです。
+アプリ名は `cpu-ui-theme.ps1` の `$UiAppName` (「CNC SCREEN CORE SPLIT」) で、プレビューも同じ名前を表示します。その他の利用者向けの表記は「Edge Box」です。既存の VM 名、タスク名、ファイル名、クラス名はそのままです。
 
 ## 動作確認
 
@@ -45,7 +45,7 @@ powershell -NoProfile -Sta -ExecutionPolicy Bypass -File .\preview-cpu.ps1 -Scre
 powershell -NoProfile -Sta -ExecutionPolicy Bypass -File .\preview-cpu.ps1 -Screen Monitor -SmokeTest -ScreenshotDirectory "$env:TEMP\EdgeBoxPreview"
 ```
 
-`-SmokeTest` は画面を画面外で描画して自動で閉じます。Console では 2 ページ (Core Split / Settings) とコアのクリックを確認します。任意の `-ScreenshotDirectory` を指定した場合だけ PNG をその場所に保存します。実機の再起動や VM の終了は行いません。その他の画面も `-Screen` を変えて確認できます。
+`-SmokeTest` は画面を画面外で描画して自動で閉じます。Console では 2 ページ (HOME / SETTING) と、分割の境界のコアのクリックを確認します。任意の `-ScreenshotDirectory` を指定した場合だけ PNG をその場所に保存します。実機の再起動や VM の終了は行いません。その他の画面も `-Screen` を変えて確認できます。
 
 ## 最後に本番へ統合する
 

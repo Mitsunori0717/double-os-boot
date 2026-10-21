@@ -14,7 +14,7 @@ $form = New-Object System.Windows.Forms.Form
 Initialize-UiForm $form
 $appIcon = Get-UiAppIcon "monitor"
 if ($appIcon) { $form.Icon = $appIcon }
-$form.Text = "$VMName 監視 — 各コアの負荷とメモリ"
+$form.Text = "$VMName 監視 — 各コアの負荷"
 $form.ClientSize = New-Object System.Drawing.Size(1120, 600)
 $form.StartPosition = "CenterScreen"
 $form.FormBorderStyle = "FixedDialog"   # 大きさは固定

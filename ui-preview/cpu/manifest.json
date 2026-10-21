@@ -5,28 +5,28 @@
       "targetFile": "windows-cpu-partition/cpu-ui-theme.ps1",
       "startMarker": null,
       "endMarker": null,
-      "baselineHash": "b170c70591ccf3625f012bafed24391a6ccfc6d377794064ed29c64d0f7b4c77"
+      "baselineHash": "c07374f819bf0ce356321145b95606b57637dc959abe36b0d94419894f402cbb"
     },
     {
       "designFile": "cpu/console-layout.ps1",
       "targetFile": "windows-cpu-partition/cpu-console.ps1",
-      "startMarker": "# ============================================================\n#  画面の組み立て\n#  ヘッダー / 左メニュー (Core Split・Settings) / 各画面 / 下の操作バー。\n#  見た目は cpu-ui-theme.ps1 の部品が描く。ここでは配置と、既存の処理とのつなぎだけを行う\n# ============================================================",
+      "startMarker": "# ============================================================\n#  画面の組み立て\n#  左メニュー (アプリ名・HOME・SETTING・MONITOR) / 各画面 / 下の操作バー。\n#  見た目は cpu-ui-theme.ps1 の部品が描く。ここでは配置と、既存の処理とのつなぎだけを行う\n# ============================================================",
       "endMarker": "# ============================================================\n#  表示の同期 (既存の検査・状態の結果を、各画面の表示に写すだけ)\n# ============================================================",
-      "baselineHash": "27e34aa7fe2dbfc537ce179cc7e7544185ad98b7ce4b8fa79b82c69703df89c6"
+      "baselineHash": "2d94c00caefa581134d5b2df99de49d1502344c49d158b6f6a8cda63930a69f2"
     },
     {
       "designFile": "cpu/monitor-drawing.ps1",
       "targetFile": "windows-cpu-partition/cpu-monitor.ps1",
       "startMarker": "# ============================================================ 描画",
       "endMarker": "# ============================================================ ウィンドウ",
-      "baselineHash": "edd87518ff70236ae6ca884b56cde55281a5f7fdea27dbd54de4282e12f5c7e5"
+      "baselineHash": "a83d8ef86be24311171f846a5e4a5ad09ee4985df3011f0647a6c22754a00080"
     },
     {
       "designFile": "cpu/monitor-layout.ps1",
       "targetFile": "windows-cpu-partition/cpu-monitor.ps1",
       "startMarker": "# ============================================================ ウィンドウ",
       "endMarker": "$timer.Add_Tick({",
-      "baselineHash": "e7d49c282153451a04f85f7e077320a15a629b01bc8cf24bf347334d98c69df0"
+      "baselineHash": "9c90302eccb613b9ed88f81e2846cd33741d606a7cceefdb947ab2a4af1be996"
     },
     {
       "designFile": "cpu/core-chooser-layout.ps1",

@@ -19,7 +19,7 @@
 #>
 
 # 画面に出すアプリ名と版 (アプリ名は仮。変えるときはここだけ直す)
-$UiAppName     = "CORESEAM"
+$UiAppName     = "CNC SCREEN CORE SPLIT"
 $UiAppVersion  = "2.0.0"
 $UiAppTagline  = "CORE PARTITION CONSOLE"
 
@@ -805,6 +805,47 @@ namespace CoreUi
                 Theme.DrawText(g, subtitle, Theme.UiMedium, Theme.Mix(Theme.SubText, Theme.Text, 0.3), new Rectangle(x + 16, 0, Math.Max(10, Width - x - 16), Height),
                     TextFormatFlags.VerticalCenter | TextFormatFlags.Left | TextFormatFlags.SingleLine | TextFormatFlags.EndEllipsis);
             }
+        }
+    }
+
+    // ------------------------------------------------------------------
+    //  左メニュー最上部のアプリ名 (ロゴ + 字間を広げた名前。幅に収まらなければ語の区切りで折り返す)
+    // ------------------------------------------------------------------
+    public class SideBrand : Control
+    {
+        const float Spacing = 2.4f;
+        public SideBrand()
+        {
+            SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
+            TabStop = false;
+            Height = 78;
+        }
+        protected override void OnTextChanged(EventArgs e) { base.OnTextChanged(e); Invalidate(); }
+
+        List<string> Lines(Graphics g, int width)
+        {
+            List<string> lines = new List<string>();
+            string cur = "";
+            foreach (string w in (Text ?? "").Split(new char[] { ' ' }, StringSplitOptions.RemoveEmptyEntries)) {
+                string next = cur.Length == 0 ? w : cur + " " + w;
+                if (cur.Length > 0 && Theme.MeasureSpaced(g, next, Theme.Brand, Spacing) > width) { lines.Add(cur); cur = w; }
+                else { cur = next; }
+            }
+            if (cur.Length > 0) { lines.Add(cur); }
+            return lines;
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            Graphics g = e.Graphics;
+            g.Clear(Theme.BackOf(Parent));
+            const int mark = 26, lineH = 20;
+            int x = 22, tx = x + mark + 12;
+            List<string> lines = Lines(g, Math.Max(40, Width - tx - 14));
+            int top = (Height - Math.Max(1, lines.Count) * lineH) / 2 + 2;
+            Theme.DrawBrandMark(g, new Rectangle(x, (Height - mark) / 2, mark, mark));
+            for (int i = 0; i < lines.Count; i++) { Theme.DrawSpaced(g, lines[i], Theme.Brand, Theme.Text, tx, top + i * lineH, Spacing); }
+            using (Pen p = new Pen(Theme.Border)) { g.DrawLine(p, 16, Height - 1, Width - 17, Height - 1); }
         }
     }
 
