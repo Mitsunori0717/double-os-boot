@@ -18,8 +18,6 @@ Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 [System.Windows.Forms.Application]::EnableVisualStyles()
 . (Join-Path $PSScriptRoot 'cpu-ui-theme.ps1')
-# The preview keeps the user-facing product name; file and type identifiers stay intact.
-$UiAppName = 'Edge Box'
 $VMName = 'EdgeBox'
 $IntervalMs = 1000
 $TopMost = $false
@@ -187,7 +185,6 @@ function Get-Avg($Lps,[string]$Key) {
     if(-not $values.Count){return 0.0}
     return [double](($values|Measure-Object -Average).Average)
 }
-function Get-ContainState { return @{Text='完全分離: ○ 成立 (プレビュー用のサンプル データ)';Ok=$true} }
 function Set-PreviewSample {
     $script:Plan=@{Host=@(0..19);Guest=@(20..27);Mode='full'}
     $script:Stat=@{}
@@ -235,7 +232,10 @@ function Show-PreviewConsole {
         $script:btnMon.Add_Click({Show-PreviewMonitor})
         $script:btnApps.Add_Click({Show-AppsDialog})
         $script:btnApply.Add_Click({Show-Info 'この内容をプレビュー内で確認しました。'})
-        $script:btnUndo.Add_Click({foreach($c in $script:Cores){$c.State='Host'};Sync-AllTiles;Update-PreviewConsole})
+        # Same confirmation as the console; the preview never runs the engine and leaves the tiles as they are.
+        $script:btnUndo.Add_Click({
+            if((Show-UiMessage "分割を解除すると、Edge Box が起動しなくなります。`n分割を解除しますか?" 'CPU コア割り当て' 'YesNo' 'Warning') -eq 'Yes'){Show-Info '分割を解除しました。'}
+        })
         $script:btnMem.Add_Click({$script:memBar.SetValues(32,[double]$script:numMem.Value);$script:lblMemHost.Text='→ Windows に残る: '+(32-[int]$script:numMem.Value)+' GB (プレビュー)'})
         Sync-AllTiles
         Update-PreviewConsole
@@ -246,8 +246,14 @@ function Show-PreviewConsole {
             foreach($key in @('core','settings')){Show-Page $key;Update-CoreLayout;Save-PreviewImage $form ('cpu-console-'+$key)}
             Show-Page 'core'
             [System.Windows.Forms.Application]::DoEvents()
+            # Only the two cores beside the split can switch: E4 (first Edge Box) -> Windows, then back.
+            $script:Tiles[15].PerformClick();$script:Tiles[0].PerformClick()
+            if($script:Cores[15].State -ne 'Guest' -or $script:Cores[0].State -ne 'Host'){throw 'A core away from the split must not switch'}
             $script:Tiles[12].PerformClick()
-            if($script:Cores[12].State -ne 'None'){throw 'Core tile interaction failed'}
+            if($script:Cores[12].State -ne 'Host'){throw 'Core tile interaction failed'}
+            $script:Tiles[12].PerformClick()
+            if($script:Cores[12].State -ne 'Guest'){throw 'Boundary core did not switch back'}
+            $script:Tiles[12].PerformClick()
             if($script:cmbVm.Items.Count -ne 1){throw 'VM fixture was not used'}
             Show-Page 'core';Save-PreviewImage $form 'cpu-console-core-edited'
             $script:btnMon.PerformClick()

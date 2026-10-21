@@ -27,8 +27,8 @@ if ([Threading.Thread]::CurrentThread.ApartmentState -ne 'STA') { throw 'powersh
 $script:ViewerRoot = $PSScriptRoot
 $script:ViewerSelfTest = [bool]$SelfTest
 $script:ViewerScreens = @(
-    [pscustomobject]@{ Key = 'Console'; Title = 'CPU 割り当て'; Note = 'CPU · Core Split / Settings'; Files = 'cpu/console-layout.ps1 · cpu/cpu-ui-theme.ps1'; Runner = 'cpu\preview-cpu.ps1'; Fill = $true }
-    [pscustomobject]@{ Key = 'Monitor'; Title = '監視'; Note = 'CPU · コアの負荷・メモリ'; Files = 'cpu/monitor-layout.ps1 · cpu/monitor-drawing.ps1'; Runner = 'cpu\preview-cpu.ps1'; Fill = $false }
+    [pscustomobject]@{ Key = 'Console'; Title = 'CPU 割り当て'; Note = 'CPU · HOME / SETTING'; Files = 'cpu/console-layout.ps1 · cpu/cpu-ui-theme.ps1'; Runner = 'cpu\preview-cpu.ps1'; Fill = $true }
+    [pscustomobject]@{ Key = 'Monitor'; Title = '監視'; Note = 'CPU · 各スレッドの負荷'; Files = 'cpu/monitor-layout.ps1 · cpu/monitor-drawing.ps1'; Runner = 'cpu\preview-cpu.ps1'; Fill = $false }
     [pscustomobject]@{ Key = 'Apps'; Title = 'アプリの割り当て'; Note = 'CPU · アプリ一覧・優先度'; Files = 'cpu/apps-layout.ps1'; Runner = 'cpu\preview-cpu.ps1'; Fill = $false }
     [pscustomobject]@{ Key = 'CoreChooser'; Title = 'コアの選択'; Note = 'CPU · アプリに使うコア'; Files = 'cpu/core-chooser-layout.ps1'; Runner = 'cpu\preview-cpu.ps1'; Fill = $false }
     [pscustomobject]@{ Key = 'Processes'; Title = '起動中のアプリ'; Note = 'CPU · アプリの追加'; Files = 'cpu/process-picker-layout.ps1'; Runner = 'cpu\preview-cpu.ps1'; Fill = $false }

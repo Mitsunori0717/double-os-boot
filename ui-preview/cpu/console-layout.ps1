@@ -60,15 +60,7 @@ function Add-Stack($Parent, [object[]]$Items, [int]$Gap = 14) {
     }
 }
 
-# --- ヘッダー ---
-$script:header = New-Object CoreUi.HeaderBar
-$script:header.Dock = "Top"
-$script:header.Brand = $UiAppName
-$script:header.Version = $UiAppVersion
-$script:header.Tagline = $UiAppTagline
-$script:header.SubTitle = "CPU コア割り当て"
-
-# --- 左メニュー ---
+# --- 左メニュー (最上部にアプリ名。ヘッダーは置かず、メニューを上端まで伸ばす) ---
 $script:sidebar = New-Object CoreUi.Strip
 $script:sidebar.BackColor = [CoreUi.Theme]::Sidebar
 $script:sidebar.Line = "Right"
@@ -76,37 +68,42 @@ $script:sidebar.Dock = "Left"
 $script:sidebar.Width = 220
 $script:sidebar.Padding = New-Object System.Windows.Forms.Padding(0, 14, 1, 0)
 
+$script:brand = New-Object CoreUi.SideBrand
+$script:brand.Text = $UiAppName
+
 $script:Pages = [ordered]@{}
 $script:NavItems = @{}
 $navDefs = @(
-    @{ Key = "core";     Text = "Core Split"; Sub = "コアの割り当て";      Glyph = "cores" },
-    @{ Key = "settings"; Text = "Settings";   Sub = "対象・メモリ・アプリ"; Glyph = "settings" }
+    @{ Key = "core";     Text = "HOME";    Glyph = "cores" },
+    @{ Key = "settings"; Text = "SETTING"; Glyph = "settings" }
 )
 $navList = @()
 $k = 1
 foreach ($nd in $navDefs) {
     $n = New-Object CoreUi.NavItem
+    $n.Height = 46
     $n.Text = $nd.Text
-    $n.SubText = $nd.Sub
     $n.Glyph = $nd.Glyph
     $n.Tag = $nd.Key
     $n.Add_Click({ param($s, $e) Show-Page ([string]$s.Tag) })
-    $script:Tip.SetToolTip($n, ("{0} — {1}   (Ctrl+{2})" -f $nd.Text, $nd.Sub, $k))
+    $script:Tip.SetToolTip($n, ("{0}   (Ctrl+{1})" -f $nd.Text, $k))
     $script:NavItems[$nd.Key] = $n
     $navList += $n
     $k++
 }
-Add-Stack $script:sidebar $navList 2
+# 監視は別ウィンドウを開く項目 (画面の切り替えではないため選択状態にはならない)
+$script:btnMon = New-Object CoreUi.NavItem
+$script:btnMon.Height = 46
+$script:btnMon.Text = "MONITOR"
+$script:btnMon.Glyph = "monitor"
+$script:Tip.SetToolTip($script:btnMon, "各コアの負荷を毎秒表示する別ウィンドウ (『Edge Box 監視』) を開きます")
+Add-Stack $script:sidebar (@($script:brand) + $navList + @($script:btnMon)) 2
 
 $navFoot = New-Object System.Windows.Forms.Panel
 $navFoot.Dock = "Bottom"
-$navFoot.Height = 104
+$navFoot.Height = 44
 $navFoot.BackColor = [CoreUi.Theme]::Sidebar
-$script:btnMon = New-UiButton "リアルタイム監視" 188 "Default" "monitor"
-$script:btnMon.Location = New-Object System.Drawing.Point(16, 12)
-$script:Tip.SetToolTip($script:btnMon, "各コアの負荷とメモリの使用量を毎秒表示する別ウィンドウ (『Edge Box 監視』) を開きます")
-$navFoot.Controls.Add($script:btnMon)
-$navHint = New-UiLabel "Ctrl+1 / Ctrl+2 で画面を切り替え" 18 60 188 "small"
+$navHint = New-UiLabel "Ctrl+1 / Ctrl+2 で画面を切り替え" 18 12 188 "small"
 $navFoot.Controls.Add($navHint)
 $script:sidebar.Controls.Add($navFoot)
 
@@ -126,11 +123,10 @@ $script:content = New-Object System.Windows.Forms.Panel
 $script:content.Dock = "Fill"
 $script:content.BackColor = [CoreUi.Theme]::Bg
 
-# 後から追加したものほど先に場所を取る: ヘッダー (全幅) → 左メニュー → 操作バー → 画面
+# 後から追加したものほど先に場所を取る: 左メニュー (上端から下端まで) → 操作バー → 画面
 $form.Controls.Add($script:content)
 $form.Controls.Add($script:footer)
 $form.Controls.Add($script:sidebar)
-$form.Controls.Add($script:header)
 
 function New-Page([string]$Key, [string]$Title, [string]$Sub) {
     $p = New-Object CoreUi.Backdrop
@@ -170,15 +166,26 @@ $form.Add_KeyDown({
 })
 
 # ============================================================
-#  Core Split — コアのタイル・検査結果
+#  HOME (Core Split) — コアのタイル・検査結果
 # ============================================================
-New-Page "core" "Core Split" ""
-$legend = New-Object CoreUi.Legend
-$legend.Location = New-Object System.Drawing.Point((1000 - $legend.Width), 8)
-$legend.Anchor = "Top,Right"
-$script:PageHeads["core"].Controls.Add($legend)
+New-Page "core" "HOME" ""
 
 # --- コアのタイル ---
+# 分割の境界は 1 か所: 並びの先頭側が Windows 用、末尾側が Edge Box 用 (完全分離の条件と同じ形)。
+# 混成 CPU では P コアは Windows 専用のため並びに入れず、E コアだけを並べる
+function Get-SplitLine {
+    return @($script:Cores | Where-Object { -not $script:Hybrid -or $_.Kind -ne "P" } | Sort-Object Id)
+}
+
+# 未割当は使わない。読み込んだ割り当てが境界 1 か所の形でなければ、Edge Box 用の数を保ったまま末尾へ寄せる
+function Initialize-SplitStates {
+    foreach ($c in $script:Cores) { if ($script:Hybrid -and $c.Kind -eq "P") { $c.State = "Host" } }
+    $line = Get-SplitLine
+    $guest = @($line | Where-Object { $_.State -eq "Guest" }).Count
+    for ($i = 0; $i -lt $line.Count; $i++) { $line[$i].State = $(if ($i -ge $line.Count - $guest) { "Guest" } else { "Host" }) }
+}
+Initialize-SplitStates
+
 function New-Tile($Core) {
     $b = New-Object CoreUi.CoreTile
     $b.Size = New-Object System.Drawing.Size(84, 80)
@@ -189,21 +196,21 @@ function New-Tile($Core) {
     $b.Add_Click({
         param($s, $e)
         $c = $script:Cores[[int]$s.Tag]
-        if ($script:Hybrid -and $c.Kind -eq "P") {
-            # P コアは Windows 専用 (Edge Box には割り当てない): Windows 用 ⇔ 未割当
-            $c.State = $(if ($c.State -eq "Host") { "None" } else { "Host" })
-        } else {
-            switch ($c.State) {
-                "Host"  { $c.State = "Guest" }
-                "Guest" { $c.State = "None" }
-                default { $c.State = "Host" }
-            }
-        }
+        # 切り替えられるのは境界の両側の 2 枚だけ (Windows 用の末尾 → Edge Box 用 / Edge Box 用の先頭 → Windows 用)。
+        # それ以外を押しても何も変えない。適用できない形 (Edge Box 0 コア・Windows 2 コア未満) にもしない
+        $line = Get-SplitLine
+        $i = -1
+        for ($j = 0; $j -lt $line.Count; $j++) { if ($line[$j].Id -eq $c.Id) { $i = $j; break } }
+        $edge = @($line | Where-Object { $_.State -eq "Host" }).Count   # 境界の位置 (先頭から Windows 用の数)
+        $hostTotal  = @($script:Cores | Where-Object { $_.State -eq "Host" }).Count
+        $guestTotal = @($script:Cores | Where-Object { $_.State -eq "Guest" }).Count
+        if ($i -ge 0 -and $i -eq $edge - 1 -and $hostTotal -gt 2) { $c.State = "Guest" }
+        elseif ($i -ge 0 -and $i -eq $edge -and $guestTotal -gt 1) { $c.State = "Host" }
+        else { return }
         Sync-Tile $c
         Update-Validation
     })
-    $how = if ($script:Hybrid -and $Core.Kind -eq "P") { "クリック: Windows ⇔ 未割当 (P コアは Windows 専用)" } else { "クリック: Windows → Edge Box → 未割当" }
-    $script:Tip.SetToolTip($b, ("{0}  —  CPU {1}`n{2}" -f $Core.Label, (ConvertTo-LpRangeText $Core.Lps), $how))
+    $script:Tip.SetToolTip($b, ("{0}  —  CPU {1}" -f $Core.Label, (ConvertTo-LpRangeText $Core.Lps)))
     return $b
 }
 
@@ -278,7 +285,7 @@ if ($script:Hybrid) {
 foreach ($cd in $coreGroups) { $cd.Add_Resize({ try { Update-CoreLayout } catch { } }) }
 
 # --- 検査結果 ---
-$grpChk = New-Card "検査結果" "適用できるかを自動で確かめます" 214
+$grpChk = New-Card "検査結果" "" 214
 # 色付きの文字 (不可・注意) を読みやすくするため、一段濃い下地の上に出す
 function New-InsetBox {
     $p = New-Object System.Windows.Forms.Panel
@@ -305,7 +312,7 @@ Add-Stack $script:Pages["core"] (@($script:PageHeads["core"]) + $coreGroups + @(
 # ============================================================
 #  Settings — 対象・メモリ・アプリの割り当て
 # ============================================================
-New-Page "settings" "Settings" ""
+New-Page "settings" "SETTING" ""
 
 # --- 対象 ---
 $grpMode = New-Card "対象" "" 102
@@ -329,7 +336,7 @@ $grpMode.Controls.Add($script:lblVm)
 # 方式は「完全分離」固定 (選択肢は出さない)
 
 # --- メモリの割り当て ---
-$grpMem = New-Card "メモリの割り当て" "PC 全体のメモリを Windows と Edge Box で分ける" 172
+$grpMem = New-Card "メモリの割り当て" "" 172
 $script:lblMemPc = New-UiLabel "" 18 58 230 "body"
 $grpMem.Controls.Add($script:lblMemPc)
 $script:lblMemVm = New-UiLabel "" 252 58 130 "sub"
