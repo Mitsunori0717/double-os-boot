@@ -36,7 +36,7 @@ powershell -NoProfile -Sta -ExecutionPolicy Bypass -File .\preview-cpu.ps1 -Scre
 
 `preview-cpu.ps1` はサンプルデータ・安全な代替処理・確認用の起動処理です。`manifest.json` は統合先と元データのハッシュを記録しています。この 2 ファイルは通常のデザイン調整では編集しません。本番の処理をプレビューへ追加しないでください。
 
-アプリ名は `cpu-ui-theme.ps1` の `$UiAppName` (「CNC SCREEN CORE SPLIT」) で、プレビューも同じ名前を表示します。その他の利用者向けの表記は「Edge Box」です。既存の VM 名、タスク名、ファイル名、クラス名はそのままです。
+アプリ名は `cpu-ui-theme.ps1` の `$UiAppName` (「CNCSCREEN CORE SPLIT」) で、プレビューも同じ名前を表示します。その他の利用者向けの表記は「Edge Box」です。既存の VM 名、タスク名、ファイル名、クラス名はそのままです。
 
 ## 動作確認
 
