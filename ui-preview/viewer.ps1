@@ -27,7 +27,7 @@ if ([Threading.Thread]::CurrentThread.ApartmentState -ne 'STA') { throw 'powersh
 $script:ViewerRoot = $PSScriptRoot
 $script:ViewerSelfTest = [bool]$SelfTest
 $script:ViewerScreens = @(
-    [pscustomobject]@{ Key = 'Console'; Title = 'CPU 割り当て'; Note = 'CPU · Home / Core Split / Settings / Log / System'; Files = 'cpu/console-layout.ps1 · cpu/cpu-ui-theme.ps1'; Runner = 'cpu\preview-cpu.ps1'; Fill = $true }
+    [pscustomobject]@{ Key = 'Console'; Title = 'CPU 割り当て'; Note = 'CPU · Core Split / Settings'; Files = 'cpu/console-layout.ps1 · cpu/cpu-ui-theme.ps1'; Runner = 'cpu\preview-cpu.ps1'; Fill = $true }
     [pscustomobject]@{ Key = 'Monitor'; Title = '監視'; Note = 'CPU · コアの負荷・メモリ'; Files = 'cpu/monitor-layout.ps1 · cpu/monitor-drawing.ps1'; Runner = 'cpu\preview-cpu.ps1'; Fill = $false }
     [pscustomobject]@{ Key = 'Apps'; Title = 'アプリの割り当て'; Note = 'CPU · アプリ一覧・優先度'; Files = 'cpu/apps-layout.ps1'; Runner = 'cpu\preview-cpu.ps1'; Fill = $false }
     [pscustomobject]@{ Key = 'CoreChooser'; Title = 'コアの選択'; Note = 'CPU · アプリに使うコア'; Files = 'cpu/core-chooser-layout.ps1'; Runner = 'cpu\preview-cpu.ps1'; Fill = $false }

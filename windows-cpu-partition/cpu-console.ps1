@@ -532,7 +532,7 @@ if ($script:SavedCfg) {
 
 # ============================================================
 #  画面の組み立て
-#  ヘッダー / 左メニュー (Home・Core Split・Settings・Log・System) / 各画面 / 下の操作バー。
+#  ヘッダー / 左メニュー (Core Split・Settings) / 各画面 / 下の操作バー。
 #  見た目は cpu-ui-theme.ps1 の部品が描く。ここでは配置と、既存の処理とのつなぎだけを行う
 # ============================================================
 $ColHost  = [CoreUi.Theme]::Win
@@ -596,40 +596,6 @@ function Add-Stack($Parent, [object[]]$Items, [int]$Gap = 14) {
     }
 }
 
-# 横並びの列 (幅の割合を指定)
-function New-Columns([int]$Height, [int[]]$Percents) {
-    $t = New-Object System.Windows.Forms.TableLayoutPanel
-    $t.Size = New-Object System.Drawing.Size(1000, $Height)
-    $t.BackColor = [System.Drawing.Color]::Transparent
-    $t.Margin = New-Object System.Windows.Forms.Padding(0)
-    $t.Padding = New-Object System.Windows.Forms.Padding(0)
-    $t.ColumnCount = $Percents.Count
-    $t.RowCount = 1
-    foreach ($p in $Percents) {
-        [void]$t.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Percent, [float]$p)))
-    }
-    [void]$t.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Percent, [float]100)))
-    return $t
-}
-function Add-Column($Tlp, $Ctl, [int]$Col) {
-    $Ctl.Dock = "Fill"
-    $l = if ($Col -eq 0) { 0 } else { 7 }
-    $r = if ($Col -eq ($Tlp.ColumnCount - 1)) { 0 } else { 7 }
-    $Ctl.Margin = New-Object System.Windows.Forms.Padding($l, 0, $r, 0)
-    $Tlp.Controls.Add($Ctl, $Col, 0)
-}
-
-# パネルの中に「項目名 : 値」を 1 行置く (値のラベルは呼び出し側が持つ)
-function Add-KeyValue($Card, [string]$Key, $ValueLabel, [int]$Y) {
-    $Card.Controls.Add((New-UiLabel $Key 18 $Y 180 "sub"))
-    $ValueLabel.Location = New-Object System.Drawing.Point(206, $Y)
-    $ValueLabel.AutoSize = $false
-    $ValueLabel.AutoEllipsis = $true
-    $ValueLabel.Size = New-Object System.Drawing.Size(($Card.Width - 224), 22)
-    $ValueLabel.Anchor = "Top,Left,Right"
-    $Card.Controls.Add($ValueLabel)
-}
-
 # --- ヘッダー ---
 $script:header = New-Object CoreUi.HeaderBar
 $script:header.Dock = "Top"
@@ -637,20 +603,6 @@ $script:header.Brand = $UiAppName
 $script:header.Version = $UiAppVersion
 $script:header.Tagline = $UiAppTagline
 $script:header.SubTitle = "CPU コア割り当て"
-$script:chipSplit = New-Object CoreUi.StatusChip
-$script:chipVm = New-Object CoreUi.StatusChip
-$script:header.Controls.AddRange(@($script:chipSplit, $script:chipVm))
-$script:Tip.SetToolTip($script:chipSplit, "分離の状態 (詳しくは Home / System)")
-$script:Tip.SetToolTip($script:chipVm, "対象の Edge Box の状態")
-
-function Update-HeaderLayout {
-    $x = $script:header.ClientSize.Width - 20
-    foreach ($c in @($script:chipVm, $script:chipSplit)) {
-        $c.Location = New-Object System.Drawing.Point(($x - $c.Width), [int](($script:header.Height - $c.Height) / 2))
-        $x = $c.Left - 10
-    }
-}
-$script:header.Add_Resize({ try { Update-HeaderLayout } catch { } })
 
 # --- 左メニュー ---
 $script:sidebar = New-Object CoreUi.Strip
@@ -663,11 +615,8 @@ $script:sidebar.Padding = New-Object System.Windows.Forms.Padding(0, 14, 1, 0)
 $script:Pages = [ordered]@{}
 $script:NavItems = @{}
 $navDefs = @(
-    @{ Key = "home";     Text = "Home";       Sub = "概要";                Glyph = "home" },
     @{ Key = "core";     Text = "Core Split"; Sub = "コアの割り当て";      Glyph = "cores" },
-    @{ Key = "settings"; Text = "Settings";   Sub = "対象・メモリ・アプリ"; Glyph = "settings" },
-    @{ Key = "log";      Text = "Log";        Sub = "記録";                Glyph = "log" },
-    @{ Key = "system";   Text = "System";     Sub = "この PC の構成";      Glyph = "system" }
+    @{ Key = "settings"; Text = "Settings";   Sub = "対象・メモリ・アプリ"; Glyph = "settings" }
 )
 $navList = @()
 $k = 1
@@ -693,7 +642,7 @@ $script:btnMon = New-UiButton "リアルタイム監視" 188 "Default" "monitor"
 $script:btnMon.Location = New-Object System.Drawing.Point(16, 12)
 $script:Tip.SetToolTip($script:btnMon, "各コアの負荷とメモリの使用量を毎秒表示する別ウィンドウ (『Edge Box 監視』) を開きます")
 $navFoot.Controls.Add($script:btnMon)
-$navHint = New-UiLabel "Ctrl+1〜5 で画面を切り替え" 18 60 188 "small"
+$navHint = New-UiLabel "Ctrl+1 / Ctrl+2 で画面を切り替え" 18 60 188 "small"
 $navFoot.Controls.Add($navHint)
 $script:sidebar.Controls.Add($navFoot)
 
@@ -728,7 +677,7 @@ function New-Page([string]$Key, [string]$Title, [string]$Sub) {
     $h = New-Object CoreUi.PageHeader
     $h.Text = $Title
     $h.SubTitle = $Sub
-    $h.Size = New-Object System.Drawing.Size(1000, 64)
+    $h.Size = New-Object System.Drawing.Size(1000, $(if ($Sub) { 64 } else { 46 }))
     $script:Pages[$Key] = $p
     $script:PageHeads[$Key] = $h
     $script:content.Controls.Add($p)
@@ -745,82 +694,21 @@ function Show-Page([string]$Key) {
     }
     try {
         if ($Key -eq "core") { Update-CoreLayout }
-        if ($Key -eq "log")  { Update-LogView }
     } catch { }
 }
 
 $form.Add_KeyDown({
     param($s, $e)
     if (-not $e.Control -or $e.Alt) { return }
-    $keys = @{ "D1" = "home"; "D2" = "core"; "D3" = "settings"; "D4" = "log"; "D5" = "system" }
+    $keys = @{ "D1" = "core"; "D2" = "settings" }
     $name = [string]$e.KeyCode
     if ($keys.ContainsKey($name)) { Show-Page $keys[$name]; $e.Handled = $true; $e.SuppressKeyPress = $true }
 })
 
 # ============================================================
-#  Home — 現在の割り当てと状態
+#  Core Split — コアのタイル・検査結果
 # ============================================================
-New-Page "home" "Home" "現在の割り当てと分離の状態"
-
-$script:cardHero = New-Card "現在の割り当て" "" 262
-$script:cardHero.CornerTicks = $true
-$script:stripHome = New-Object CoreUi.CoreStrip
-$script:stripHome.CellHeight = 16
-$script:stripHome.Height = 58
-$script:stripHome.Dock = "Top"
-$heroCols = New-Columns 124 @(50, 50)
-$heroCols.Dock = "Top"
-$script:blkHost = New-Object CoreUi.SideBlock
-$script:blkHost.Caption = "WINDOWS"
-$script:blkHost.Tone = "Win"
-$script:blkGuest = New-Object CoreUi.SideBlock
-$script:blkGuest.Caption = "EDGE BOX"
-$script:blkGuest.Tone = "Edge"
-Add-Column $heroCols $script:blkHost 0
-Add-Column $heroCols $script:blkGuest 1
-$heroGap = New-Object System.Windows.Forms.Panel
-$heroGap.Height = 12; $heroGap.Dock = "Top"; $heroGap.BackColor = [System.Drawing.Color]::Transparent
-$script:cardHero.Controls.Add($heroCols)
-$script:cardHero.Controls.Add($heroGap)
-$script:cardHero.Controls.Add($script:stripHome)
-
-function New-StatusCard([string]$Title) {
-    $c = New-Card $Title "" 132
-    $chip = New-Object CoreUi.StatusChip
-    $chip.Location = New-Object System.Drawing.Point(18, 48)
-    $c.Controls.Add($chip)
-    $lbl = New-UiLabel "" 18 84 964 "sub" 40
-    $lbl.Anchor = "Top,Left,Right"
-    $c.Controls.Add($lbl)
-    return [pscustomobject]@{ Card = $c; Chip = $chip; Label = $lbl }
-}
-$script:stSplit = New-StatusCard "分離の状態"
-$script:stVm    = New-StatusCard "Edge Box"
-$script:stWin   = New-StatusCard "Windows"
-$statusCols = New-Columns 132 @(40, 32, 28)
-Add-Column $statusCols $script:stSplit.Card 0
-Add-Column $statusCols $script:stVm.Card 1
-Add-Column $statusCols $script:stWin.Card 2
-
-$homeActs = New-Object System.Windows.Forms.Panel
-$homeActs.Size = New-Object System.Drawing.Size(1000, 40)
-$homeActs.BackColor = [System.Drawing.Color]::Transparent
-$btnGoCore = New-UiButton "コアの割り当てを編集" 210 "Primary" "cores"
-$btnGoCore.Location = New-Object System.Drawing.Point(0, 2)
-$btnGoCore.Add_Click({ Show-Page "core" })
-$btnHomeMon = New-UiButton "リアルタイム監視を開く" 220 "Default" "monitor"
-$btnHomeMon.Location = New-Object System.Drawing.Point(218, 2)
-$btnHomeMon.Add_Click({ $script:btnMon.PerformClick() })
-$homeActs.Controls.AddRange(@($btnGoCore, $btnHomeMon))
-
-Add-Stack $script:Pages["home"] @($script:PageHeads["home"], $script:cardHero, $statusCols, $homeActs) 14
-
-# ============================================================
-#  Core Split — コアのタイル・割り当ての内容・検査結果
-# ============================================================
-$coreSub = if ($script:Hybrid) { "タイルをクリックするたびに Windows → Edge Box → 未割当 と切り替わります (P コアは Windows ⇔ 未割当)" }
-           else { "タイルをクリックするたびに Windows → Edge Box → 未割当 と切り替わります" }
-New-Page "core" "Core Split" $coreSub
+New-Page "core" "Core Split" ""
 $legend = New-Object CoreUi.Legend
 $legend.Location = New-Object System.Drawing.Point((1000 - $legend.Width), 8)
 $legend.Anchor = "Top,Right"
@@ -912,7 +800,7 @@ if ($script:Hybrid) {
     $eCores = @($script:Cores | Where-Object { $_.Kind -ne "P" })
     $pThreads = [int]((@($pCores | ForEach-Object { $_.Lps.Count }) | Measure-Object -Sum).Sum)
     $eThreads = [int]((@($eCores | ForEach-Object { $_.Lps.Count }) | Measure-Object -Sum).Sum)
-    $grpP = New-CoreGroup "P コア (性能重視)" ("{0} コア / {1} スレッド   ·   Windows 専用" -f $pCores.Count, $pThreads)
+    $grpP = New-CoreGroup "P コア (性能重視)" ("{0} コア / {1} スレッド" -f $pCores.Count, $pThreads)
     $grpE = New-CoreGroup "E コア (効率重視)" ("{0} コア / {1} スレッド" -f $eCores.Count, $eThreads)
     foreach ($c in $pCores) { $t = New-Tile $c; $script:Tiles[$c.Id] = $t; $grpP.Controls.Add($t) }
     foreach ($c in $eCores) { $t = New-Tile $c; $script:Tiles[$c.Id] = $t; $grpE.Controls.Add($t) }
@@ -924,34 +812,6 @@ if ($script:Hybrid) {
     $coreGroups = @($grpA)
 }
 foreach ($cd in $coreGroups) { $cd.Add_Resize({ try { Update-CoreLayout } catch { } }) }
-
-# --- 割り当ての要約 ---
-$grpSum = New-Card "この内容で割り当てます" "" 214
-$script:stripCore = New-Object CoreUi.CoreStrip
-$script:stripCore.Dock = "Top"
-$script:stripCore.Height = 56
-function New-SideLine([System.Drawing.Color]$Color, [string]$Tag) {
-    $row = New-Object System.Windows.Forms.Panel
-    $row.Size = New-Object System.Drawing.Size(964, 30)
-    $row.BackColor = [System.Drawing.Color]::Transparent
-    $sw = New-Object System.Windows.Forms.Panel
-    $sw.BackColor = $Color
-    $sw.Bounds = New-Object System.Drawing.Rectangle(0, 9, 10, 10)
-    $row.Controls.Add($sw)
-    $lbl = New-UiLabel "" 18 4 946 "body"
-    $lbl.Font = [CoreUi.Theme]::UiMedium
-    $lbl.Anchor = "Top,Left,Right"
-    $row.Controls.Add($lbl)
-    $script:Tip.SetToolTip($lbl, $Tag)
-    return [pscustomobject]@{ Row = $row; Label = $lbl }
-}
-$sumH = New-SideLine ([CoreUi.Theme]::Win) "Windows に割り当てるコア"
-$sumG = New-SideLine ([CoreUi.Theme]::Edge) "Edge Box に割り当てるコア"
-$script:lblSumH = $sumH.Label
-$script:lblSumG = $sumG.Label
-$sumGap = New-Object System.Windows.Forms.Panel
-$sumGap.Height = 10; $sumGap.BackColor = [System.Drawing.Color]::Transparent
-Add-Stack $grpSum @($script:stripCore, $sumGap, $sumH.Row, $sumG.Row) 0
 
 # --- 検査結果 ---
 $grpChk = New-Card "検査結果" "適用できるかを自動で確かめます" 214
@@ -976,20 +836,16 @@ $chkBox = New-InsetBox
 $chkBox.Controls.Add($script:rtb)
 $grpChk.Controls.Add($chkBox)
 
-$coreBottom = New-Columns 214 @(56, 44)
-Add-Column $coreBottom $grpSum 0
-Add-Column $coreBottom $grpChk 1
-
-Add-Stack $script:Pages["core"] (@($script:PageHeads["core"]) + $coreGroups + @($coreBottom)) 12
+Add-Stack $script:Pages["core"] (@($script:PageHeads["core"]) + $coreGroups + @($grpChk)) 12
 
 # ============================================================
 #  Settings — 対象・メモリ・アプリの割り当て
 # ============================================================
-New-Page "settings" "Settings" "対象の Edge Box・メモリの割り当て・アプリの割り当て"
+New-Page "settings" "Settings" ""
 
 # --- 対象 ---
-$grpMode = New-Card "対象" "割り当てを適用する Edge Box の登録" 132
-$grpMode.Controls.Add((New-UiLabel "対象の登録名" 18 58 120 "sub"))
+$grpMode = New-Card "対象" "" 102
+$grpMode.Controls.Add((New-UiLabel "登録名" 18 58 120 "sub"))
 $script:cmbVm = New-Object CoreUi.DarkComboBox
 $script:cmbVm.Location = New-Object System.Drawing.Point(140, 54)
 $script:cmbVm.Size = New-Object System.Drawing.Size(260, 30)
@@ -1006,9 +862,6 @@ $grpMode.Controls.Add($script:cmbVm)
 $script:lblVm = New-UiLabel "" 420 58 562 "body"
 $script:lblVm.Anchor = "Top,Left,Right"
 $grpMode.Controls.Add($script:lblVm)
-$modeNote = New-UiLabel "一覧に無い名前も入力できます (これから作る Edge Box)。入力欄から移ると反映します。" 18 96 964 "small"
-$modeNote.Anchor = "Top,Left,Right"
-$grpMode.Controls.Add($modeNote)
 # 方式は「完全分離」固定 (選択肢は出さない)
 
 # --- メモリの割り当て ---
@@ -1050,155 +903,15 @@ $script:lblMemNote.Anchor = "Top,Left,Right"
 $grpMem.Controls.Add($script:lblMemNote)
 
 # --- アプリの割り当て (Windows 側アプリを特定コアに固定する) ---
-$grpApps = New-Card "アプリの割り当て" "Windows 側のアプリを決めたコアで動かす" 132
-$script:btnApps = New-UiButton "アプリの割り当てを編集..." 230 "Default" "edit"
+$grpApps = New-Card "アプリの割り当て" "" 102
+$script:btnApps = New-UiButton "編集" 104 "Default" "edit"
 $script:btnApps.Location = New-Object System.Drawing.Point(16, 52)
 $grpApps.Controls.Add($script:btnApps)
-$script:lblApps = New-UiLabel "" 262 58 720 "body"
+$script:lblApps = New-UiLabel "" 136 58 846 "body"
 $script:lblApps.Anchor = "Top,Left,Right"
 $grpApps.Controls.Add($script:lblApps)
-$appsNote = New-UiLabel "登録したアプリは、起動のたびに指定したコアへ自動で固定されます (1 分ごとに確認)。選べるのは Windows 用のコアだけです。" 18 96 964 "small"
-$appsNote.Anchor = "Top,Left,Right"
-$grpApps.Controls.Add($appsNote)
 
 Add-Stack $script:Pages["settings"] @($script:PageHeads["settings"], $grpMode, $grpMem, $grpApps) 14
-
-# ============================================================
-#  Log — 記録ファイルの末尾
-# ============================================================
-New-Page "log" "Log" "適用・起動タスク・常駐の記録 (新しいものが下)"
-$script:LogKind = "cpu"
-$grpLog = New-Card "記録ファイル" "" 400
-$logBar = New-Object System.Windows.Forms.Panel
-$logBar.Dock = "Top"
-$logBar.Height = 46
-$logBar.BackColor = [System.Drawing.Color]::Transparent
-$script:btnLogCpu = New-UiButton "CPU 分割の記録" 160
-$script:btnLogCpu.Location = New-Object System.Drawing.Point(0, 0)
-$script:btnLogApps = New-UiButton "アプリ割り当ての記録" 190
-$script:btnLogApps.Location = New-Object System.Drawing.Point(166, 0)
-$script:btnLogReload = New-UiButton "再読み込み" 130 "Ghost" "refresh"
-$script:btnLogReload.Location = New-Object System.Drawing.Point(372, 0)
-$script:lblLogInfo = New-UiLabel "" 520 8 444 "small"
-$script:lblLogInfo.Anchor = "Top,Left,Right"
-$script:lblLogInfo.TextAlign = "MiddleRight"
-$logBar.Size = New-Object System.Drawing.Size(964, 46)
-$logBar.Controls.AddRange(@($script:btnLogCpu, $script:btnLogApps, $script:btnLogReload, $script:lblLogInfo))
-$script:rtbLog = New-Object System.Windows.Forms.RichTextBox
-$script:rtbLog.Dock = "Fill"
-$script:rtbLog.ReadOnly = $true
-$script:rtbLog.BorderStyle = "None"
-$script:rtbLog.BackColor = [CoreUi.Theme]::Inset
-$script:rtbLog.ForeColor = [CoreUi.Theme]::Text
-$script:rtbLog.Font = [CoreUi.Theme]::Ui     # 記録は日本語が中心のため、日本語の字形を持つ文字で出す
-$script:rtbLog.DetectUrls = $false
-$script:rtbLog.WordWrap = $true
-$script:rtbLog.Add_HandleCreated({ param($s, $e) [CoreUi.Native]::DarkScroll($s) })
-$logBox = New-InsetBox
-$logBox.Controls.Add($script:rtbLog)
-$grpLog.Controls.Add($logBox)
-$grpLog.Controls.Add($logBar)
-$grpLog.Dock = "Fill"
-$script:Pages["log"].Controls.Add($grpLog)
-$logGap = New-Object System.Windows.Forms.Panel
-$logGap.Height = 14; $logGap.Dock = "Top"; $logGap.BackColor = [System.Drawing.Color]::Transparent
-$script:Pages["log"].Controls.Add($logGap)
-$script:PageHeads["log"].Dock = "Top"
-$script:Pages["log"].Controls.Add($script:PageHeads["log"])
-
-function Add-RtbText($Box, [string]$Text, [System.Drawing.Color]$Color) {
-    $Box.SelectionStart = $Box.TextLength
-    $Box.SelectionLength = 0
-    $Box.SelectionColor = $Color
-    $Box.AppendText($Text)
-}
-
-# 記録を読み直して色分けする (時刻は控えめに、失敗は赤、注意は黄)
-function Update-LogView {
-    $path = if ($script:LogKind -eq "apps") { $AppsLog } else { Join-Path $PSScriptRoot "cpu-partition-log.txt" }
-    $script:btnLogCpu.Selected = ($script:LogKind -ne "apps")
-    $script:btnLogApps.Selected = ($script:LogKind -eq "apps")
-    $grpLog.Meta = [System.IO.Path]::GetFileName($path)
-    $box = $script:rtbLog
-    $box.Clear()
-    if (-not (Test-Path $path)) {
-        Add-RtbText $box ("記録はまだありません (" + [System.IO.Path]::GetFileName($path) + ")。適用や起動タスクが動くと、ここに記録されます。") ([CoreUi.Theme]::SubText)
-        $script:lblLogInfo.Text = ""
-        return
-    }
-    try {
-        $lines = @(Get-Content -LiteralPath $path -Encoding UTF8 -Tail 400 -ErrorAction Stop)
-        $info = Get-Item -LiteralPath $path
-        $script:lblLogInfo.Text = "{0} 行   最終更新 {1:yyyy-MM-dd HH:mm:ss}" -f $lines.Count, $info.LastWriteTime
-    } catch {
-        Add-RtbText $box ("記録を読めませんでした: " + $_.Exception.Message) ([CoreUi.Theme]::ErrText)
-        return
-    }
-    $box.SuspendLayout()
-    foreach ($ln in $lines) {
-        $ts = ""; $body = [string]$ln
-        if ($body -match '^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\s+(.*)$') { $ts = $Matches[1]; $body = $Matches[2] }
-        $col = [CoreUi.Theme]::Text
-        if ($body -match '失敗|エラー|できません|できなかった|見つかりません|中止|(?i:error|failed)') { $col = [CoreUi.Theme]::ErrText }
-        elseif ($body -match '注意|警告|未成立|再起動待ち|(?i:warn)') { $col = [CoreUi.Theme]::WarnText }
-        if ($ts) { Add-RtbText $box ($ts + "  ") ([CoreUi.Theme]::SubText) }
-        Add-RtbText $box ($body + "`n") $col
-    }
-    $box.ResumeLayout()
-    $box.SelectionStart = $box.TextLength
-    $box.ScrollToCaret()
-}
-$script:btnLogCpu.Add_Click({ $script:LogKind = "cpu"; Update-LogView })
-$script:btnLogApps.Add_Click({ $script:LogKind = "apps"; Update-LogView })
-$script:btnLogReload.Add_Click({ Update-LogView })
-
-# ============================================================
-#  System — この PC と Edge Box の構成
-# ============================================================
-New-Page "system" "System" "この PC の CPU・メモリと、対象の Edge Box の構成"
-
-$grpPc = New-Card "プロセッサ" "CPU 自身が申告する構成" 222
-$script:lblCpu1 = New-UiLabel "" 0 0 0 "body"
-$script:lblSysKinds = New-UiLabel "" 0 0 0 "body"
-$script:lblCpu2 = New-UiLabel "" 0 0 0 "body"
-$script:lblCpu3 = New-UiLabel "" 0 0 0 "body"
-Add-KeyValue $grpPc "CPU" $script:lblCpu1 56
-Add-KeyValue $grpPc "コアの種類" $script:lblSysKinds 88
-Add-KeyValue $grpPc "Windows 側" $script:lblCpu2 120
-Add-KeyValue $grpPc "分離の状態" $script:lblCpu3 152
-$script:lblSysNote = New-UiLabel "" 18 186 964 "small"
-$script:lblSysNote.Anchor = "Top,Left,Right"
-$grpPc.Controls.Add($script:lblSysNote)
-if ($script:Hybrid) {
-    $pl = @(); foreach ($c in @($script:Cores | Where-Object { $_.Kind -eq "P" })) { $pl += $c.Lps }
-    $el = @(); foreach ($c in @($script:Cores | Where-Object { $_.Kind -eq "E" })) { $el += $c.Lps }
-    $script:lblSysKinds.Text = "P コア {0} (CPU {1})   /   E コア {2} (CPU {3})" -f @($script:Cores | Where-Object { $_.Kind -eq "P" }).Count,
-        (ConvertTo-LpRangeText $pl), @($script:Cores | Where-Object { $_.Kind -eq "E" }).Count, (ConvertTo-LpRangeText $el)
-} else {
-    $script:lblSysKinds.Text = "すべて同じ種類のコア (CPU {0})" -f (ConvertTo-LpRangeText @($script:Cores | ForEach-Object { $_.Lps }))
-}
-if ($script:UsedSnapshot) { $script:lblSysNote.Text = "一部のコアが Windows から見えないため、保存済みのコア構成を表示しています。" }
-
-$grpSysVm = New-Card "Edge Box (Hyper-V)" "" 190
-$script:lblSysHv = New-UiLabel "" 0 0 0 "body"
-$script:lblSysVmName = New-UiLabel "" 0 0 0 "body"
-$script:lblSysVm = New-UiLabel "" 0 0 0 "body"
-$script:lblSysMem = New-UiLabel "" 0 0 0 "body"
-Add-KeyValue $grpSysVm "Hyper-V" $script:lblSysHv 56
-Add-KeyValue $grpSysVm "対象の登録名" $script:lblSysVmName 88
-Add-KeyValue $grpSysVm "現在の構成" $script:lblSysVm 120
-Add-KeyValue $grpSysVm "この PC のメモリ" $script:lblSysMem 152
-
-$grpTools = New-Card "ツール" "" 104
-$btnSysMon = New-UiButton "リアルタイム監視を開く" 220 "Default" "monitor"
-$btnSysMon.Location = New-Object System.Drawing.Point(16, 50)
-$btnSysMon.Add_Click({ $script:btnMon.PerformClick() })
-$grpTools.Controls.Add($btnSysMon)
-$toolsNote = New-UiLabel "各コアの負荷 (Windows / Edge Box のどちらが使っているか) とメモリの使用量を毎秒表示します。" 252 58 730 "sub"
-$toolsNote.Anchor = "Top,Left,Right"
-$grpTools.Controls.Add($toolsNote)
-
-Add-Stack $script:Pages["system"] @($script:PageHeads["system"], $grpPc, $grpSysVm, $grpTools) 14
 
 # ============================================================
 #  操作ボタン (下の操作バー)
@@ -1274,30 +987,8 @@ function Get-AppliedPlan {
     } catch { return $null }
 }
 
-# 割り当ての図 (論理 CPU の並び・両側の要約)・検査の結果・変更の有無
+# 下の操作バーの表示: 検査の結果・変更の有無
 function Update-SplitViews($Sel, [int]$ErrorCount = -1, [int]$WarnCount = 0) {
-    $list = @(foreach ($c in $script:Cores) {
-        $s = switch ($c.State) { "Host" { 1 } "Guest" { 2 } default { 0 } }
-        foreach ($l in $c.Lps) { [pscustomobject]@{ Lp = [int]$l; S = [int]$s; K = [string]$c.Kind } }
-    }) | Sort-Object Lp
-    $ids = [int[]]@($list | ForEach-Object { $_.Lp })
-    $ss  = [int[]]@($list | ForEach-Object { $_.S })
-    $ks  = [string[]]@($list | ForEach-Object { $_.K })
-    $script:stripCore.SetData($ids, $ss, $ks)
-    $script:stripHome.SetData($ids, $ss, $ks)
-
-    foreach ($side in @(@("Host", $script:blkHost, $Sel.HostLps), @("Guest", $script:blkGuest, $Sel.GuestLps))) {
-        $objs = @($script:Cores | Where-Object { $_.State -eq $side[0] })
-        $mix = ""
-        if ($script:Hybrid) {
-            $mix = "P {0} / E {1}" -f @($objs | Where-Object { $_.Kind -eq "P" }).Count, @($objs | Where-Object { $_.Kind -eq "E" }).Count
-        }
-        $lps = @($side[2])
-        $range = if ($lps.Count -gt 0) { "CPU " + (ConvertTo-LpRangeText $lps) } else { "割り当てなし" }
-        $side[1].SetValues($objs.Count, $lps.Count, $mix, $range)
-    }
-    $script:blkGuest.NameText = "登録名: " + $script:VmNameSel
-
     if ($ErrorCount -lt 0) {
         $script:chipVerdict.Tone = "Muted"; $script:chipVerdict.Text = "確認中"
     } elseif ($ErrorCount -gt 0) {
@@ -1316,41 +1007,7 @@ function Update-SplitViews($Sel, [int]$ErrorCount = -1, [int]$WarnCount = 0) {
         $script:chipChange.Tone = "Warn"; $chg = "未適用の変更があります"
     }
     $script:chipChange.Text = $chg
-    $script:cardHero.Meta = "編集中の内容   ·   " + $chg
     Update-FooterLayout
-}
-
-# ヘッダー・Home・System の状態表示 (Update-Header が決めた内容を写す)
-function Sync-StatusViews {
-    $script:chipSplit.Tone = $script:SplitTone
-    $script:chipSplit.Text = $script:SplitShort
-    if ($script:Vm) {
-        $st = [string]$script:Vm.State
-        $vt = if ($st -eq "Running") { "Ok" } elseif ($st -eq "Off") { "Muted" } else { "Warn" }
-        $vx = "{0}  ·  {1}" -f $script:VmNameSel, $st
-    } elseif ($script:HyperVOk) {
-        $vt = "Err"; $vx = "{0}  ·  見つかりません" -f $script:VmNameSel
-    } else {
-        $vt = "Err"; $vx = "Hyper-V が無効"
-    }
-    $script:chipVm.Tone = $vt
-    $script:chipVm.Text = $vx
-
-    $script:stSplit.Chip.Tone = $script:SplitTone
-    $script:stSplit.Chip.Text = $script:SplitShort
-    $script:stSplit.Label.Text = $(if ($script:lblCpu3.Text) { $script:lblCpu3.Text } else { "分割の設定はまだありません。Core Split で割り当てを決めて適用してください。" })
-    $script:stVm.Chip.Tone = $vt
-    $script:stVm.Chip.Text = $vx
-    $script:stVm.Label.Text = $script:lblVm.Text
-    $script:stWin.Chip.Tone = "Win"
-    $script:stWin.Chip.Text = "CPU $($script:VisibleLps) 論理"
-    $script:stWin.Label.Text = $script:lblCpu2.Text
-
-    $script:lblSysHv.Text = $(if ($script:HyperVOk) { "有効" } else { "無効 (Hyper-V を有効にして再起動してください)" })
-    $script:lblSysVmName.Text = $script:VmNameSel
-    $script:lblSysVm.Text = $script:lblVm.Text
-    $script:lblSysMem.Text = $(if ($script:MemTotalGB -gt 0) { "$($script:MemTotalGB) GB" } else { "(取得できません)" })
-    Update-HeaderLayout
 }
 
 # ============================================================
@@ -1390,34 +1047,8 @@ function Get-Selection {
     }
 }
 
+# 対象の Edge Box の状態 (Settings の「対象」に出す)
 function Update-Header {
-    $name = ""
-    try { $name = ((Get-CimInstance Win32_Processor | ForEach-Object { $_.Name.Trim() }) -join " / ") } catch { }
-    $t = "{0}  —  {1} コア / {2} スレッド" -f $name, $script:Cores.Count, $script:TotalLps
-    if ($script:Hybrid) {
-        $pC = @($script:Cores | Where-Object { $_.Kind -eq "P" }).Count
-        $eC = @($script:Cores | Where-Object { $_.Kind -eq "E" }).Count
-        $t += "  (P コア {0} + E コア {1})" -f $pC, $eC
-    }
-    $script:lblCpu1.Text = $t
-    # 仕組みの名前 (方式・固定の手段など) は画面に出さない。状態だけを出す
-    $mr = if ($script:UnderMinroot) { "Windows が使う CPU: $($script:VisibleLps) 論理 (分離が有効)" } else { "Windows が使う CPU: $($script:VisibleLps) 論理 (全部)" }
-    $fs = ""
-    # 状態表示の色と短い言葉 (ヘッダー・Home に出す。中身は下の文と同じ判定)
-    $script:SplitTone = "Muted"; $script:SplitShort = "分割 未設定"
-    if ($script:SavedCfg -and $script:SavedCfg.Mode -eq "full") {
-        $st = $null
-        try { $f = Join-Path $PSScriptRoot "cpu-full-status.json"; if (Test-Path $f) { $st = Get-Content $f -Raw -Encoding UTF8 | ConvertFrom-Json } } catch { }
-        if (-not $st) { $fs = "完全分離: 準備中 (再起動待ち)"; $script:SplitTone = "Warn"; $script:SplitShort = "完全分離  ·  再起動待ち" }
-        elseif ($st.Bound) { $fs = "完全分離: ○ 成立   Windows は CPU $($st.HostLps) に固定 / $($script:VmNameSel) は CPU $($st.GuestLps) に固定"; $script:SplitTone = "Ok"; $script:SplitShort = "完全分離  ·  成立" }
-        elseif (-not $st.MinrootOk) { $fs = "完全分離: △ 未成立 (再起動待ち)"; $script:SplitTone = "Warn"; $script:SplitShort = "完全分離  ·  再起動待ち" }
-        else { $fs = "完全分離: △ 未成立 (『Edge Box 再起動』で直ることがあります。『Edge Box 監視』で確認)"; $script:SplitTone = "Err"; $script:SplitShort = "完全分離  ·  未成立" }
-    } elseif ($script:SavedCfg -and $script:SavedCfg.Mode -eq "runtime") {
-        $fs = "簡易分離: 適用済み (Windows と $($script:VmNameSel) のプロセスをそれぞれのコアに固定)"
-        $script:SplitTone = "Ok"; $script:SplitShort = "簡易分離  ·  適用済み"
-    }
-    $script:lblCpu2.Text = $mr
-    $script:lblCpu3.Text = $fs
     if ($script:Vm) {
         $script:lblVm.Text = "状態: {0}    プロセッサ: {1}    メモリ: {2} GB{3}" -f $script:Vm.State, $script:Vcpu,
             $script:MemVmGB, $(if ($script:MemDynamic) { " (動的)" } else { "" })
@@ -1426,15 +1057,6 @@ function Update-Header {
     } else {
         $script:lblVm.Text = "Hyper-V が有効ではありません"
     }
-    try { Sync-StatusViews } catch { }   # 表示だけの更新
-}
-
-function Format-Side($Cores, [int[]]$Lps) {
-    $p = @($Cores | Where-Object { $_.Kind -eq "P" }).Count
-    $e = @($Cores | Where-Object { $_.Kind -eq "E" }).Count
-    $mix = ""
-    if ($script:Hybrid) { $mix = "  (P {0} / E {1})" -f $p, $e }
-    return "{0} コア / {1} スレッド{2}   CPU {3}" -f $Cores.Count, $Lps.Count, $mix, (ConvertTo-LpRangeText $Lps)
 }
 
 function Update-Validation {
@@ -1442,10 +1064,7 @@ function Update-Validation {
     $mode = "full"          # 方式は完全分離のみ
     $errors = @(); $warnings = @()
 
-    $hostCoreObjs  = @($script:Cores | Where-Object { $_.State -eq "Host" })
     $guestCoreObjs = @($script:Cores | Where-Object { $_.State -eq "Guest" })
-    $script:lblSumH.Text = "Windows : " + (Format-Side $hostCoreObjs $sel.HostLps)
-    $script:lblSumG.Text = "{0} : {1}" -f $script:VmNameSel, (Format-Side $guestCoreObjs $sel.GuestLps)
 
     # --- 環境そのものが整っていない ---
     if (-not $script:HyperVOk) {
@@ -1746,7 +1365,7 @@ $script:btnApply.Add_Click({
     if ($mode -eq "full" -and $pending) {
         $r2 = Show-Ask ("設定を書き込みました。`n`n" +
             "PC を再起動すると、Edge Box を割り当てたコアに固定してから起動します (以後、起動のたびに自動)。`n" +
-            "成立したかは、この画面の上部か『Edge Box 監視』の「分離の状態」で確認できます。`n`n" +
+            "成立したかは『Edge Box 監視』の「分離の状態」で確認できます。`n`n" +
             "今すぐ再起動しますか?") "CPU コア割り当て"
         if ($r2 -eq [System.Windows.Forms.DialogResult]::Yes) { Restart-Computer -Force }
         return
@@ -2296,10 +1915,10 @@ Sync-AllTiles
 Update-Header
 Sync-MemoryControl
 Update-SplitViews (Get-Selection)      # 検査結果は Shown で出す (下の Update-Validation)
-Show-Page "home"
+Show-Page "core"
 $form.Add_Shown({
     Update-Validation
-    try { Update-HeaderLayout; Update-CoreLayout } catch { }
+    try { Update-CoreLayout } catch { }
 })
 
 [void]$form.ShowDialog()

@@ -23,6 +23,11 @@ try {
     if ($LASTEXITCODE -ne 0) { throw '検証用 Git フォルダを作成できません。' }
     $initial = @(Get-PreviewIntegrationPlan $fixturePreview $fixtureSource)
     Assert-Preview (@($initial | Where-Object Changed).Count -eq 0) 'unchanged native designs must be a no-op'
+    # 本体と同じデザインなら、基準ハッシュも今の本体の範囲と一致する (取り込み後に基準の更新を忘れると、次の取り込みが止まる)
+    foreach ($e in $entries) {
+        $text = [IO.File]::ReadAllText((Join-Path $fixtureSource $e.targetFile), [Text.Encoding]::UTF8).Replace("`r`n", "`n")
+        Assert-Preview ((Get-PreviewHash (Get-PreviewRegion $text $e).Text) -eq $e.baselineHash) "baselineHash must match the current source region: $($e.designFile)"
+    }
 
     # 本体の機能部分だけが更新されていても、UI 部分が同じなら保持して取り込める。
     $entry = $entries | Where-Object designFile -eq 'host/views/display.view.ps1'

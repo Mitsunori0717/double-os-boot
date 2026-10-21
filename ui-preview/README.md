@@ -32,7 +32,7 @@
 | 画面 | 編集するファイル | 本体の取り込み先 |
 |---|---|---|
 | CPU の共通配色・フォント・ボタン・カード・ダイアログ | `cpu/cpu-ui-theme.ps1` | `windows-cpu-partition/cpu-ui-theme.ps1` |
-| CPU 割り当ての Home / Core Split / Settings / Log / System | `cpu/console-layout.ps1` | `windows-cpu-partition/cpu-console.ps1` の画面組み立て部分 |
+| CPU 割り当ての Core Split / Settings | `cpu/console-layout.ps1` | `windows-cpu-partition/cpu-console.ps1` の画面組み立て部分 |
 | 監視のグラフ・負荷・メモリ | `cpu/monitor-drawing.ps1`、`cpu/monitor-layout.ps1` | `windows-cpu-partition/cpu-monitor.ps1` の描画・配置部分 |
 | アプリ割り当て・コア選択・起動中アプリ・インストール済みアプリ選択 | `cpu/apps-layout.ps1`、`cpu/core-chooser-layout.ps1`、`cpu/process-picker-layout.ps1`、`cpu/installed-app-picker-layout.ps1` | `windows-cpu-partition/cpu-console.ps1` の各ダイアログ |
 | 左右モニター・全画面・解像度 | `host/views/display.view.ps1` | `windows-host/03-field-display-kiosk.ps1` の設定画面 |
