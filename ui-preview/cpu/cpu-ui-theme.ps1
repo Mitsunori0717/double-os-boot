@@ -121,6 +121,7 @@ namespace CoreUi
         // どちらも使えなければ標準の字体の太字に戻す。読み込んだ字体は画面を閉じるまで保持する。
         // 太字の無い字体 (Michroma など) は、文字を WordmarkBolden px (96 dpi 換算) 横にずらして重ね、縦の線を太くして描く
         public static Font Wordmark;
+        public static Image AppIcon;   // アプリ名の横のアイコン (images\app-icon.png。無ければ描いたロゴ)
         public static float WordmarkSpacing = 2.4f;
         public static float WordmarkBolden = 0f;
         static PrivateFontCollection wordmarkFonts;
@@ -915,14 +916,22 @@ namespace CoreUi
             g.Clear(Theme.BackOf(Parent));
             g.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
             g.SmoothingMode = SmoothingMode.AntiAlias;
-            const int mark = 26;
-            int x = 22, tx = x + mark + 12;
+            Image icon = Theme.AppIcon;
+            int mark = icon != null ? 34 : 26;
+            int x = icon != null ? 18 : 22, tx = x + mark + (icon != null ? 10 : 12);
             int lineH = (int)Math.Ceiling(WordFont.GetHeight(g)) + 4;
             List<string> lines = Lines(g, Math.Max(40, Width - tx - 14));
             int top = (Height - Math.Max(1, lines.Count) * lineH) / 2 + 2;
             for (int i = 0; i < lines.Count; i++) { Spaced(g, lines[i], Theme.Text, tx, top + i * lineH, true); }
             g.SmoothingMode = SmoothingMode.None;
-            Theme.DrawBrandMark(g, new Rectangle(x, (Height - mark) / 2, mark, mark));
+            Rectangle markRect = new Rectangle(x, (Height - mark) / 2, mark, mark);
+            if (icon != null) {
+                g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+                g.PixelOffsetMode = PixelOffsetMode.HighQuality;
+                g.DrawImage(icon, markRect);
+            } else {
+                Theme.DrawBrandMark(g, markRect);
+            }
             using (Pen p = new Pen(Theme.Border)) { g.DrawLine(p, 16, Height - 1, Width - 17, Height - 1); }
         }
     }
@@ -1784,6 +1793,16 @@ namespace CoreUi
 # アプリ名の字体 (同梱: fonts\Michroma-Regular.ttf。無ければ Eurostile か標準の字体で表示する)
 $uiWordmarkFile = Join-Path $PSScriptRoot "fonts\Michroma-Regular.ttf"
 try { [CoreUi.Theme]::LoadWordmark($(if (Test-Path -LiteralPath $uiWordmarkFile) { $uiWordmarkFile } else { "" })) } catch { }
+# アプリ名の横のアイコン。ファイルを開いたままにしないよう、読み込んだ内容から複製して持つ
+$uiAppIconFile = Join-Path $PSScriptRoot "images\app-icon.png"
+if (-not [CoreUi.Theme]::AppIcon -and (Test-Path -LiteralPath $uiAppIconFile)) {
+    try {
+        $uiIconStream = New-Object System.IO.MemoryStream(, [System.IO.File]::ReadAllBytes($uiAppIconFile))
+        $uiIconImage = [System.Drawing.Image]::FromStream($uiIconStream)
+        [CoreUi.Theme]::AppIcon = New-Object System.Drawing.Bitmap($uiIconImage)
+        $uiIconImage.Dispose(); $uiIconStream.Dispose()
+    } catch { }
+}
 
 # ============================================================
 #  PowerShell 側の小さな部品

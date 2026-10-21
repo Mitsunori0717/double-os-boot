@@ -3,7 +3,7 @@
   "repository": "https://github.com/Mitsunori0717/double-os-boot",
   "defaultBranchAtCreation": "claude/windows-linux-dual-boot-lwgj28",
   "updaterBranchAtCreation": "claude/windows-linux-dual-boot-lwgj28",
-  "baselineCommit": "c06dbab9d2da9147da8a2bbca9ee58d7c752a08a",
+  "baselineCommit": "c6e67f47d8d0b1e3f620079c3d7866aa13d71f9a",
   "runtime": "Windows PowerShell 5.1 / .NET Framework / Windows Forms",
   "integration": "Design files replace only the regions listed in cpu/manifest.json and host/manifest.json. SHA256 uses UTF-8 text with LF newlines, excluding BOM."
 }
