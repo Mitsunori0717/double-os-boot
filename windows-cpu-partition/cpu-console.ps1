@@ -86,11 +86,11 @@ function New-ConsoleIcon([string]$Path, [string]$Style = "console") {
     $g   = [System.Drawing.Graphics]::FromImage($bmp)
     $g.Clear([System.Drawing.Color]::Transparent)
 
-    # アイコン: 濃いパッケージ (画面の配色とは別)、Windows = 青 / Edge Box = 橙
+    # アイコン: 濃いパッケージ (画面の配色とは別)、Windows = 青 / Edge Box = 緑
     $body = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb(17, 24, 32))
     $pins = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb(138, 152, 168))
     $win  = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb(86, 180, 255))
-    $vm   = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb(242, 166, 90))
+    $vm   = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb(108, 200, 81))
 
     foreach ($i in 0..3) {                      # CPU の足
         $o = 62 + $i * 40

@@ -1795,7 +1795,7 @@ if ($Mode -eq "runtime") {
         Write-Host "  - Windows 側のプロセスは常駐が 3 秒ごとに CPU $hostText へ固定し直します (新しいプロセスも数秒で戻る)"
         Write-Host "  - 残るのは固定できない保護プロセスとカーネル・割り込みの分だけ (通常 1% 未満)。それも無くすには -Mode full"
     }
-    Write-Host "  - 効き具合の実測: .\cpu-partition.ps1 -Verify  / 常時の確認: 『Edge Box 監視』の区画ごとの色 (Windows 用に橙・Edge Box 用に青が載らないこと)" -ForegroundColor Cyan
+    Write-Host "  - 効き具合の実測: .\cpu-partition.ps1 -Verify  / 常時の確認: 『Edge Box 監視』の区画ごとの色 (Windows 用に緑・Edge Box 用に青が載らないこと)" -ForegroundColor Cyan
     exit 0
 }
 
@@ -1868,7 +1868,7 @@ if (-not $bcdReady) {
 
     Write-Host ""
     Write-Host "書き込みました。PC を再起動してください。再起動後は自動で完了します。" -ForegroundColor Green
-    Write-Host "  成立の確認: .\cpu-partition.ps1 (現状表示)。各コアの動きは『Edge Box 監視』の区画ごとの色 (Windows 用に橙・Edge Box 用に青が載らないこと)" -ForegroundColor Cyan
+    Write-Host "  成立の確認: .\cpu-partition.ps1 (現状表示)。各コアの動きは『Edge Box 監視』の区画ごとの色 (Windows 用に緑・Edge Box 用に青が載らないこと)" -ForegroundColor Cyan
     exit 0
 }
 
@@ -1901,4 +1901,4 @@ if ($bound) {
     Write-Host "  - 起動タスク '$BootTaskName' が 5 分ごとに固定を試し直します。Edge Box 停止中に効くこともあります"
 }
 Write-Host ""
-Write-Host "確認: 『Edge Box 監視』の区画ごとの色 (Windows 用に橙・Edge Box 用に青が載らないこと)、または .\cpu-partition.ps1 -Verify" -ForegroundColor Cyan
+Write-Host "確認: 『Edge Box 監視』の区画ごとの色 (Windows 用に緑・Edge Box 用に青が載らないこと)、または .\cpu-partition.ps1 -Verify" -ForegroundColor Cyan

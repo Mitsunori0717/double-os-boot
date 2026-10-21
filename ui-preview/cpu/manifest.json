@@ -5,7 +5,7 @@
       "targetFile": "windows-cpu-partition/cpu-ui-theme.ps1",
       "startMarker": null,
       "endMarker": null,
-      "baselineHash": "c07374f819bf0ce356321145b95606b57637dc959abe36b0d94419894f402cbb"
+      "baselineHash": "acb4d27be7d89250ff30e0413cb23f72c9e26ad7c816880069d5c3bcc336475e"
     },
     {
       "designFile": "cpu/console-layout.ps1",
@@ -19,7 +19,7 @@
       "targetFile": "windows-cpu-partition/cpu-monitor.ps1",
       "startMarker": "# ============================================================ 描画",
       "endMarker": "# ============================================================ ウィンドウ",
-      "baselineHash": "a83d8ef86be24311171f846a5e4a5ad09ee4985df3011f0647a6c22754a00080"
+      "baselineHash": "cb673bbdef9c0ebbd129669d6d418e045c0e4102befbd304e1dd7575680eb456"
     },
     {
       "designFile": "cpu/monitor-layout.ps1",

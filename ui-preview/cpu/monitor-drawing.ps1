@@ -1,6 +1,6 @@
 ﻿
 
-# 色: 青 = Windows / 橙 = Edge Box / 明るい灰 = ハイパーバイザー内部。背景は灰色 (#616061)。
+# 色: 青 = Windows / 緑 = Edge Box / 明るい灰 = ハイパーバイザー内部。背景は灰色 (#616061)。
 # 棒の空き部分は背景より一段濃くし、ハイパーバイザー内部 (明るい灰) と見分けられるようにする
 $ColWin  = [CoreUi.Theme]::Win
 $ColVm   = [CoreUi.Theme]::Edge
@@ -15,7 +15,7 @@ $BrVmBar  = New-Object System.Drawing.SolidBrush ([CoreUi.Theme]::Mix([CoreUi.Th
 $BrFree  = New-Object System.Drawing.SolidBrush $ColFree
 $BrText  = New-Object System.Drawing.SolidBrush ([CoreUi.Theme]::Text)
 $BrGray  = New-Object System.Drawing.SolidBrush ([CoreUi.Theme]::SubText)
-# P / E の印は明るさで分ける (橙・青は Windows / Edge Box の色なので使わない)
+# P / E の印は明るさで分ける (緑・青は Windows / Edge Box の色なので使わない)
 $BrP     = New-Object System.Drawing.SolidBrush ([CoreUi.Theme]::Text)                            # P コアの印
 $BrE     = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb(224, 224, 224))   # E コアの印
 $BrBad   = New-Object System.Drawing.SolidBrush ([CoreUi.Theme]::ErrText)                         # 混ざっている印 (文字)
@@ -68,7 +68,7 @@ function Draw-LpGrid($g, [int]$x, [int]$y, [int]$w, [int]$h, [string]$title, $on
     $lps = @(Get-LpList)
     if ($only) { $lps = @($lps | Where-Object { $only -contains $_.Lp }) }
     if ($title) {
-        # 区画の見出し: 左に区画の色の印 (青 = Windows 用 / 橙 = Edge Box 用)
+        # 区画の見出し: 左に区画の色の印 (青 = Windows 用 / 緑 = Edge Box 用)
         $mark = if ($side -eq "host") { $BrWin } elseif ($side -eq "guest") { $BrVm } else { $BrGray }
         $g.FillRectangle($mark, (Rect $x ($y + 4) 3 12))
         $g.DrawString($title, $FontTitle, $BrText, (PointF ($x + 9) $y))
@@ -93,7 +93,7 @@ function Draw-LpGrid($g, [int]$x, [int]$y, [int]$w, [int]$h, [string]$title, $on
         $g.DrawString(("CPU {0}" -f $e.Lp), $FontNum, $BrText, (PointF ($sx + 2) $sy))
         $brKind = if ($e.Kind -eq "P") { $BrP } elseif ($e.Kind -eq "E") { $BrE } else { $BrGray }
         $g.DrawString($e.Core, $FontSmall, $brKind, (PointF ($sx + 3) ($sy + 16)))
-        # 縦棒 (枠の色 = 割り当ての計画: 青 = Windows 用 / 橙 = Edge Box 用)
+        # 縦棒 (枠の色 = 割り当ての計画: 青 = Windows 用 / 緑 = Edge Box 用)
         $barTop = $sy + 33
         $barH = $rowH - 33 - 20
         if ($barH -lt 12) { $barH = 12 }

@@ -30,7 +30,7 @@
       "targetFile": "windows-host/08-settings-console.ps1",
       "startMarker": "# --- 見た目: 『CPU割り当て』と同じ配色 (このフォルダだけで完結させるため、ここで直接指定する) ---\n",
       "endMarker": "if ($form.ShowDialog() -ne \"OK\") { exit 0 }",
-      "baselineHash": "5585f7a08ca2f4a33cfae1d1876a55779c0acace82a3deecbad7cac982f14538"
+      "baselineHash": "cfd7bf409ade167da368eb68b1c7aa3d28ecc77feae12b63690672749fe10eab"
     }
   ]
 }
