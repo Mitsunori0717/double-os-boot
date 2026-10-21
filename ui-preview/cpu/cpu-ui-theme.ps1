@@ -1872,6 +1872,17 @@ function Show-UiMessage([string]$Text, [string]$Caption, [string]$Buttons = "OK"
 # デスクトップのアイコン (cpu-console.ps1 -Setup) と同じ濃い色の本体にする (画面の配色とは別)
 function Get-UiAppIcon([string]$Style = "console") {
     try {
+        if ($Style -eq "console" -and [CoreUi.Theme]::AppIcon) {
+            # アプリのアイコン (images\app-icon.png) をタイトルバー・タスクバー用の大きさにして使う
+            $big = New-Object System.Drawing.Bitmap 48, 48
+            $gb = [System.Drawing.Graphics]::FromImage($big)
+            $gb.Clear([System.Drawing.Color]::Transparent)
+            $gb.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+            $gb.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality
+            $gb.DrawImage([CoreUi.Theme]::AppIcon, 0, 0, 48, 48)
+            $gb.Dispose()
+            return [System.Drawing.Icon]::FromHandle($big.GetHicon())
+        }
         $bmp = New-Object System.Drawing.Bitmap 32, 32
         $g = [System.Drawing.Graphics]::FromImage($bmp)
         $g.Clear([System.Drawing.Color]::Transparent)
