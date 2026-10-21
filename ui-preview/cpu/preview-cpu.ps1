@@ -9,7 +9,9 @@ param(
     [ValidateSet('Console','Monitor','Apps','CoreChooser','Processes','InstalledApps')]
     [string]$Screen = 'Console',
     [switch]$SmokeTest,
-    [string]$ScreenshotDirectory
+    [string]$ScreenshotDirectory,
+    # viewer.ps1 dot-sources this file for its fixtures and Show-* functions only.
+    [switch]$LoadOnly
 )
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Windows.Forms
@@ -81,6 +83,9 @@ function Save-PreviewImage($Window,[string]$Name) {
 }
 function Show-PreviewWindow($Window,[string]$Name) {
     $Window.Text = 'Edge Box プレビュー | ' + $Window.Text
+    # In the all-in-one viewer, the first window of a screen is embedded instead of opened.
+    # Windows opened from it (monitor, dialogs) stay ordinary modal windows.
+    if ($script:ViewerEmbedNext) { $script:ViewerEmbedNext = $false; return (Invoke-ViewerEmbed $Window) }
     if ($SmokeTest) {
         $Window.StartPosition = 'Manual'
         $Window.Location = New-Object System.Drawing.Point -30000,-30000
@@ -235,55 +240,61 @@ function Show-PreviewMonitor {
     }
 }
 
+function Show-PreviewConsole {
+    try {
+        . (Join-Path $script:PreviewRoot 'console-layout.ps1')
+        $form.Text='Edge Box プレビュー | CPU コア割り当て'
+        # Override the copied log presentation's real file reader before page navigation.
+        function Update-LogView {
+            $script:btnLogCpu.Selected=($script:LogKind -ne 'apps');$script:btnLogApps.Selected=($script:LogKind -eq 'apps')
+            $grpLog.Meta='プレビュー用のサンプル';$script:lblLogInfo.Text='サンプル 3 行'
+            $script:rtbLog.Text="2026-01-01 09:00:00  Edge Box の画面プレビューを開始しました。`r`n2026-01-01 09:00:01  サンプルの CPU とメモリを表示しました。`r`n2026-01-01 09:00:02  実機の設定は変更されません。"
+        }
+        $script:chipSplit.Text='完全分離 · 成立';$script:chipSplit.Tone='Ok'
+        $script:chipVm.Text='Edge Box · Running';$script:chipVm.Tone='Ok'
+        Update-HeaderLayout
+        $script:stSplit.Chip.Text='完全分離 · 成立';$script:stSplit.Chip.Tone='Ok'
+        $script:stSplit.Label.Text='Windows と Edge Box のコアを分離しています (サンプル)。'
+        $script:stVm.Chip.Text='Running';$script:stVm.Chip.Tone='Ok';$script:stVm.Label.Text='8 プロセッサ / 8 GB'
+        $script:stWin.Chip.Text='CPU 20 論理';$script:stWin.Chip.Tone='Win';$script:stWin.Label.Text='P コア 8 + E コア 4'
+        $script:lblCpu1.Text='サンプル CPU — P コア 8 + E コア 12 / 28 スレッド'
+        $script:lblCpu2.Text='Windows が使う CPU: 20 論理';$script:lblCpu3.Text='完全分離: ○ 成立 (サンプル)'
+        $script:lblVm.Text='状態: Running    プロセッサ: 8    メモリ: 8 GB'
+        $script:lblSysHv.Text='有効 (サンプル)';$script:lblSysVmName.Text='EdgeBox';$script:lblSysVm.Text=$script:lblVm.Text;$script:lblSysMem.Text='32 GB'
+        $script:lblMemPc.Text='この PC のメモリ: 32 GB';$script:lblMemVm.Text='Edge Box に:'
+        $script:lblMemHost.Text='→ Windows に残る: 24 GB';$script:lblMemNote.Text='現在の設定: 8 GB (サンプル)';$script:memBar.SetValues(32,8)
+        $script:lblApps.Text='登録: 3 件 (プレビュー)'
+        $script:btnMon.Add_Click({Show-PreviewMonitor})
+        $script:btnApps.Add_Click({Show-AppsDialog})
+        $script:btnApply.Add_Click({Show-Info 'この内容をプレビュー内で確認しました。'})
+        $script:btnUndo.Add_Click({foreach($c in $script:Cores){$c.State='Host'};Sync-AllTiles;Update-PreviewConsole})
+        $script:btnMem.Add_Click({$script:memBar.SetValues(32,[double]$script:numMem.Value);$script:lblMemHost.Text='→ Windows に残る: '+(32-[int]$script:numMem.Value)+' GB (プレビュー)'})
+        Sync-AllTiles
+        Update-PreviewConsole
+        Show-Page 'home'
+        if($SmokeTest){
+            $form.StartPosition='Manual';$form.Location=New-Object System.Drawing.Point -30000,-30000;$form.ShowInTaskbar=$false
+            $form.Show();[System.Windows.Forms.Application]::DoEvents()
+            foreach($key in @('home','core','settings','log','system')){Show-Page $key;Update-CoreLayout;Update-HeaderLayout;Save-PreviewImage $form ('cpu-console-'+$key)}
+            Show-Page 'core'
+            [System.Windows.Forms.Application]::DoEvents()
+            $script:Tiles[12].PerformClick()
+            if($script:Cores[12].State -ne 'None'){throw 'Core tile interaction failed'}
+            if($script:cmbVm.Items.Count -ne 1){throw 'VM fixture was not used'}
+            Show-Page 'core';Save-PreviewImage $form 'cpu-console-core-edited'
+            $script:btnMon.PerformClick()
+            Show-Page 'settings'
+            [System.Windows.Forms.Application]::DoEvents()
+            $script:btnApps.PerformClick()
+            $form.Close()
+        }else{[void](Show-PreviewWindow $form 'cpu-console-home')}
+    } finally { if($form){$form.Dispose()} }
+}
+
+if ($LoadOnly) { return }
 try {
     switch ($Screen) {
-        'Console' {
-            . (Join-Path $PSScriptRoot 'console-layout.ps1')
-            $form.Text='Edge Box プレビュー | CPU コア割り当て'
-            # Override the copied log presentation's real file reader before page navigation.
-            function Update-LogView {
-                $script:btnLogCpu.Selected=($script:LogKind -ne 'apps');$script:btnLogApps.Selected=($script:LogKind -eq 'apps')
-                $grpLog.Meta='プレビュー用のサンプル';$script:lblLogInfo.Text='サンプル 3 行'
-                $script:rtbLog.Text="2026-01-01 09:00:00  Edge Box の画面プレビューを開始しました。`r`n2026-01-01 09:00:01  サンプルの CPU とメモリを表示しました。`r`n2026-01-01 09:00:02  実機の設定は変更されません。"
-            }
-            $script:chipSplit.Text='完全分離 · 成立';$script:chipSplit.Tone='Ok'
-            $script:chipVm.Text='Edge Box · Running';$script:chipVm.Tone='Ok'
-            $script:stSplit.Chip.Text='完全分離 · 成立';$script:stSplit.Chip.Tone='Ok'
-            $script:stSplit.Label.Text='Windows と Edge Box のコアを分離しています (サンプル)。'
-            $script:stVm.Chip.Text='Running';$script:stVm.Chip.Tone='Ok';$script:stVm.Label.Text='8 プロセッサ / 8 GB'
-            $script:stWin.Chip.Text='CPU 20 論理';$script:stWin.Chip.Tone='Win';$script:stWin.Label.Text='P コア 8 + E コア 4'
-            $script:lblCpu1.Text='サンプル CPU — P コア 8 + E コア 12 / 28 スレッド'
-            $script:lblCpu2.Text='Windows が使う CPU: 20 論理';$script:lblCpu3.Text='完全分離: ○ 成立 (サンプル)'
-            $script:lblVm.Text='状態: Running    プロセッサ: 8    メモリ: 8 GB'
-            $script:lblSysHv.Text='有効 (サンプル)';$script:lblSysVmName.Text='EdgeBox';$script:lblSysVm.Text=$script:lblVm.Text;$script:lblSysMem.Text='32 GB'
-            $script:lblMemPc.Text='この PC のメモリ: 32 GB';$script:lblMemVm.Text='Edge Box に:'
-            $script:lblMemHost.Text='→ Windows に残る: 24 GB';$script:lblMemNote.Text='現在の設定: 8 GB (サンプル)';$script:memBar.SetValues(32,8)
-            $script:lblApps.Text='登録: 3 件 (プレビュー)'
-            $script:btnMon.Add_Click({Show-PreviewMonitor})
-            $script:btnApps.Add_Click({Show-AppsDialog})
-            $script:btnApply.Add_Click({Show-Info 'この内容をプレビュー内で確認しました。'})
-            $script:btnUndo.Add_Click({foreach($c in $script:Cores){$c.State='Host'};Sync-AllTiles;Update-PreviewConsole})
-            $script:btnMem.Add_Click({$script:memBar.SetValues(32,[double]$script:numMem.Value);$script:lblMemHost.Text='→ Windows に残る: '+(32-[int]$script:numMem.Value)+' GB (プレビュー)'})
-            Sync-AllTiles
-            Update-PreviewConsole
-            Show-Page 'home'
-            if($SmokeTest){
-                $form.StartPosition='Manual';$form.Location=New-Object System.Drawing.Point -30000,-30000;$form.ShowInTaskbar=$false
-                $form.Show();[System.Windows.Forms.Application]::DoEvents()
-                foreach($key in @('home','core','settings','log','system')){Show-Page $key;Update-CoreLayout;Update-HeaderLayout;Save-PreviewImage $form ('cpu-console-'+$key)}
-                Show-Page 'core'
-                [System.Windows.Forms.Application]::DoEvents()
-                $script:Tiles[12].PerformClick()
-                if($script:Cores[12].State -ne 'None'){throw 'Core tile interaction failed'}
-                if($script:cmbVm.Items.Count -ne 1){throw 'VM fixture was not used'}
-                Show-Page 'core';Save-PreviewImage $form 'cpu-console-core-edited'
-                $script:btnMon.PerformClick()
-                Show-Page 'settings'
-                [System.Windows.Forms.Application]::DoEvents()
-                $script:btnApps.PerformClick()
-                $form.Close()
-            }else{[void](Show-PreviewWindow $form 'cpu-console-home')}
-        }
+        'Console' { Show-PreviewConsole }
         'Monitor' { Show-PreviewMonitor }
         'Apps' { Show-AppsDialog }
         'CoreChooser' { [void](Show-CoreChooser @(0..7) 'コアの選択 - サンプル ブラウザー' @(20..27)) }

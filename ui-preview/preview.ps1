@@ -1,8 +1,18 @@
 ﻿#requires -Version 5.1
+<#
+.SYNOPSIS
+    Edge Box の UI プレビューを開きます (start.cmd から起動)。
+.DESCRIPTION
+    全画面を 1 つのウィンドウ (viewer.ps1) で表示し、左の一覧ですぐに切り替えます。
+    このスクリプトはプレビューのファイルを見張り、保存されたら同じ画面と位置で開き直します。
+    -SmokeTest は画面ごとの検証と、まとめ表示の検証を行います (verify.ps1 から使用)。
+.EXAMPLE
+    powershell -NoProfile -STA -ExecutionPolicy Bypass -File .\preview.ps1 -Screen Monitor
+#>
 [CmdletBinding()]
 param(
-    [ValidateSet('Gallery', 'Console', 'Monitor', 'Apps', 'Display', 'AutoLogon', 'Settings')]
-    [string]$Screen = 'Gallery',
+    [ValidateSet('All', 'Console', 'Monitor', 'Apps', 'CoreChooser', 'Processes', 'InstalledApps', 'Display', 'AutoLogon', 'Settings')]
+    [string]$Screen = 'All',
     [switch]$SmokeTest,
     [string]$ScreenshotDirectory = ''
 )
@@ -10,7 +20,7 @@ $ErrorActionPreference = 'Stop'
 $powershell = Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.exe'
 
 function Start-PreviewScreen([string]$Name, [switch]$WaitForExit, [switch]$Test) {
-    $runner = if ($Name -in @('Console', 'Monitor', 'Apps')) { 'cpu\preview-cpu.ps1' } else { 'host\preview-host.ps1' }
+    $runner = if ($Name -in @('Display', 'AutoLogon', 'Settings')) { 'host\preview-host.ps1' } else { 'cpu\preview-cpu.ps1' }
     $path = Join-Path $PSScriptRoot $runner
     $arguments = '-NoProfile -STA -ExecutionPolicy Bypass -File "{0}" -Screen {1}' -f $path, $Name
     if ($Test) { $arguments += ' -SmokeTest' }
@@ -23,52 +33,62 @@ function Start-PreviewScreen([string]$Name, [switch]$WaitForExit, [switch]$Test)
 }
 
 if ($SmokeTest) {
-    $screens = if ($Screen -eq 'Gallery') { @('Console', 'Monitor', 'Apps', 'Display', 'AutoLogon', 'Settings') } else { @($Screen) }
+    $screens = if ($Screen -eq 'All') { @('Console', 'Monitor', 'Apps', 'Display', 'AutoLogon', 'Settings') } else { @($Screen) }
     foreach ($name in $screens) { Start-PreviewScreen $name -WaitForExit -Test; Write-Host "PASS: $name" }
+    if ($Screen -eq 'All') {
+        # まとめ表示: 全画面を 1 つのウィンドウへ順に埋め込み、切り替えでエラーが出ないことを確認
+        $arguments = '-NoProfile -STA -ExecutionPolicy Bypass -File "{0}" -SelfTest' -f (Join-Path $PSScriptRoot 'viewer.ps1')
+        $process = Start-Process -FilePath $powershell -ArgumentList $arguments -WindowStyle Hidden -PassThru
+        $process.WaitForExit()
+        if ($process.ExitCode -ne 0) { throw "まとめ表示の検証に失敗しました (exit $($process.ExitCode))" }
+        Write-Host 'PASS: Viewer'
+    }
     return
 }
-if ($Screen -ne 'Gallery') { Start-PreviewScreen $Screen -WaitForExit; return }
 
-Add-Type -AssemblyName System.Windows.Forms
-Add-Type -AssemblyName System.Drawing
-[Windows.Forms.Application]::EnableVisualStyles()
-$form = New-Object Windows.Forms.Form
-$form.Text = 'Edge Box — UI デザインプレビュー'
-$form.ClientSize = New-Object Drawing.Size(620, 520)
-$form.StartPosition = 'CenterScreen'
-$form.FormBorderStyle = 'FixedDialog'
-$form.MaximizeBox = $false
-$form.Font = New-Object Drawing.Font('Meiryo UI', 10)
-$form.BackColor = [Drawing.Color]::FromArgb(244, 246, 248)
-$title = New-Object Windows.Forms.Label
-$title.Text = 'Edge Box  デザインプレビュー'
-$title.Font = New-Object Drawing.Font('Meiryo UI', 17, [Drawing.FontStyle]::Bold)
-$title.SetBounds(28, 24, 570, 40)
-$form.Controls.Add($title)
-$note = New-Object Windows.Forms.Label
-$note.Text = 'サンプルデータで画面を確認します。編集したデザインは、各画面を閉じて開き直すと反映されます。'
-$note.SetBounds(30, 76, 550, 52)
-$form.Controls.Add($note)
-$definitions = @(
-    @('Console', 'CPU 割り当て', 'Home / Core Split / Settings / Log / System'),
-    @('Monitor', 'Edge Box 監視', 'コアの負荷・メモリの表示'),
-    @('Apps', 'アプリの割り当て', 'アプリ一覧・コア選択'),
-    @('Display', '画面表示の設定', '左右モニター・全画面・コンソール解像度'),
-    @('AutoLogon', '自動サインイン', '有効 / 無効・サンプルアカウント'),
-    @('Settings', '設定', '設定アイコンから開くサインイン画面')
-)
-$y = 140
-foreach ($definition in $definitions) {
-    $button = New-Object Windows.Forms.Button
-    $button.Text = $definition[1]
-    $button.Tag = $definition[0]
-    $button.SetBounds(30, $y, 190, 44)
-    $button.Add_Click({ param($sender, $eventArgs) Start-PreviewScreen ([string]$sender.Tag) })
-    $label = New-Object Windows.Forms.Label
-    $label.Text = $definition[2]
-    $label.SetBounds(234, ($y + 11), 360, 30)
-    $form.Controls.AddRange(@($button, $label))
-    $y += 56
+# プレビューのソースが保存されたかを、名前・大きさ・更新日時で判定する (生成物のフォルダは除く)
+function Get-PreviewStamp {
+    $root = [IO.Path]::GetFullPath($PSScriptRoot).TrimEnd('\') + '\'
+    $files = Get-ChildItem -LiteralPath $PSScriptRoot -Recurse -File -ErrorAction SilentlyContinue | Where-Object {
+        $_.Extension -in @('.ps1', '.json') -and
+        $_.FullName.Substring($root.Length) -notmatch '^(backups|screenshots|output|logs)\\'
+    }
+    return (@($files | ForEach-Object { '{0}|{1}|{2}' -f $_.FullName, $_.Length, $_.LastWriteTimeUtc.Ticks }) -join "`n")
 }
-[void]$form.ShowDialog()
-$form.Dispose()
+
+$viewer = Join-Path $PSScriptRoot 'viewer.ps1'
+$state = Join-Path ([IO.Path]::GetTempPath()) ('EdgeBox-UI-Preview-' + $PID + '.json')
+$start = if ($Screen -eq 'All') { 'Console' } else { $Screen }
+Write-Host 'Edge Box UI プレビュー'
+Write-Host '  左の一覧をクリック (または Ctrl+PgUp / PgDn) で画面を切り替えます。'
+Write-Host '  プレビューのファイルを保存すると、同じ画面のまま自動で開き直します。'
+Write-Host '  この黒いウィンドウを閉じると、プレビューも終了します。'
+try {
+    while ($true) {
+        $stamp = Get-PreviewStamp
+        $arguments = '-NoProfile -STA -ExecutionPolicy Bypass -File "{0}" -Start {1} -StateFile "{2}"' -f $viewer, $start, $state
+        $process = Start-Process -FilePath $powershell -ArgumentList $arguments -NoNewWindow -PassThru
+        $null = $process.Handle   # Windows PowerShell 5.1 で終了後に ExitCode を読むため
+        $changed = $false
+        while (-not $process.WaitForExit(700)) {
+            if ((Get-PreviewStamp) -ne $stamp) {
+                Start-Sleep -Milliseconds 600   # 保存の途中で読み込まないよう、書き込みが終わるのを待つ
+                Write-Host '変更を検出しました。開き直します...'
+                Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+                $process.WaitForExit()
+                $changed = $true
+                break
+            }
+        }
+        if ($changed) { continue }
+        if ($process.ExitCode -eq 0) { break }
+        if ($process.ExitCode -eq 10) { Write-Host '開き直しています...'; continue }
+        Write-Host ''
+        Write-Host "プレビューを表示できませんでした (exit $($process.ExitCode))。上のメッセージを確認してください。" -ForegroundColor Yellow
+        Write-Host 'ファイルを直して保存すると、自動で開き直します。' -ForegroundColor Yellow
+        while ((Get-PreviewStamp) -eq $stamp) { Start-Sleep -Milliseconds 700 }
+        Start-Sleep -Milliseconds 600
+    }
+} finally {
+    Remove-Item -LiteralPath $state -ErrorAction SilentlyContinue
+}

@@ -1,6 +1,6 @@
 # Edge Box の CPU 画面プレビュー
 
-このフォルダだけで Windows PowerShell 5.1 の標準 WinForms を使って起動できます。管理者権限、Hyper-V、Edge Box のインストール、追加ツールは不要です。親フォルダの `start.cmd` からも選択できます。
+このフォルダだけで Windows PowerShell 5.1 の標準 WinForms を使って起動できます。管理者権限、Hyper-V、Edge Box のインストール、追加ツールは不要です。親フォルダの `start.cmd` では、全画面を 1 つのウィンドウで切り替えて確認できます。
 
 ```powershell
 powershell -NoProfile -Sta -ExecutionPolicy Bypass -File .\preview-cpu.ps1 -Screen Console
