@@ -56,7 +56,7 @@ Restart-Computer                                                          # 再�
   実行中の確認では固定済みのグループに触りません (ほどくと固定が外れる瞬間ができるため)。
   `windows-host` の起動・再起動スクリプトは、Edge Box を起動する前にこの固定を先に行います
 - Edge Box の自動起動は起動タスクに任せます (`-Undo` で元の自動起動設定に戻す)
-- 成立状態は `cpu-full-status.json` に書かれ、設定コンソールの上部と『Edge Box 監視』に出ます
+- 成立状態は `cpu-full-status.json` に書かれ、『Edge Box 監視』に出ます
 
 **制約 (正直な列挙)**:
 - スケジューラ変更はクライアント版 Windows では **Microsoft 公式サポート外**の構成です
@@ -115,7 +115,7 @@ Restart-Computer                                                          # 再�
 | 画面 (左メニュー) | 内容 |
 |---|---|
 | **Core Split** (開いたときの画面) | コアのタイル (1 物理コア = 1 枚)、検査結果 |
-| **Settings** | 対象の登録名と Edge Box の状態、メモリの割り当て、アプリの割り当て |
+| **Settings** | 登録名と Edge Box の状態、メモリの割り当て、アプリの割り当て |
 
 分離が成立しているかは『Edge Box 監視』([リアルタイム監視]) で確認できます。記録は `cpu-partition-log.txt` / `cpu-apps-log.txt` に残ります。
 
@@ -145,7 +145,7 @@ Restart-Computer                                                          # 再�
 
 ### アプリの割り当て — Windows 側のアプリを決めたコアで動かす
 
-画面下の **[アプリの割り当てを編集...]** から、アプリ単位でコアを指定できます
+Settings の「アプリの割り当て」にある **[編集]** から、アプリ単位でコアを指定できます
 ([インストール済みから追加...] / [実行中から追加...] / [ファイルから追加...])。
 
 - コアの選択肢は **Windows 用のコアだけ** (Edge Box 用は表示されず、古い登録に含まれていても適用時に外されます)
@@ -281,7 +281,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\cpu-console.ps1        # �
 | `cpu-partition.json` | 適用済みの分割計画 (自動タスクが参照。対象の登録名も含む) |
 | `cpu-topology.json` | 検出したコア構成の控え (minroot でコアが見えなくなったとき表示に使う) |
 | `cpu-partition-log.txt` | 適用・起動タスク・常駐の記録 (直近 200 行) |
-| `cpu-full-status.json` | full モードの成立状態 (起動タスクが書く。設定コンソール・監視画面が読む) |
+| `cpu-full-status.json` | full モードの成立状態 (起動タスクが書く。監視画面が読む) |
 | `cpu-contain-status.json` | runtime の締め出し (常駐) の状態 (監視画面が読む) |
 | `cpu-apps.json` / `cpu-apps-log.txt` | アプリのコア割り当てと記録 |
 | `tools\CpuGroups.exe` | full モード用の Microsoft 公式ツール (適用時に自動取得) |

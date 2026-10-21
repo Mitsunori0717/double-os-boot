@@ -45,7 +45,7 @@ powershell -NoProfile -Sta -ExecutionPolicy Bypass -File .\preview-cpu.ps1 -Scre
 powershell -NoProfile -Sta -ExecutionPolicy Bypass -File .\preview-cpu.ps1 -Screen Monitor -SmokeTest -ScreenshotDirectory "$env:TEMP\EdgeBoxPreview"
 ```
 
-`-SmokeTest` は画面を画面外で描画して自動で閉じます。Console では全 5 ページとコアのクリックを確認します。任意の `-ScreenshotDirectory` を指定した場合だけ PNG をその場所に保存します。実機の再起動や VM の終了は行いません。その他の画面も `-Screen` を変えて確認できます。
+`-SmokeTest` は画面を画面外で描画して自動で閉じます。Console では 2 ページ (Core Split / Settings) とコアのクリックを確認します。任意の `-ScreenshotDirectory` を指定した場合だけ PNG をその場所に保存します。実機の再起動や VM の終了は行いません。その他の画面も `-Screen` を変えて確認できます。
 
 ## 最後に本番へ統合する
 

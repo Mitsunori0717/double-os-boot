@@ -255,7 +255,7 @@ function Show-PreviewConsole {
             [System.Windows.Forms.Application]::DoEvents()
             $script:btnApps.PerformClick()
             $form.Close()
-        }else{[void](Show-PreviewWindow $form 'cpu-console-home')}
+        }else{[void](Show-PreviewWindow $form 'cpu-console-core')}
     } finally { if($form){$form.Dispose()} }
 }
 

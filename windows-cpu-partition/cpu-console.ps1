@@ -1365,7 +1365,7 @@ $script:btnApply.Add_Click({
     if ($mode -eq "full" -and $pending) {
         $r2 = Show-Ask ("設定を書き込みました。`n`n" +
             "PC を再起動すると、Edge Box を割り当てたコアに固定してから起動します (以後、起動のたびに自動)。`n" +
-            "成立したかは、この画面の上部か『Edge Box 監視』の「分離の状態」で確認できます。`n`n" +
+            "成立したかは『Edge Box 監視』の「分離の状態」で確認できます。`n`n" +
             "今すぐ再起動しますか?") "CPU コア割り当て"
         if ($r2 -eq [System.Windows.Forms.DialogResult]::Yes) { Restart-Computer -Force }
         return
