@@ -23,7 +23,7 @@ Windows 11 (ネイティブ動作 = 業務はフルスピード)
 
 ## UI デザインを調整する
 
-[ui-preview/](ui-preview/README.md) だけをダウンロード・コピーし、`start.cmd` を開くと各設定画面を確認できます。
+[ui-preview/](ui-preview/README.md) だけをダウンロード・コピーし、`start.cmd` を開くと全設定画面を 1 つのウィンドウで切り替えて確認できます。`update.cmd` でプレビューだけを最新版にできます。
 CPU 分割やメモリなどの実設定を変更せず、表示だけを編集・調整できます。
 Claude 向けの [CLAUDE.md](ui-preview/CLAUDE.md)、編集・統合手順、デザイン部分だけを本体ソースへ取り込むツールを同梱しています。
 

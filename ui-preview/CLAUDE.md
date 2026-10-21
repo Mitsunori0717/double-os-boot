@@ -4,11 +4,11 @@
 
 ## 先に理解すること
 
-これは Web サイトではなく、Windows PowerShell 5.1 + Windows Forms のネイティブ UI です。HTML/CSS への置き換えは必要ありません。`start.cmd` が一覧、`preview.ps1` が各画面への入口です。各プレビューは本体を実行せず、サンプルだけを使います。
+これは Web サイトではなく、Windows PowerShell 5.1 + Windows Forms のネイティブ UI です。HTML/CSS への置き換えは必要ありません。`start.cmd` → `preview.ps1` が全画面を 1 つのウィンドウ (`viewer.ps1`) に表示し、ファイルの保存を検知して自動で開き直します。各プレビューは本体を実行せず、サンプルだけを使います。`update.cmd` はこのフォルダを GitHub の最新版に更新します (変更前のファイルは `backups` へ保存)。
 
 `cpu/cpu-ui-theme.ps1` は本体と同じ C# 描画部品です。C# 5 / Windows PowerShell 5.1 の Add-Type でコンパイル可能な書き方を保ってください。CPU の配置、小画面、監視の描画は cpu/*-layout.ps1 / monitor-drawing.ps1、ホストの設定 UI は host/views/*.view.ps1 を編集します。
 
-`cpu/preview-cpu.ps1` と `host/preview-host.ps1` はサンプル供給と安全な操作を担当します。ここだけを変えても本体のデザインには反映されません。manifest の designFile にあるファイルを編集してください。共通テーマだけではホスト画面の色は変わりません。
+`cpu/preview-cpu.ps1` と `host/preview-host.ps1` はサンプル供給と安全な操作を担当します。`viewer.ps1` はそれらを `-LoadOnly` で読み込み、ShowDialog の代わりにウィンドウを埋め込みます。ここだけを変えても本体のデザインには反映されません。manifest の designFile にあるファイルを編集してください。共通テーマだけではホスト画面の色は変わりません。
 
 ## 本体へ戻す方法
 

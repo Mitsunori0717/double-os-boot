@@ -15,7 +15,9 @@ param(
     [ValidateSet('Display', 'AutoLogon', 'Settings', 'All')]
     [string]$Screen = 'All',
     [switch]$SmokeTest,
-    [string]$ScreenshotDirectory
+    [string]$ScreenshotDirectory,
+    # viewer.ps1 dot-sources this file for Invoke-HostPreview only.
+    [switch]$LoadOnly
 )
 $ErrorActionPreference = 'Stop'
 if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) { throw 'Windows で実行してください。' }
@@ -107,6 +109,10 @@ function Invoke-HostPreview([string]$Name) {
             $form.DialogResult = [System.Windows.Forms.DialogResult]::None
             Invoke-PreviewClick $btnCancel
             [pscustomobject]@{ Screen = $Name; Controls = $count; Result = 'PASS' }
+        } elseif ($script:ViewerEmbedNext) {
+            # The all-in-one viewer shows this form inside its own window.
+            $script:ViewerEmbedNext = $false
+            [void](Invoke-ViewerEmbed $form)
         } else {
             [void]$form.ShowDialog()
         }
@@ -115,5 +121,6 @@ function Invoke-HostPreview([string]$Name) {
     }
 }
 
+if ($LoadOnly) { return }
 $screens = if ($Screen -eq 'All') { @('Settings', 'Display', 'AutoLogon') } else { @($Screen) }
 foreach ($name in $screens) { Invoke-HostPreview $name }

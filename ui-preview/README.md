@@ -6,9 +6,24 @@
 
 1. GitHub の **Code → Download ZIP** から取得して展開します。
 2. `ui-preview` フォルダを好きな作業場所へコピーします。このフォルダだけで動きます。
-3. `start.cmd` をダブルクリックし、確認したい画面を選びます。
+3. `start.cmd` をダブルクリックします。
 
-ファイルを編集した後は、開いているプレビュー画面を閉じて開き直してください。CPU の描画部品は C# を読み込むため、同じ PowerShell プロセスでの再読み込みでは反映されません。起動メニューは毎回別プロセスで開きます。
+全画面を 1 つのウィンドウで表示します。左の一覧をクリックするか、`Ctrl+PgUp` / `Ctrl+PgDn` で画面がすぐに切り替わります。上部に、その画面の編集ファイルを表示します。
+
+- プレビューのファイル (`.ps1` / `.json`) を保存すると、同じ画面・同じ位置のまま自動で開き直します。手動では `F5` か「開き直す」ボタンです。
+- 編集ミスで画面を表示できない時は、プレビュー内かコンソールにエラーを表示します。直して保存すれば自動で開き直します。
+- CPU 割り当て (メイン画面) はウィンドウいっぱいに広がります。ウィンドウの大きさを変えて、リサイズ時の見え方も確認できます。
+- タイトルバーや実際のウィンドウの大きさを見る時は「別ウィンドウで開く」を押します。
+- 黒いコンソールのウィンドウを閉じると、プレビューも終了します。
+
+## プレビューを最新版にする
+
+`update.cmd` をダブルクリックすると、GitHub の最新の `ui-preview` だけを取得してこのフォルダへ上書きします。内容が変わるファイルは、上書き前に `backups\<日時>\` へ保存します。手元で編集したデザインはそこから取り戻せます。GitHub に無いファイルは消しません。
+
+- `update.cmd -Check` (または `update-preview.ps1 -Check`) は、更新される内容の確認だけを行います。
+- ZIP の取得が遮断される環境では、自動で 1 ファイルずつの取得に切り替えます。
+- 非公開リポジトリの場合は、GitHub のトークンを 1 行だけ書いた `update-token.txt` をこのフォルダか 1 つ上のフォルダに置きます。このファイルはコミットしません。
+- プレビューを開いたまま更新した場合は、自動で開き直します。
 
 `export-preview.ps1` を実行すれば、このフォルダだけの ZIP も作成できます。既定の出力先は Windows の一時フォルダ内の `EdgeBox-UI-Preview.zip` です。
 
@@ -26,7 +41,7 @@
 
 起動・CPU 分割・監視の実測・設定保存・レジストリ操作はプレビューへ取り込んでいません。VM、CPU、メモリ、アプリ、アカウント、ログは固定サンプルです。保存・適用を押しても実機には反映されません。アプリの実ファイルを選ぶボタンはプレビューでは無効です。
 
-プレビュー専用の起動メニューとサンプル供給コードは本体へ取り込みません。本体のセットアップはコマンド形式のため、GUI のプレビュー対象は上記です。CPU 共通テーマはホスト設定画面には自動で伝わらないため、統一する場合は `host/views` の配色も編集します。
+プレビュー専用の表示ウィンドウ (`preview.ps1` / `viewer.ps1`)、更新コマンド、サンプル供給コードは本体へ取り込みません。本体のセットアップはコマンド形式のため、GUI のプレビュー対象は上記です。CPU 共通テーマはホスト設定画面には自動で伝わらないため、統一する場合は `host/views` の配色も編集します。
 
 ## Claude に渡す指示
 
@@ -50,7 +65,7 @@ powershell -NoProfile -STA -ExecutionPolicy Bypass -File .\verify.ps1
 powershell -NoProfile -STA -ExecutionPolicy Bypass -File .\verify.ps1 -ScreenshotDirectory "$env:TEMP\EdgeBox-UI-Screenshots"
 ```
 
-各画面を直接開く場合は `preview.ps1 -Screen Console`、`Monitor`、`Apps`、`Display`、`AutoLogon`、`Settings` を指定します。アプリ選択などの小画面は `cpu/preview-cpu.ps1 -Screen CoreChooser`、`Processes`、`InstalledApps` でも単独確認できます。
+最初に表示する画面は `preview.ps1 -Screen Monitor` のように指定できます (`Console`、`Monitor`、`Apps`、`CoreChooser`、`Processes`、`InstalledApps`、`Display`、`AutoLogon`、`Settings`)。単独のウィンドウで開く場合は `cpu/preview-cpu.ps1 -Screen <画面>` か `host/preview-host.ps1 -Screen <画面>` を実行します。`verify.ps1` は 1 つのウィンドウで全画面を順に切り替える検証 (`viewer.ps1 -SelfTest`) も行います。
 
 ## 完成後に本体へ取り込む
 
