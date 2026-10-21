@@ -1,0 +1,60 @@
+﻿{
+  "entries": [
+    {
+      "designFile": "cpu/cpu-ui-theme.ps1",
+      "targetFile": "windows-cpu-partition/cpu-ui-theme.ps1",
+      "startMarker": null,
+      "endMarker": null,
+      "baselineHash": "b170c70591ccf3625f012bafed24391a6ccfc6d377794064ed29c64d0f7b4c77"
+    },
+    {
+      "designFile": "cpu/console-layout.ps1",
+      "targetFile": "windows-cpu-partition/cpu-console.ps1",
+      "startMarker": "# ============================================================\n#  画面の組み立て\n#  ヘッダー / 左メニュー (Home・Core Split・Settings・Log・System) / 各画面 / 下の操作バー。\n#  見た目は cpu-ui-theme.ps1 の部品が描く。ここでは配置と、既存の処理とのつなぎだけを行う\n# ============================================================",
+      "endMarker": "# ============================================================\n#  表示の同期 (既存の検査・状態の結果を、各画面の表示に写すだけ)\n# ============================================================",
+      "baselineHash": "646bcb41f694f80789f5db256a04649844b3ec3a82fcd21d7972e1655c6954b2"
+    },
+    {
+      "designFile": "cpu/monitor-drawing.ps1",
+      "targetFile": "windows-cpu-partition/cpu-monitor.ps1",
+      "startMarker": "# ============================================================ 描画",
+      "endMarker": "# ============================================================ ウィンドウ",
+      "baselineHash": "edd87518ff70236ae6ca884b56cde55281a5f7fdea27dbd54de4282e12f5c7e5"
+    },
+    {
+      "designFile": "cpu/monitor-layout.ps1",
+      "targetFile": "windows-cpu-partition/cpu-monitor.ps1",
+      "startMarker": "# ============================================================ ウィンドウ",
+      "endMarker": "$timer.Add_Tick({",
+      "baselineHash": "e7d49c282153451a04f85f7e077320a15a629b01bc8cf24bf347334d98c69df0"
+    },
+    {
+      "designFile": "cpu/core-chooser-layout.ps1",
+      "targetFile": "windows-cpu-partition/cpu-console.ps1",
+      "startMarker": "function Show-CoreChooser([int[]]$Preselect, [string]$Title, [int[]]$GuestLps) {",
+      "endMarker": "    if ($d.ShowDialog() -ne \"OK\") { return $null }",
+      "baselineHash": "0503c4cae4e425be7980708ae0d596f03f5df6ad1ff37e901753e951cc18f52a"
+    },
+    {
+      "designFile": "cpu/process-picker-layout.ps1",
+      "targetFile": "windows-cpu-partition/cpu-console.ps1",
+      "startMarker": "function Show-ProcessPicker {",
+      "endMarker": "    if ($d.ShowDialog() -ne \"OK\" -or $lb.SelectedIndex -lt 0) { return $null }",
+      "baselineHash": "199a9b53800719b9c2dac27da0e58049ff85c4d94f846a8200804ec9126c422f"
+    },
+    {
+      "designFile": "cpu/installed-app-picker-layout.ps1",
+      "targetFile": "windows-cpu-partition/cpu-console.ps1",
+      "startMarker": "function Show-InstalledAppPicker {",
+      "endMarker": "    if ($d.ShowDialog() -ne \"OK\" -or $lv.SelectedIndices.Count -eq 0) { return $null }",
+      "baselineHash": "ad16ebf0861896a09316829ece8b7166eef2e3e0ee397cd7e3af01e62e3e4897"
+    },
+    {
+      "designFile": "cpu/apps-layout.ps1",
+      "targetFile": "windows-cpu-partition/cpu-console.ps1",
+      "startMarker": "function Show-AppsDialog {",
+      "endMarker": "    if ($d.ShowDialog() -ne \"OK\") { return }\n\n    # --- 一覧から外したアプリは、いま動いている分の固定を解除しておく ---",
+      "baselineHash": "9282f984f95435523b407ee36e949bbc033f8fc30a5c14df6f8d1089443c6679"
+    }
+  ]
+}
