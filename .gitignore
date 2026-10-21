@@ -8,3 +8,10 @@ setup/setup.lock
 setup/logs/
 installer/EdgeBox-Setup.zip
 installer/EdgeBox-Setup.exe
+# UI プレビューの生成物 (デザインのソースだけを管理する)
+ui-preview/screenshots/
+ui-preview/output/
+ui-preview/logs/
+ui-preview/backups/
+ui-preview/**/*.png
+ui-preview/**/*.zip

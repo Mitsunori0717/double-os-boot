@@ -1,0 +1,36 @@
+﻿{
+  "entries": [
+    {
+      "id": "host-display",
+      "designFile": "host/views/display.view.ps1",
+      "targetFile": "windows-host/03-field-display-kiosk.ps1",
+      "startMarker": "if ($Settings) {\n    Add-Type -AssemblyName System.Windows.Forms\n    Add-Type -AssemblyName System.Drawing\n",
+      "endMarker": "    if ($form.ShowDialog() -eq \"OK\") {",
+      "baselineHash": "b2d676b6d6898341cf4931be92a6e894e947ac1df8bff433d59e61ad2885fdee"
+    },
+    {
+      "id": "host-auto-logon-main",
+      "designFile": "host/views/auto-logon-main.view.ps1",
+      "targetFile": "windows-host/06-auto-logon.ps1",
+      "startMarker": "    $st = Get-AutoLogonState\n\n",
+      "endMarker": "    $btnNet.Add_Click({\n",
+      "baselineHash": "062959463497626541e8c5134cfb64eb9b9c57754a7b71ccb648a88fe0bb3559"
+    },
+    {
+      "id": "host-auto-logon-actions",
+      "designFile": "host/views/auto-logon-actions.view.ps1",
+      "targetFile": "windows-host/06-auto-logon.ps1",
+      "startMarker": "            \"自動サインイン設定\") | Out-Null\n    })\n",
+      "endMarker": "    if ($form.ShowDialog() -ne \"OK\") { exit 0 }",
+      "baselineHash": "48e68cfab911b4ac4d95231129231715855461260113390f99613214dc684bb8"
+    },
+    {
+      "id": "host-settings",
+      "designFile": "host/views/settings.view.ps1",
+      "targetFile": "windows-host/08-settings-console.ps1",
+      "startMarker": "# --- 見た目: 『CPU割り当て』と同じ配色 (このフォルダだけで完結させるため、ここで直接指定する) ---\n",
+      "endMarker": "if ($form.ShowDialog() -ne \"OK\") { exit 0 }",
+      "baselineHash": "5585f7a08ca2f4a33cfae1d1876a55779c0acace82a3deecbad7cac982f14538"
+    }
+  ]
+}
