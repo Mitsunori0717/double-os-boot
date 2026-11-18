@@ -1,86 +1,48 @@
-# Edge Box 同時稼働システム
+# Edge Box セットアップ・ストレージ復旧
 
-Windows 11 と Edge Box (FANUC FIELD system Basic Package) を、**1 台の PC で同時に動かす**ための一式です。
-CPU コアを Windows 用と Edge Box 用に**完全分離**し、左モニターに Edge Box のコンソールを全画面で固定します。
+Windows 上の Edge Box 環境を構築するセットアップと、全領域バックアップから物理ディスクまたは隔離 Hyper-V VM に復旧するツールです。バージョンは `2026.11.18.1`。元ソースのコミットと実機検証の状態は [release.json](release.json) に記録しています。
 
+## 最初に開くもの
+
+| 目的 | 入口 |
+|---|---|
+| 新しい Windows PC に Edge Box を構築 | [導入手順](docs/FRESH-INSTALL.md)、`setup-all.cmd` |
+| 現在のセットアップ状態だけを確認 | `setup/check-status.cmd` |
+| OS・アプリ・データを全領域バックアップ | [復旧機能の対応表](storage-recovery/README.md) |
+| RAW から交換 SSD へ復元 | [物理復元](storage-recovery/PHYSICAL-RESTORE.md) |
+| RAW から別 PC の隔離 VM を作成 | [VM 復旧手順](storage-recovery/RECOVERY-PIPELINE.md) |
+| 開発用の非破壊テスト | `powershell -NoProfile -ExecutionPolicy Bypass -File tests/run-all.ps1` |
+
+セットアップは実際の Windows 設定を変更します。開発テストは通常ファイルと模擬コマンドを使います。`verified` は保存データの整合性を示し、OS 起動、アプリ動作、ライセンスの復旧成功を示しません。
+
+## 必要な環境
+
+- セットアップ・VM 復旧: Windows PowerShell 5.1、Hyper-V を利用できる Windows、実行時の管理者権限。セットアップでは Windows 11 Pro / Enterprise / Education、FSBP 導入済みの物理ディスクを前提とします。
+- RAW 取得・物理復元: 専用の非永続 Linux Live、Python 3.10 以上、root、対象の独立した basic ディスク。取得元は kernel read-only が必要です。
+- RAW → VHDX: Windows または Linux、Python 3.10 以上、別途入手した信頼できる `qemu-img`。Python の追加パッケージは不要です。
+- CPU 完全分離: 対応する CPU 構成と Hyper-V CPU groups。必要な Microsoft 製ツールは実セットアップ時に署名を確認して取得します。利用できない機種で成功扱いにはしません。
+
+## この配布物について
+
+添付されていた 55 ファイルは、[元リポジトリ](https://github.com/Mitsunori0717/double-os-boot/tree/dcc9718ee6ea66675da0b5e3bf9c6142dd0995e1) の同一コミットの Git blob と全件一致を確認しました。欠落していた `windows-host`、`windows-cpu-partition`、配布用 `installer` を同じ版から補完し、対象識別・異常時停止・復旧検証・配布検証を修正しています。詳細は [変更内容](CHANGELOG.md) を参照してください。
+
+この配布物にはセットアップ・復旧に必要なソース、テスト、説明書を収録します。ZIP 版の更新は新しい配布 ZIP 全体を展開して行います。端末固有の設定・ログ・回復キー・RAW・VHDX・取得ツールは含めません。リポジトリ配置で使用する既存の更新スクリプトはリポジトリ側に残しています。
+
+## 配布 ZIP の作成と検証
+
+`package-files.txt` が同梱ファイルの明示リストです。必須実装の不足、既存出力、シンボリックリンク・再解析ポイントは拒否します。
+
+```powershell
+python -B tools/package.py build --output '..\EdgeBox-Recovery-2026.11.18.1.zip'
+python -B tools/package.py verify '..\EdgeBox-Recovery-2026.11.18.1.zip'
 ```
-Windows 11 (ネイティブ動作 = 業務はフルスピード)
- ├─ 左モニター : Edge Box のコンソール (全画面固定)
- ├─ 右モニター : 通常の Windows デスクトップ
- └─ Hyper-V
-      └─ Edge Box : メーカー製ディスクを無改造のまま起動 (コピー・変換なし)
-```
 
-## 構成
+ZIP 内の `package-manifest.json` には全同梱ファイルのサイズと SHA-256 が入ります。これは破損・取り違えの検出用で、電子署名ではありません。実行用 EXE の作成は [installer/README.md](installer/README.md) を参照してください。
 
-| フォルダ | 内容 |
-|---|---|
-| `windows-host/` | Edge Box の作成・起動・画面表示・自動サインイン・シャットダウン |
-| `windows-cpu-partition/` | CPU コアの完全分離、割り当て画面、リアルタイム監視 |
-| `installer/` | 新しい PC へ導入するための EXE を作るしくみ |
-| `setup/` | 実環境を判定して進める一括・番号別セットアップ、ログと再実行の案内 |
-| `ui-preview/` | 全設定 GUI をサンプルデータで開く、独立したデザイン調整用プレビュー |
+## 検証範囲
 
-## UI デザインを調整する
+[今回の検証記録](VALIDATION.md) と [実機受入手順](docs/HARDWARE-ACCEPTANCE.md) を参照してください。実 SSD への書戻し、Hyper-V ゲスト起動、FSBP 機能・認証の試験は未実施です。予備媒体での受入結果を確認してから運用へ進めます。
 
-[ui-preview/](ui-preview/README.md) だけをダウンロード・コピーし、`start.cmd` を開くと全設定画面を 1 つのウィンドウで切り替えて確認できます。`update.cmd` でプレビューだけを最新版にできます。
-CPU 分割やメモリなどの実設定を変更せず、表示だけを編集・調整できます。
-Claude 向けの [CLAUDE.md](ui-preview/CLAUDE.md)、編集・統合手順、デザイン部分だけを本体ソースへ取り込むツールを同梱しています。
+## リポジトリにある独立ツール
 
-## 新しい PC への導入
-
-`installer\build-installer.cmd` をダブルクリックすると `EdgeBox-Setup.exe` ができます。
-これを新しい PC へ持っていって実行すると、一式を配置して一括セットアップへ進みます。
-くわしくは [installer/README.md](installer/README.md)。
-
-ZIP を展開して使う場合はルートの `setup-all.cmd` を実行してください。
-途中まで設定済みでも、Hyper-V・VM・自動表示・自動サインイン・CPU 分離などを再確認して必要な設定だけを行います。
-失敗時は `setup/logs` の `summary.txt` に原因・対処法・再実行する番号別バッチを表示します。
-確認だけなら `setup/check-status.cmd`。詳しくは [setup/README.md](setup/README.md)。
-従来の手動手順は [windows-host/SETUP-STEPS.md](windows-host/SETUP-STEPS.md) に残しています。
-
-## 日常の操作
-
-デスクトップのアイコンだけで完結します。
-アイコンが無い PC では、このフォルダの `start.cmd` をダブルクリックしても同じ動き (Edge Box 起動) になります。
-
-| アイコン | 動き |
-|---|---|
-| Edge Box 起動 | Edge Box を起動して左画面に全画面表示 |
-| Edge Box 画面 | 左画面にコンソールを出し直す |
-| Edge Box 再起動 | 正常終了 → 起動 → 画面表示 |
-| 全部シャットダウン | Edge Box を正しく終了 → Windows もシャットダウン (選択可) |
-| 設定 | 自動サインインの設定 |
-| CPU割り当て | CPU コアの分離、リアルタイム監視 |
-
-| キー操作 | 動き |
-|---|---|
-| Alt+F11 | 左画面の固定を解除 / 再固定 |
-| Ctrl+Alt+K 長押し | 左画面のコンソールを収納 ⇔ 全画面に戻す |
-| ESC 1 秒長押し | 全画面の解除 |
-
-## 不具合時の切り分け
-
-3 つの切替で、Windows か Edge Box かハイパーバイザーかを確定できます。
-どれも可逆で、Edge Box のデータには触れません。
-
-| 切替 | 操作 | 分かること |
-|---|---|---|
-| Edge Box 単独起動 | 再起動 → F8 → Edge Box のディスクを選択 | 仮想化を外した素の Edge Box (同一ディスクなので完全比較) |
-| Hyper-V 一時停止 | `bcdedit /set hypervisorlaunchtype off` → 再起動 (戻すのは `auto`) | 分離層ゼロの素の Windows |
-| 管理画面へ直接 | ブラウザで Edge Box の IP | アプリを介さない到達確認 |
-
-## 注意
-
-- Edge Box の起動画面で **Ctrl キーを押しっぱなしにしない** (工場出荷リセットが選ばれます)
-- Edge Box の稼働中に、そのディスクを Windows からオンラインに戻さない (同時アクセスによる破損防止)
-- Edge Box を仮想環境で動かすことはメーカーのサポート範囲外です。ディスクは無改造のため、
-  問題があればネイティブ起動の運用に戻せます
-
-## ストレージ保全・復元準備
-
-[storage-recovery/](storage-recovery/README.md) に、読み取り専用の構成収集、事前安全判定、既存イメージの複製・SHA-256読み戻し検査、復元計画を追加しています。Linux Liveの全領域RAW取得、検証付きVHDX変換、新規隔離Hyper-V VM構築は [一連の復旧手順](storage-recovery/RECOVERY-PIPELINE.md) を参照してください。既存物理ディスクへの復元書込は行いません。別PCでの起動・認証・復元は実機検証が必要です。
-
-## Windowsアプリの整理（独立ツール）
-
-[windows-app-manager/](windows-app-manager/README.md) は、アプリ登録一覧・用途の推定・保護理由・複数選択・確認付きMSIアンインストールの独立ツールです。Edge Boxの設定や起動には自動で組み込みません。最初は `start-demo.cmd` で合成データだけを確認できます。未知・必須候補は保護し、通信や情報流出を断定しません。
+元プロジェクトの [UI デザインプレビュー](https://github.com/Mitsunori0717/double-os-boot/tree/claude/windows-linux-dual-boot-lwgj28/ui-preview) と [Windows アプリ整理](https://github.com/Mitsunori0717/double-os-boot/tree/claude/windows-linux-dual-boot-lwgj28/windows-app-manager) は、引き続き独立ツールとしてリポジトリに残しています。セットアップ・復旧の配布 ZIP には含めません。

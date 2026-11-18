@@ -6,6 +6,7 @@ display-log.txt
 display-status.txt
 field-boot-entry.conf
 field-disk.conf
+field-disk.identity.json
 kiosk-login.xml
 launch-console-view.vbs
 launch-restart.vbs

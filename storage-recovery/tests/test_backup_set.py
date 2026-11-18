@@ -1,5 +1,6 @@
 """Temporary regular files only; no devices, VM commands or external queries."""
 import copy
+import contextlib
 import datetime as dt
 import hashlib
 import json
@@ -148,6 +149,68 @@ class BackupSetTests(unittest.TestCase):
         ledger=self.build()
         self.assertEqual(ledger['Members'][0]['Sha256'],ledger['Members'][1]['Sha256'])
         self.assertNotEqual(ledger['Members'][0]['Source'],ledger['Members'][1]['Source'])
+
+    def test_all_members_stay_locked_until_ledger_is_published(self):
+        original_lock = b.locked_source
+        original_link = b.os.link
+        active = set()
+        expected = set(self.paths + [Path(str(p)+'.manifest.json') for p in self.paths])
+        @contextlib.contextmanager
+        def tracked(path):
+            with original_lock(path) as stream:
+                active.add(Path(path))
+                try: yield stream
+                finally: active.remove(Path(path))
+        def publish(source, destination):
+            self.assertEqual(active, expected)
+            original_link(source, destination)
+        with patch.object(b, 'locked_source', tracked), patch.object(b.os, 'link', publish):
+            self.build()
+        self.assertEqual(active, set())
+
+    def test_ledger_stays_locked_during_member_verification(self):
+        self.build()
+        original_lock = b.locked_source
+        original_verify = b.verify_members
+        active = set()
+        @contextlib.contextmanager
+        def tracked(path):
+            with original_lock(path) as stream:
+                active.add(Path(path))
+                try: yield stream
+                finally: active.remove(Path(path))
+        def members(*args, **kwargs):
+            self.assertIn(self.output, active)
+            return original_verify(*args, **kwargs)
+        with patch.object(b, 'locked_source', tracked), patch.object(b, 'verify_members', members):
+            self.assertEqual(b.verify(self.output, allow_fixture=True)['State'], 'fixture-verified-set')
+        self.assertEqual(active, set())
+
+    def test_lost_member_lock_before_publication_leaves_no_final_ledger(self):
+        original_check = b.check_locked_file
+        def check(stream, before, path=None):
+            if Path(str(self.output)+'.partial').exists():
+                raise b.ConversionError('SOURCE_READ_LEASE_NOT_HELD')
+            return original_check(stream, before, path)
+        with patch.object(b, 'check_locked_file', check):
+            with self.assertRaisesRegex(b.SetError, 'SOURCE_CHANGED_OR_LOCK_LOST'): self.build()
+        self.assertFalse(self.output.exists())
+        self.assertTrue(Path(str(self.output)+'.partial').exists())
+
+    def test_blank_identity_rejected(self):
+        for key in ('UniqueId', 'SerialNumber', 'Model'):
+            disk = dict(self.disks[0], **{key: '   '})
+            with self.subTest(key=key):
+                with self.assertRaisesRegex(b.SetError, 'IDENTITY_INVALID'): b.identity(disk)
+
+    def test_fixture_permission_is_never_coerced(self):
+        for value in ('false', 1, None):
+            with self.subTest(permission=value):
+                with self.assertRaisesRegex(b.SetError, 'FIXTURE_PERMISSION_MUST_BE_BOOLEAN'):
+                    b.build(self.paths, self.spec, self.output, fixture=value)
+                with self.assertRaisesRegex(b.SetError, 'FIXTURE_PERMISSION_MUST_BE_BOOLEAN'):
+                    b.verify(self.output, allow_fixture=value)
+        self.assertFalse(self.output.exists())
 
 
 if __name__=='__main__':

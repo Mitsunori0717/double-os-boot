@@ -245,8 +245,15 @@ def digest_file(file, size):
 def copy_stream(stream, destination, name, identity, mode, final_check=lambda: None):
     require(re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_-]{0,80}', name), 'OUTPUT_NAME_INVALID')
     require(not re.fullmatch(r'(?i:CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])', name), 'OUTPUT_NAME_INVALID')
-    size = identity['Size']
-    require(isinstance(size, int) and size > 0 and size % identity['LogicalSectorSize'] == 0, 'SOURCE_SIZE_INVALID')
+    require(isinstance(identity, dict), 'SOURCE_IDENTITY_INCOMPLETE')
+    size, sector = identity.get('Size'), identity.get('LogicalSectorSize')
+    require(type(size) is int and size > 0 and type(sector) is int and sector in (512, 4096)
+            and size % sector == 0, 'SOURCE_SIZE_INVALID')
+    for key in ('UniqueId', 'SerialNumber', 'Model'):
+        value = identity.get(key)
+        require(isinstance(value, str) and value.strip() and len(value) <= 256
+                and not any(ord(c) < 32 for c in value), 'SOURCE_IDENTITY_INCOMPLETE')
+    require(mode in ('offline-block', 'fixture-file'), 'ACQUISITION_MODE_INVALID')
     require(shutil.disk_usage(destination).free >= size + RESERVE, 'DESTINATION_CAPACITY_INSUFFICIENT')
     base = name + '.raw'
     filenames = [base, base+'.partial', base+'.manifest.json', base+'.manifest.json.partial', base+'.events.jsonl']
@@ -272,7 +279,7 @@ def copy_stream(stream, destination, name, identity, mode, final_check=lambda: N
                         view = memoryview(data)
                         while view:
                             n = output.write(view)
-                            require(n is not None and 0 < n <= len(view), 'OUTPUT_SHORT_WRITE')
+                            require(type(n) is int and 0 < n <= len(view), 'OUTPUT_SHORT_WRITE')
                             view = view[n:]
                         h.update(data)
                         count += len(data)

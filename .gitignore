@@ -16,3 +16,20 @@ ui-preview/backups/
 ui-preview/**/*.png
 !ui-preview/cpu/images/*.png
 ui-preview/**/*.zip
+
+# Recovery release development artifacts
+__pycache__/
+*.pyc
+*.raw
+*.vhdx
+*.partial
+*.manifest.json
+*.events.jsonl
+*.lock
+*.zip
+*.exe
+validation-results/
+setup/logs/
+setup/settings.json
+setup/resume-state.json
+update-token.txt

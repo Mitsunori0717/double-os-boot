@@ -16,6 +16,11 @@ function Test-RecoveryVmProfile {
     if((Get-RVProperty $Profile MemoryStartupBytes) -lt 512MB -or (Get-RVProperty $Profile MemoryStartupBytes) -gt 1TB){$r.Add('MEMORY_OUT_OF_RANGE')}
     if((Get-RVProperty $Profile ProcessorCount) -lt 1 -or (Get-RVProperty $Profile ProcessorCount) -gt 256){$r.Add('CPU_OUT_OF_RANGE')}
     if(([string](Get-RVProperty $Profile SourceImageSha256)) -cnotmatch '^[0-9a-f]{64}$'){$r.Add('SOURCE_IMAGE_HASH_REQUIRED')}
+    if([string]::IsNullOrWhiteSpace([string](Get-RVProperty $Profile SourceSerialNumber))){$r.Add('SOURCE_SERIAL_REQUIRED')}
+    $sourceSize=Get-RVProperty $Profile SourceSize
+    $sourceBytes=[uint64]0
+    if($sourceSize -is [bool] -or ([string]$sourceSize) -cnotmatch '^[0-9]+$' -or -not [uint64]::TryParse([string]$sourceSize,[ref]$sourceBytes) -or $sourceBytes -eq 0 -or $sourceBytes % 512 -ne 0){$r.Add('SOURCE_SIZE_INVALID')}
+    if((Get-RVProperty $Profile SourceLogicalSectorSize) -ne 512){$r.Add('SOURCE_512_LOGICAL_SECTOR_REQUIRED')}
     if((Get-RVProperty $Profile IdentityPolicy) -cne 'NewVmId'){$r.Add('NEW_VM_ID_CONSENT_REQUIRED')}
     if((Get-RVProperty $Profile TpmRequired) -isnot [bool] -or (Get-RVProperty $Profile TpmRequired) -ne $false){$r.Add('TPM_DEPENDENCY_UNSUPPORTED_OR_UNKNOWN')}
     if((Get-RVProperty $Profile EncryptionDependenciesResolved) -isnot [bool] -or (Get-RVProperty $Profile EncryptionDependenciesResolved) -ne $true){$r.Add('ENCRYPTION_DEPENDENCY_UNRESOLVED')}
@@ -78,6 +83,18 @@ function Write-RVEvent([string]$Path,[string]$Stage,[string]$Detail){
     $row=[ordered]@{Utc=[DateTime]::UtcNow.ToString('o');Stage=$Stage;Detail=$Detail}
     [IO.File]::AppendAllText($Path,($row|ConvertTo-Json -Compress)+[Environment]::NewLine,[Text.UTF8Encoding]::new($false))
 }
+function Write-RecoveryFailure([string]$Root,[string]$Stage,$VM,[string[]]$WorkingPaths,[uint64]$Offset,$Failure){
+    # A failed create/configure/start may leave useful artifacts. Record them, but
+    # never delete, stop, or otherwise alter a VM while handling another error.
+    $observed=$null;$observationError=$null
+    if($null -ne $VM){
+        try{$observed=Get-RecoveryVmIsolation $VM}catch{$observationError=$_.Exception.GetType().FullName}
+    }
+    $record=[ordered]@{State='Failed';Stage=$Stage;Utc=[DateTime]::UtcNow.ToString('o');VMId=[string](Get-RVProperty $VM Id);VMName=[string](Get-RVProperty $VM Name);ObservedVM=$observed;ObservationErrorType=$observationError;WorkingCopies=$WorkingPaths;BytesCopiedInCurrentDisk=$Offset;ExceptionType=$Failure.Exception.GetType().FullName;HResult=$Failure.Exception.HResult;ArtifactsRetained=$true;AutomaticCleanupPerformed=$false;BootTested=$false;RestoreTested=$false;LicenseValidated=$false}
+    $bytes=[Text.UTF8Encoding]::new($false).GetBytes(($record|ConvertTo-Json -Depth 8))
+    $stream=[IO.File]::Open((Join-Path $Root 'recovery-failure.json'),[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None)
+    try{$stream.Write($bytes,0,$bytes.Length);$stream.Flush($true)}finally{$stream.Dispose()}
+}
 function Get-RVHash([IO.Stream]$Stream){
     $sha=[Security.Cryptography.SHA256]::Create()
     try { $value=$sha.ComputeHash($Stream);[BitConverter]::ToString($value).Replace('-','').ToLowerInvariant() }finally{$sha.Dispose()}
@@ -113,6 +130,11 @@ function Invoke-IsolatedVmRecovery {
     if(([string](Get-RVProperty $m SourceSha256)) -cnotmatch '^[0-9a-f]{64}$' -or $Profile.SourceImageSha256 -cne $m.SourceSha256){throw 'PROFILE_IMAGE_BINDING_MISMATCH'}
     if((Get-RVProperty $m FullSectorImage) -isnot [bool]){throw 'MANIFEST_BOOLEAN_REQUIRED'}
     if((Get-RVProperty (Get-RVProperty $m Metadata) SourceWriteProtected) -isnot [bool] -or (Get-RVProperty $m.Metadata SourceWriteProtected) -ne $true){throw 'SOURCE_WRITE_PROTECTION_UNVERIFIED'}
+    $origin=Get-RVProperty (Get-RVProperty $m Metadata) Source
+    foreach($binding in @(@('SerialNumber','SourceSerialNumber'),@('Size','SourceSize'),@('LogicalSectorSize','SourceLogicalSectorSize'))){
+        if(([string](Get-RVProperty $origin $binding[0])).Trim() -cne ([string](Get-RVProperty $Profile $binding[1])).Trim()){throw 'PROFILE_SOURCE_IDENTITY_MISMATCH'}
+    }
+    if($m.VirtualSize -ne $Profile.SourceSize){throw 'PROFILE_SOURCE_SIZE_MISMATCH'}
     $hostState=Get-RecoveryHostState
     if($null -eq $hostState.PSObject.Properties['VMs'] -or $null -eq $hostState.VMs){throw 'HOST_VM_INVENTORY_UNKNOWN'}
     if(@($hostState.VMs|Where-Object Name -eq $VMName).Count -gt 0){throw 'VM_NAME_ALREADY_EXISTS'}
@@ -122,7 +144,7 @@ function Invoke-IsolatedVmRecovery {
     $drive=[IO.DriveInfo]::new([IO.Path]::GetPathRoot($root))
     $requiredSpace=[Math]::Max([decimal]$m.Size,[decimal]$m.VirtualSize)+2GB
     if($drive.AvailableFreeSpace -lt $requiredSpace){throw 'WORKING_COPY_SPACE_INSUFFICIENT'}
-    $sourceStream=$null;$output=$null;$created=$null;$log=$null;$offset=[uint64]0;$working=Join-Path $root 'os.vhdx'
+    $sourceStream=$null;$output=$null;$created=$null;$log=$null;$offset=[uint64]0;$working=Join-Path $root 'os.vhdx';$stage='Validating'
     try {
         # Read sharing excludes writers and delete for the entire hash+copy stage.
         $sourceStream=[IO.File]::Open($source,[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::Read)
@@ -133,6 +155,7 @@ function Invoke-IsolatedVmRecovery {
         if(-not $PSCmdlet.ShouldProcess($root,"Create NEW isolated VM '$VMName' and working VHDX copy; optional start=$StartIsolated")){return $plan}
         New-Item -ItemType Directory -Path $root -ErrorAction Stop|Out-Null
         $log=Join-Path $root 'recovery.events.jsonl'
+        $stage='Copying'
         Write-RVEvent $log 'copying' ('Archive='+$source+'; expected bytes='+$m.Size)
         $output=[IO.File]::Open(($working+'.partial'),[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None)
         $buffer=New-Object byte[] (4MB)
@@ -150,22 +173,26 @@ function Invoke-IsolatedVmRecovery {
         if($null -eq $latest.PSObject.Properties['VMs'] -or $null -eq $latest.VMs){throw 'HOST_VM_INVENTORY_UNKNOWN'}
         if(@($latest.VMs|Where-Object Name -eq $VMName).Count -gt 0){throw 'VM_NAME_CREATED_CONCURRENTLY'}
         if($Profile.MacPolicy -ceq 'Preserve' -and $Profile.MacAddress -in $latest.MacAddresses){throw 'MAC_ALREADY_PRESENT_ON_HOST'}
+        if($Profile.MemoryStartupBytes -gt $latest.AvailableMemoryBytes -or $Profile.ProcessorCount -gt $latest.ProcessorCount){throw 'HOST_RESOURCES_CHANGED'}
+        $stage='CreatingVM'
         $created=New-RecoveryVM -Name $VMName -Generation $Profile.Generation -Memory $Profile.MemoryStartupBytes -Path $root
         if($null -eq $created -or [string]::IsNullOrEmpty([string]$created.Id) -or $created.Name -ne $VMName){throw 'NEW_VM_RESULT_INVALID'}
         if([string]$created.Id -in @($latest.VMs|ForEach-Object{[string]$_.Id})){throw 'NEW_VM_ID_COLLISION'}
         Write-RVEvent $log 'vm-created' ('VMId='+$created.Id)
         $initial=Get-RecoveryVmIsolation $created
         if($initial.State -ne 'Off' -or -not $initial.Isolated -or [string]$initial.Id -ne [string]$created.Id){throw 'NEW_VM_NOT_OFF_AND_ISOLATED'}
+        $stage='ConfiguringVM'
         Set-RecoveryVmHardware -VM $created -Profile $Profile -VhdxPath $working
         $state=Get-RecoveryVmIsolation $created
-        if(-not $state.Isolated -or $state.State -ne 'Off' -or $state.PhysicalDiskCount -ne 0 -or @($state.DiskPaths).Count -ne 1 -or $state.DiskPaths[0] -ne $working){throw 'CONFIGURED_VM_ISOLATION_OR_DISK_MISMATCH'}
+        if([string]$state.Id -ne [string]$created.Id -or $state.Generation -ne $Profile.Generation -or -not $state.Isolated -or $state.State -ne 'Off' -or $state.PhysicalDiskCount -ne 0 -or @($state.DiskPaths).Count -ne 1 -or $state.DiskPaths[0] -ne $working){throw 'CONFIGURED_VM_ISOLATION_OR_DISK_MISMATCH'}
         if($Profile.MacPolicy -ceq 'Preserve' -and $Profile.MacAddress -notin $state.MacAddresses){throw 'MAC_CONFIGURATION_MISMATCH'}
-        if($StartIsolated){Start-RecoveryVM $created;$state=Get-RecoveryVmIsolation $created;if(-not $state.Isolated){throw 'VM_ISOLATION_LOST'}}
+        if($StartIsolated){$stage='StartingVM';Start-RecoveryVM $created;$state=Get-RecoveryVmIsolation $created;if(-not $state.Isolated){throw 'VM_ISOLATION_LOST'}}
         $result=[pscustomobject]@{State=$(if($StartIsolated){'StartRequestedUnverified'}else{'VMCreatedOff'});VMId=[string]$created.Id;VMName=$VMName;ObservedVMState=$state.State;VMRoot=$root;WorkingCopy=$working;Network='Disconnected';SourceSha256=$m.Sha256;NewVmId=$true;BootTested=$false;RestoreTested=$false;LicenseValidated=$false}
         $result|ConvertTo-Json -Depth 8|Set-Content -LiteralPath (Join-Path $root 'recovery-result.json') -Encoding UTF8 -ErrorAction Stop
         Write-RVEvent $log 'completed-unverified-guest' 'VM lifecycle only; OS boot, FSBP and licensing remain unverified.'
         return $result
     }catch{
+        if($log){try{Write-RecoveryFailure $root $stage $created @($working) $offset $_}catch{}}
         if($log){try{Write-RVEvent $log 'failed' ('Offset='+$offset+'; HResult='+$_.Exception.HResult+'; '+$_.Exception.Message+'; created VM retained, no automatic cleanup')}catch{}}
         throw
     }finally{if($null -ne $sourceStream){$sourceStream.Dispose()};if($null -ne $output){$output.Dispose()}}
@@ -200,6 +227,7 @@ function New-RecoveryVmProfile {
     }
     $mac=if($nics.Count -eq 1){[string](Get-RVProperty $nics[0] MacAddress)}else{''}
     [pscustomobject]@{ProfileVersion=1;SourceDiskCount=1;NetworkAdapterCount=1;SourceVmId=[string]$vm.Id;SourceVmName=$vm.Name;SourceImageSha256=$SourceImageSha256;
+        SourceSerialNumber=([string]$SourceFingerprint.SerialNumber).Trim();SourceSize=$SourceFingerprint.Size;SourceLogicalSectorSize=$SourceFingerprint.LogicalSectorSize;
         Generation=$vm.Generation;MemoryStartupBytes=$vm.MemoryStartup;ProcessorCount=$vm.ProcessorCount;
         SecureBoot=(Get-RVProperty (Get-RVProperty $vm Firmware) SecureBoot);SecureBootTemplate=(Get-RVProperty (Get-RVProperty $vm Firmware) SecureBootTemplate);
         TpmRequired=$tpmRequired;EncryptionDependenciesResolved=[bool]$EncryptionDependenciesResolved;
@@ -316,7 +344,7 @@ function Invoke-RecoveryV2 {
     if($VhdxPaths.Count -ne $Profile.Sources.Count){throw 'V2_ARCHIVE_COUNT_MISMATCH'}
     $root=& $script:StorageModule {param($p) Resolve-RegularImagePath $p} $VMRoot
     if(Test-Path -LiteralPath $root){throw 'VM_ROOT_ALREADY_EXISTS'}
-    $archives=@();$working=@();$manifests=@();$streams=@();$log=$null;$created=$null;$offset=[uint64]0;$index=-1
+    $archives=@();$working=@();$manifests=@();$streams=@();$log=$null;$created=$null;$offset=[uint64]0;$index=-1;$stage='Validating'
     try{
         $required=[decimal]2GB
         for($i=0;$i -lt $VhdxPaths.Count;$i++){
@@ -342,6 +370,7 @@ function Invoke-RecoveryV2 {
         if(-not $PSCmdlet.ShouldProcess($root,('Create NEW isolated VM and '+$working.Count+' working disk copies; TPM='+$Profile.TpmPolicy+' (new secrets, not original); optional start='+$StartIsolated))){return $plan}
         New-Item -ItemType Directory -Path $root -ErrorAction Stop|Out-Null
         $log=Join-Path $root 'recovery.events.jsonl'
+        $stage='Copying'
         for($i=0;$i -lt $streams.Count;$i++){
             $index=$i;$offset=0;$out=$null
             Write-RVEvent $log 'copying' ('DiskIndex='+$i+'; expected bytes='+$manifests[$i].Size)
@@ -361,21 +390,24 @@ function Invoke-RecoveryV2 {
         $latest=Get-RecoveryHostState
         if($null -eq $latest.PSObject.Properties['VMs'] -or $null -eq $latest.VMs -or @($latest.VMs|Where-Object Name -eq $VMName).Count -gt 0){throw 'HOST_INVENTORY_CHANGED_OR_NAME_COLLISION'}
         if($Profile.MemoryStartupBytes -gt $latest.AvailableMemoryBytes -or $Profile.ProcessorCount -gt $latest.ProcessorCount){throw 'HOST_RESOURCES_CHANGED'}
+        $stage='CreatingVM'
         $created=New-RecoveryVM -Name $VMName -Generation 2 -Memory $Profile.MemoryStartupBytes -Path $root
         if($null -eq $created -or [string]::IsNullOrWhiteSpace([string]$created.Id) -or $created.Name -ne $VMName -or [string]$created.Id -in @($latest.VMs|ForEach-Object{[string]$_.Id})){throw 'NEW_VM_IDENTITY_INVALID'}
         Write-RVEvent $log 'vm-created' ('VMId='+$created.Id)
         $initial=Get-RecoveryVmIsolation $created
         if($initial.State -ne 'Off' -or -not $initial.Isolated -or [string]$initial.Id -ne [string]$created.Id){throw 'NEW_VM_NOT_OFF_AND_ISOLATED'}
+        $stage='ConfiguringVM'
         Set-RecoveryVmHardware -VM $created -Profile $Profile -VhdxPath $working[0]
         for($i=1;$i -lt $working.Count;$i++){Add-RecoveryDataDisk -VM $created -Path $working[$i] -Location $i}
         if($Profile.TpmPolicy -ceq 'NewLocalProtector'){Set-RecoveryNewTpm $created;Write-RVEvent $log 'new-local-vtpm-configured' 'New TPM identity only; original TPM secrets are NOT recovered.'}
         $state=Assert-RecoverySetState $created $working $Profile
-        if($StartIsolated){Start-RecoveryVM $created;$state=Get-RecoveryVmIsolation $created;if(-not $state.Isolated){throw 'VM_ISOLATION_LOST'}}
+        if($StartIsolated){$stage='StartingVM';Start-RecoveryVM $created;$state=Get-RecoveryVmIsolation $created;if(-not $state.Isolated){throw 'VM_ISOLATION_LOST'}}
         $result=[pscustomobject]@{State=$(if($StartIsolated){'StartRequestedUnverified'}else{'VMCreatedOff'});VMId=[string]$created.Id;VMName=$VMName;WorkingCopies=$working;Network='Disconnected';TpmPolicy=$Profile.TpmPolicy;OriginalTpmSecretsRestored=$false;CpuCompatibility='OperatorAttestationNotMeasured';RecoveryKeysCollected=$false;BootTested=$false;RestoreTested=$false;LicenseValidated=$false}
         $result|ConvertTo-Json -Depth 10|Set-Content -LiteralPath (Join-Path $root 'recovery-result.json') -Encoding UTF8 -ErrorAction Stop
         Write-RVEvent $log 'completed-unverified-guest' 'VM lifecycle only. User must verify guest boot and manually unlock encrypted volumes if needed.'
         return $result
     }catch{
+        if($log){try{Write-RecoveryFailure $root $stage $created $working $offset $_}catch{}}
         if($log){try{Write-RVEvent $log 'failed' ('DiskIndex='+$index+'; Offset='+$offset+'; HResult='+$_.Exception.HResult+'; '+$_.Exception.Message+'; artifacts retained; no automatic cleanup')}catch{}}
         throw
     }finally{foreach($stream in $streams){$stream.Dispose()}}

@@ -11,14 +11,15 @@
          - 名前が違っても、Edge Box のディスクを使っている Edge Box があればそれを使う
            (旧構成の Edge Box がそのまま活きるので、作り直す必要がありません)
       2. 対象ディスクを決める
-         - 既存 Edge Box が使っているディスク / 前回の記録 / 指定 / 自動検出 の順
-      3. 起動できない原因を先に片付ける
-         - 同じディスクの二重接続を外す
-         - 他の Edge Box が同じディスクを掴んでいれば、その接続だけ外す (停止中のみ)
-         - ディスクが Windows でオンラインならオフラインにする
+         - 既存 Edge Box の接続 / 明示指定 / 前回の媒体ID / 確認付き自動検出 の順
+         - ディスク番号だけの古い記録は自動選択に使わない
+      3. ディスクの使用状況を確認する
+         - 二重接続・他の VM の接続・Windows の使用中領域は拒否する
+         - 対象 VM が停止中で、未使用媒体と再確認できた場合だけオフライン化する
       4. Edge Box が無ければ作成する (01-create-field-vm.ps1 を呼ぶ)
       5. 起動してコンソールを表示する (02-start-field-vm.ps1 を呼ぶ)
 
+    作成スクリプトが拒否した場合は停止し、別経路で作成しません。
     ディスクの中身には一切触れません。Edge Box を消したり作り直したりもしません
     (作成は「Edge Box がまったく無い場合」だけです)。
 
@@ -34,12 +35,12 @@
 #>
 [CmdletBinding()]
 param(
-    [string]$VMName    = "EdgeBox",
+    [ValidatePattern('^[^"\r\n]+$')][string]$VMName    = "EdgeBox",
     [int]$DiskNumber   = -1,      # 省略時: 既存 Edge Box / 記録 / 自動検出 から決める
     [string]$SwitchName = "",     # 省略時: 既存の外部スイッチを自動選択
     [string]$NetAdapterName = "", # 外部スイッチがまだ無い PC で、ライン側 LAN ポートの Name (Get-NetAdapter)。IP でも可
-    [int]$MemoryGB     = 8,
-    [int]$CpuCount     = 6,
+    [ValidateRange(1,1024)][int]$MemoryGB     = 8,
+    [ValidateRange(1,256)][int]$CpuCount     = 6,
     [switch]$Status,              # 判定結果だけ表示 (何も変更しない)
     [switch]$Setup,               # デスクトップアイコンの作成
     [switch]$NoConfirm            # 確認プロンプトを出さない
@@ -126,236 +127,174 @@ Write-Host "===== Edge Box 起動 =====" -ForegroundColor White
 #  1. 既存 Edge Box とディスクを探す
 # ============================================================
 function Get-PassthroughDisks([string]$Name) {
-    @(Get-VMHardDiskDrive -VMName $Name -ErrorAction SilentlyContinue |
-        Where-Object { $null -ne $_.DiskNumber })
+    @(Get-VMHardDiskDrive -VMName $Name -ErrorAction Stop | Where-Object { $null -ne $_.DiskNumber })
 }
 
-Step "既存の Edge Box を確認"
-$sysDisk = (Get-Partition -DriveLetter C).DiskNumber
-$targetVm = Get-VM -Name $VMName -ErrorAction SilentlyContinue
+function Get-LauncherSavedDisk($Identity) {
+    if($null -eq $Identity -or $Identity.SchemaVersion -ne 1 -or
+       [string]::IsNullOrWhiteSpace([string]$Identity.UniqueId) -or $Identity.Size -le 0){throw 'SAVED_DISK_IDENTITY_INVALID'}
+    $matches=@(Get-Disk -ErrorAction Stop|Where-Object {
+        ([string]$_.UniqueId).Trim() -ceq ([string]$Identity.UniqueId).Trim() -and
+        $_.Size -eq $Identity.Size -and
+        ([string]$_.SerialNumber).Trim() -ceq ([string]$Identity.SerialNumber).Trim()
+    })
+    if($matches.Count -ne 1){throw 'SAVED_DISK_MISSING_CHANGED_OR_AMBIGUOUS'}
+    return $matches[0]
+}
 
-if ($targetVm) {
-    Info "登録『$VMName』が見つかりました (状態: $($targetVm.State))"
-} else {
-    # 名前が違っても、物理ディスクを起動している Edge Box があればそれが Edge Box
-    $candidates = @()
-    foreach ($vm in @(Get-VM)) {
-        foreach ($d in (Get-PassthroughDisks $vm.Name)) {
-            if ($d.DiskNumber -ne $sysDisk) {
-                $candidates += [pscustomobject]@{ EdgeBox = $vm; Disk = $d.DiskNumber }
+function Get-LauncherVerifiedDisk($Snapshot,[string]$AllowedVmId='') {
+    Get-EdgeBoxCreateDisk -DiskNumber $Snapshot.Number -ExpectedUniqueId $Snapshot.UniqueId -ExpectedSize $Snapshot.Size -ExpectedSerialNumber $Snapshot.SerialNumber -AllowedVmId $AllowedVmId
+}
+
+function Get-LauncherVmDisk($VM,[int]$RequestedDiskNumber=-1) {
+    $drives=@(Get-PassthroughDisks $VM.Name)
+    if($drives.Count -ne 1){throw 'EXISTING_VM_REQUIRES_ONE_UNAMBIGUOUS_PHYSICAL_DISK'}
+    $number=[int]$drives[0].DiskNumber
+    if($RequestedDiskNumber -ge 0 -and $number -ne $RequestedDiskNumber){throw 'EXPLICIT_DISK_DOES_NOT_MATCH_SELECTED_VM'}
+    Get-EdgeBoxCreateDisk -DiskNumber $number -AllowedVmId ([string]$VM.Id)
+}
+
+function Invoke-LauncherChild([string]$ScriptPath,[hashtable]$Parameters) {
+    if(-not(Test-Path -LiteralPath $ScriptPath -PathType Leaf)){throw ('REQUIRED_SCRIPT_MISSING: '+$ScriptPath)}
+    # Transport names/IDs as data, never interpolated into PowerShell syntax.
+    $json=@{Script=$ScriptPath;Parameters=$Parameters}|ConvertTo-Json -Depth 6 -Compress
+    $request=[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($json))
+    $childCode=@'
+$ErrorActionPreference='Stop'
+$ProgressPreference='SilentlyContinue'
+try {
+    $data=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('__REQUEST__'))|ConvertFrom-Json
+    $parameters=@{}
+    foreach($property in $data.Parameters.PSObject.Properties){$parameters[$property.Name]=$property.Value}
+    $global:LASTEXITCODE=0
+    & ([string]$data.Script) @parameters
+    $ok=$?
+    if($LASTEXITCODE -ne 0){exit $LASTEXITCODE}
+    if(-not $ok){exit 1}
+    exit 0
+}catch{Write-Error ($_|Out-String) -ErrorAction Continue;exit 1}
+'@
+    $encoded=[Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($childCode.Replace('__REQUEST__',$request)))
+    $process=Start-Process powershell.exe -NoNewWindow -Wait -PassThru -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-OutputFormat','Text','-EncodedCommand',$encoded)
+    return [int]$process.ExitCode
+}
+
+function Invoke-LauncherCreateVm($Snapshot,[string]$Name,[string]$CreateScript,
+    [int]$Memory,[int]$Cpu,[string]$ExternalSwitch,[string]$Adapter) {
+    if(-not(Test-Path -LiteralPath $CreateScript -PathType Leaf)){throw 'CREATE_SCRIPT_MISSING_NO_FALLBACK'}
+    $fresh=Get-LauncherVerifiedDisk $Snapshot
+    $parameters=@{DiskNumber=$fresh.Number;ExpectedUniqueId=$fresh.UniqueId;ExpectedSize=$fresh.Size;
+        ExpectedSerialNumber=$fresh.SerialNumber;VMName=$Name;MemoryGB=$Memory;CpuCount=$Cpu;NoConfirm=$true}
+    if($ExternalSwitch){$parameters.SwitchName=$ExternalSwitch}
+    if($Adapter){$parameters.NetAdapterName=$Adapter}
+    $exitCode=Invoke-LauncherChild $CreateScript $parameters
+    if($exitCode -ne 0){throw ('CREATE_SCRIPT_FAILED_NO_FALLBACK: '+$exitCode)}
+    $created=@(Get-VM -ErrorAction Stop|Where-Object {$_.Name -ceq $Name})
+    if($created.Count -ne 1){throw 'CREATED_VM_NOT_UNIQUE'}
+    $null=Get-LauncherVmDisk $created[0] $Snapshot.Number
+    $null=Get-LauncherVerifiedDisk $Snapshot ([string]$created[0].Id)
+    return $created[0]
+}
+
+function Set-LauncherDiskOffline($Snapshot,$VM) {
+    $current=Get-VM -Id $VM.Id -ErrorAction Stop
+    if([string]$current.Id -ne [string]$VM.Id){throw 'SELECTED_VM_IDENTITY_CHANGED'}
+    $null=Get-LauncherVmDisk $current $Snapshot.Number
+    $fresh=Get-LauncherVerifiedDisk $Snapshot ([string]$VM.Id)
+    if($fresh.IsOffline){return $fresh}
+    if($current.State -ne 'Off'){throw 'DISK_OFFLINE_REQUIRES_SELECTED_VM_OFF'}
+    # The guard rejects mounted/system/changed/other-VM disks before mutation.
+    Set-Disk -Number $fresh.Number -IsOffline $true -ErrorAction Stop
+    $verified=Get-LauncherVerifiedDisk $Snapshot ([string]$VM.Id)
+    if(-not $verified.IsOffline){throw 'DISK_OFFLINE_READBACK_FAILED'}
+    return $verified
+}
+
+$identityPath=Join-Path $PSScriptRoot 'field-disk.identity.json'
+try {
+    Import-Module (Join-Path $PSScriptRoot 'vm-create-safety.psm1') -Force -ErrorAction Stop
+    Step '既存の Edge Box と対象ディスクを確認'
+    $allVms=@(Get-VM -ErrorAction Stop)
+    $named=@($allVms|Where-Object {$_.Name -ceq $VMName})
+    if($named.Count -gt 1){throw 'VM_NAME_AMBIGUOUS'}
+    $targetVm=$null;$diskInfo=$null
+    if($named.Count -eq 1){
+        $targetVm=$named[0]
+        $diskInfo=Get-LauncherVmDisk $targetVm $DiskNumber
+    }else{
+        if($DiskNumber -ge 0){
+            $selected=@(Get-Disk -Number $DiskNumber -ErrorAction Stop)
+            if($selected.Count -ne 1){throw 'SELECTED_DISK_NOT_UNIQUE'}
+            $diskInfo=$selected[0]
+        }elseif(Test-Path -LiteralPath $identityPath -PathType Leaf){
+            $identity=Get-Content -LiteralPath $identityPath -Raw -Encoding UTF8 -ErrorAction Stop|ConvertFrom-Json -ErrorAction Stop
+            $diskInfo=Get-LauncherSavedDisk $identity
+        }
+        # Use an older VM name only when its disk matches an explicit selection
+        # or saved hardware identity, never just because it is the only VM.
+        if($null -ne $diskInfo -and -not $PSBoundParameters.ContainsKey('VMName')){
+            $owners=@(foreach($vm in $allVms){
+                if(@(Get-PassthroughDisks $vm.Name|Where-Object {$_.DiskNumber -eq $diskInfo.Number}).Count -gt 0){$vm}
+            })
+            if($owners.Count -gt 1){throw 'SELECTED_DISK_ATTACHED_TO_MULTIPLE_VMS'}
+            if($owners.Count -eq 1){$targetVm=$owners[0];$VMName=$targetVm.Name;$diskInfo=Get-LauncherVmDisk $targetVm $diskInfo.Number}
+        }
+        if($null -eq $diskInfo){
+            if($allVms.Count -gt 0){
+                $physicalOwners=@($allVms|Where-Object {@(Get-PassthroughDisks $_.Name).Count -gt 0})
+                if($physicalOwners.Count -gt 0){throw ('VM_SELECTION_REQUIRED: -VMName で対象を指定してください: '+(($physicalOwners.Name)-join ', '))}
+            }
+            if(Test-Path -LiteralPath $DiskConf){
+                Warn '以前のディスク番号だけの記録は自動選択に使いません。実ディスクを確認します。'
+            }
+            $candidates=@(foreach($disk in @(Get-Disk -ErrorAction Stop)){
+                try{Get-EdgeBoxCreateDisk -DiskNumber $disk.Number}catch{Info ('除外: ディスク '+$disk.Number+' / '+$_.Exception.Message)}
+            })
+            if($candidates.Count -ne 1){throw 'DISK_SELECTION_REQUIRED: Get-Disk で確認して -DiskNumber を指定してください。'}
+            $diskInfo=$candidates[0]
+            Info ('候補: ディスク '+$diskInfo.Number+' / '+$diskInfo.FriendlyName+' / ID='+$diskInfo.UniqueId)
+            if(-not $Status){
+                if($NoConfirm){throw 'EXPLICIT_DISK_REQUIRED_FOR_UNATTENDED_CREATION'}
+                if(-not(Confirm-Step 'このディスクを Edge Box として使用しますか?')){exit 0}
             }
         }
+        if($null -eq $targetVm){$diskInfo=Get-LauncherVerifiedDisk $diskInfo}
     }
-    $candidates = @($candidates | Group-Object { $_.EdgeBox.Name } | ForEach-Object { $_.Group[0] })
-    if ($candidates.Count -eq 1) {
-        $targetVm = $candidates[0].EdgeBox
-        $VMName = $targetVm.Name
-        Ok "名前は違いますが、Edge Box のディスクを起動する 登録『$VMName』が見つかりました。これを使います。"
-    } elseif ($candidates.Count -gt 1) {
-        foreach ($c in $candidates) { Info "  $($c.EdgeBox.Name)  (ディスク $($c.Disk) / 状態 $($c.EdgeBox.State))" }
-        Fail ("物理ディスクを使う Edge Box が複数あります。-VMName でどれを使うか指定してください:`n" +
-            (($candidates | ForEach-Object { "  " + $_.EdgeBox.Name }) -join "`n"))
-    } else {
-        Info "Edge Box はまだありません (このあと作成します)"
+    $diskNo=[int]$diskInfo.Number
+    Ok ('ディスク '+$diskNo+' / '+$diskInfo.FriendlyName+' / ID='+$diskInfo.UniqueId)
+    if($Status){
+        Step '確認だけの実行のため、変更せず終了します'
+        if($targetVm){Info ('対象の登録: '+$targetVm.Name+' / 状態: '+$targetVm.State)}
+        else{Info ('新規作成する登録: '+$VMName)}
+        if(-not $diskInfo.IsOffline){Info '実行時は使用状況を再確認してからディスクをオフラインにします。'}
+        exit 0
     }
-}
-
-# ============================================================
-#  2. 対象ディスクを決める
-# ============================================================
-Step "対象ディスクを確認"
-$diskNo = -1
-if ($targetVm) {
-    $d = @(Get-PassthroughDisks $targetVm.Name)
-    if ($d.Count -gt 0) { $diskNo = [int]$d[0].DiskNumber }
-}
-if ($diskNo -lt 0 -and $DiskNumber -ge 0) { $diskNo = $DiskNumber }
-if ($diskNo -lt 0 -and (Test-Path $DiskConf)) {
-    $v = (Get-Content $DiskConf -First 1).Trim()
-    if ($v -match '^\d+$') { $diskNo = [int]$v }
-}
-if ($diskNo -lt 0) {
-    # 自動検出: システムディスク以外の物理ディスク
-    $others = @(Get-Disk | Where-Object { $_.Number -ne $sysDisk })
-    if ($others.Count -eq 1) {
-        $diskNo = [int]$others[0].Number
-        Info "システムディスク以外はディスク $diskNo だけでした: $($others[0].FriendlyName)"
-        if (-not (Confirm-Step "このディスクを Edge Box のディスクとして使いますか?")) { exit 0 }
-    } elseif ($others.Count -gt 1) {
-        foreach ($o in $others) {
-            Info ("  ディスク {0}: {1} ({2:N0} GB / オフライン={3})" -f $o.Number, $o.FriendlyName, ($o.Size / 1GB), $o.IsOffline)
-        }
-        Fail ("Edge Box のディスクを特定できません。-DiskNumber で指定してください:`n" +
-            (($others | ForEach-Object { "  ディスク {0}: {1}" -f $_.Number, $_.FriendlyName }) -join "`n"))
-    } else {
-        Write-Error "システムディスク以外の物理ディスクが見つかりません。Edge Box のディスクが接続されているか確認してください。"
-        exit 1
+    if(-not $targetVm){
+        if(-not(Confirm-Step ('登録『'+$VMName+'』を作成します。よろしいですか?'))){exit 0}
+        $targetVm=Invoke-LauncherCreateVm $diskInfo $VMName $Script01 $MemoryGB $CpuCount $SwitchName $NetAdapterName
+        Ok ('登録『'+$targetVm.Name+'』を作成しました')
+    }else{
+        $diskInfo=Set-LauncherDiskOffline $diskInfo $targetVm
     }
-}
-$diskInfo = Get-Disk -Number $diskNo -ErrorAction SilentlyContinue
-if (-not $diskInfo) { Write-Error "ディスク $diskNo が見つかりません。"; exit 1 }
-if ($diskNo -eq $sysDisk) { Write-Error "ディスク $diskNo は Windows のシステムディスクです。中止します。"; exit 1 }
-Ok ("ディスク {0}: {1} ({2:N0} GB)" -f $diskInfo.Number, $diskInfo.FriendlyName, ($diskInfo.Size / 1GB))
-if (-not $Status) { $diskNo | Set-Content -Path $DiskConf -Encoding ASCII }
-
-# ============================================================
-#  3. 起動を妨げる状態を先に片付ける
-# ============================================================
-Step "ディスクの使用状況を確認"
-$blocked = $false
-
-# 3-a. 対象 に同じディスクが二重接続されていないか
-if ($targetVm) {
-    foreach ($g in (@(Get-PassthroughDisks $targetVm.Name) | Group-Object DiskNumber)) {
-        if ($g.Count -le 1) { continue }
-        Warn "ディスク $($g.Name) が $($g.Count) 回接続されています (二重接続)"
-        if ($Status) { $blocked = $true; continue }
-        foreach ($extra in @($g.Group | Select-Object -Skip 1)) {
-            Remove-VMHardDiskDrive -VMName $targetVm.Name `
-                -ControllerType $extra.ControllerType `
-                -ControllerNumber $extra.ControllerNumber `
-                -ControllerLocation $extra.ControllerLocation
-        }
-        Ok "余分な接続を外しました"
+    # Preserve the legacy number file for existing readers. Future launcher
+    # selection uses the identity file and follows disk renumbering.
+    $diskNo|Set-Content -LiteralPath $DiskConf -Encoding ASCII -ErrorAction Stop
+    [ordered]@{SchemaVersion=1;UniqueId=$diskInfo.UniqueId;Size=$diskInfo.Size;SerialNumber=$diskInfo.SerialNumber}|
+        ConvertTo-Json|Set-Content -LiteralPath $identityPath -Encoding UTF8 -ErrorAction Stop
+    Step '起動'
+    $targetVm=Get-VM -Id $targetVm.Id -ErrorAction Stop
+    $null=Get-LauncherVmDisk $targetVm $diskNo
+    $null=Get-LauncherVerifiedDisk $diskInfo ([string]$targetVm.Id)
+    if($targetVm.State -eq 'Running'){
+        Ok 'すでに起動しています。コンソールを開きます。'
+        Start-Process 'vmconnect.exe' -ArgumentList @('localhost',('"'+$targetVm.Name+'"'))
+        exit 0
     }
+    if($targetVm.State -ne 'Off'){throw ('VM_NOT_OFF_OR_RUNNING: '+$targetVm.State)}
+    $exitCode=Invoke-LauncherChild $Script02 @{VMName=$targetVm.Name}
+    if($exitCode -ne 0){throw ('START_SCRIPT_FAILED: '+$exitCode)}
+    Ok 'Edge Box を起動しました。'
+    Warn '起動画面で Ctrl キーを押しっぱなしにしないでください (工場出荷リセットが選ばれる機種があります)。'
+}catch{
+    Fail ('安全確認または起動処理で停止しました。接続の自動切離しや別経路での再作成は行いません。'+[Environment]::NewLine+$_.Exception.Message)
 }
-
-# 3-b. 他の Edge Box が同じディスクを掴んでいないか (旧構成の Edge Box が残っている場合)
-foreach ($other in @(Get-VM | Where-Object { -not $targetVm -or $_.Name -ne $targetVm.Name })) {
-    foreach ($d in (Get-PassthroughDisks $other.Name)) {
-        if ($d.DiskNumber -ne $diskNo) { continue }
-        Warn "登録『$($other.Name)』が同じディスク $diskNo を掴んでいます (このままでは起動できません)"
-        if ($Status) { $blocked = $true; continue }
-        if ($other.State -ne "Off") {
-            # 起動中ということは、Edge Box が既にその Edge Box で動いている可能性が高い
-            Warn "  『$($other.Name)』は【起動中】です。Edge Box は既にそちらで動いている可能性があります。"
-            Info "    そのまま使う場合   : .\00-field-launcher.ps1 -VMName `"$($other.Name)`""
-            Info "    こちらに切り替える : Stop-VM '$($other.Name)' で停止してから、もう一度実行"
-            $blocked = $true
-            continue
-        }
-        if (-not (Confirm-Step "『$($other.Name)』からディスクの接続だけを外しますか? (Edge Box もデータも残ります)")) {
-            $blocked = $true
-            continue
-        }
-        Remove-VMHardDiskDrive -VMName $other.Name `
-            -ControllerType $d.ControllerType `
-            -ControllerNumber $d.ControllerNumber `
-            -ControllerLocation $d.ControllerLocation
-        Ok "『$($other.Name)』から接続を外しました (Edge Box とディスクの中身はそのままです)"
-    }
-}
-
-# 3-c. Windows 側でオンラインのままだと Edge Box から開けない
-$diskInfo = Get-Disk -Number $diskNo
-if (-not $diskInfo.IsOffline) {
-    Warn "ディスク $diskNo が Windows でオンラインです"
-    if ($Status) {
-        $blocked = $true
-    } else {
-        Set-Disk -Number $diskNo -IsOffline $true
-        Ok "オフラインにしました (Windows からの誤アクセス防止)"
-    }
-} else {
-    Ok "ディスク $diskNo はオフライン (Edge Box 専有できる状態)"
-}
-
-if ($blocked -and -not $Status) {
-    Fail "解消できない問題が残っているため起動できません。`n動作中の Edge Box がディスクを掴んでいる場合は、その Edge Box を停止してから再実行してください。"
-}
-
-# ============================================================
-#  4. Edge Box が無ければ作成する
-# ============================================================
-if ($Status) {
-    Step "確認だけの実行のため、ここで終了します"
-    if ($targetVm) {
-        Info "起動する Edge Box   : $($targetVm.Name) (状態: $($targetVm.State))"
-    } else {
-        Info "Edge Box は未作成のため、実行時に新しく作成します (名前: $VMName)"
-    }
-    Info "使うディスク  : $diskNo"
-    if ($blocked) { Warn "先に解消が必要な問題があります (上を参照)" }
-    else { Ok "このまま起動できます" }
-    exit 0
-}
-
-# 01 のスクリプトが使えない場合でも作成できるよう、同じ設定をここにも持つ
-function New-FieldVmHere {
-    $sw = $SwitchName
-    if (-not $sw) {
-        $ext = @(Get-VMSwitch -SwitchType External -ErrorAction SilentlyContinue)
-        if ($ext.Count -eq 1) { $sw = $ext[0].Name; Info "外部スイッチ『$sw』を使います" }
-        elseif ($ext.Count -gt 1) {
-            Fail ("外部スイッチが複数あります。-SwitchName で指定してください:`n" +
-                (($ext | ForEach-Object { "  " + $_.Name }) -join "`n"))
-        } elseif ($NetAdapterName) {
-            # 新規 PC: 指定された LAN ポートで外部スイッチを作る (01 と同じ名前)
-            $nic = Get-NetAdapter -Name $NetAdapterName -ErrorAction SilentlyContinue
-            if (-not $nic) {
-                $ip = Get-NetIPAddress -AddressFamily IPv4 -IPAddress $NetAdapterName -ErrorAction SilentlyContinue | Select-Object -First 1
-                if ($ip) { $nic = Get-NetAdapter -InterfaceIndex $ip.InterfaceIndex -ErrorAction SilentlyContinue }
-            }
-            if (-not $nic) { Fail "LAN ポート『$NetAdapterName』が見つかりません。Get-NetAdapter の Name を指定してください。" }
-            New-VMSwitch -Name "EdgeBox-External" -NetAdapterName $nic.Name -AllowManagementOS $true | Out-Null
-            $sw = "EdgeBox-External"
-            Ok "外部スイッチ『$sw』を LAN ポート『$($nic.Name)』に作成しました"
-        } else {
-            # NAT (Default Switch) で作ると工作機械から到達できない Edge Box ができてしまうため、黙って作らない
-            Fail ("外部スイッチがありません。ライン側 LAN ポートを指定して実行してください:`n" +
-                  "  .\00-field-launcher.ps1 -NetAdapterName `"<Get-NetAdapter の Name>`"`n" +
-                  "(工作機械と通信するには、LAN ポートに直結した外部スイッチが必要です)")
-        }
-    }
-    New-VM -Name $VMName -Generation 2 -MemoryStartupBytes ($MemoryGB * 1GB) -NoVHD -SwitchName $sw | Out-Null
-    Set-VMFirmware  -VMName $VMName -EnableSecureBoot Off        # Edge Box は独自の署名チェーン
-    Set-VMProcessor -VMName $VMName -Count $CpuCount
-    Add-VMHardDiskDrive -VMName $VMName -DiskNumber $diskNo      # 物理ディスクを無改造のまま接続
-    Set-VMFirmware  -VMName $VMName -FirstBootDevice (Get-VMHardDiskDrive -VMName $VMName)
-    Set-VM -Name $VMName -CheckpointType Disabled -AutomaticStopAction ShutDown
-}
-
-if (-not $targetVm) {
-    Step "Edge Box を作成"
-    if (-not (Confirm-Step "登録『$VMName』を作成します。よろしいですか?")) { exit 0 }
-    $made = $false
-    if (Test-Path $Script01) {
-        $createArgs = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "`"$Script01`"",
-                        "-DiskNumber", "$diskNo", "-VMName", "`"$VMName`"",
-                        "-MemoryGB", "$MemoryGB", "-CpuCount", "$CpuCount", "-NoConfirm")
-        if ($SwitchName) { $createArgs += @("-SwitchName", "`"$SwitchName`"") }
-        if ($NetAdapterName) { $createArgs += @("-NetAdapterName", "`"$NetAdapterName`"") }
-        $p = Start-Process powershell.exe -ArgumentList ($createArgs -join " ") -NoNewWindow -Wait -PassThru
-        $made = ($p.ExitCode -eq 0) -and [bool](Get-VM -Name $VMName -ErrorAction SilentlyContinue)
-        if (-not $made) { Warn "01-create-field-vm.ps1 では作成できませんでした。この画面の中で作成します。" }
-    } else {
-        Warn "01-create-field-vm.ps1 が見つからないため、この画面の中で作成します。"
-    }
-    if (-not $made) {
-        try { New-FieldVmHere } catch { Fail "Edge Box を作成できませんでした: $($_.Exception.Message)" }
-    }
-    $targetVm = Get-VM -Name $VMName -ErrorAction SilentlyContinue
-    if (-not $targetVm) { Fail "Edge Box の作成に失敗しました。" }
-    Ok "登録『$VMName』を作成しました"
-}
-
-# ============================================================
-#  5. 起動する
-# ============================================================
-Step "起動"
-$targetVm = Get-VM -Name $targetVm.Name -ErrorAction Stop   # 状態を最新にする
-if ($targetVm.State -eq "Running") {
-    Ok "すでに起動しています。コンソールを開きます。"
-    Start-Process "vmconnect.exe" -ArgumentList "localhost", $targetVm.Name
-    exit 0
-}
-
-$p = Start-Process powershell.exe -NoNewWindow -Wait -PassThru -ArgumentList (
-    "-NoProfile -ExecutionPolicy Bypass -File `"$Script02`" -VMName `"$($targetVm.Name)`"")
-if ($p.ExitCode -ne 0) {
-    Fail "起動できませんでした (終了コード $($p.ExitCode))。`nもう一度実行すると、ディスクの片付けからやり直します。"
-}
-
-Write-Host ""
-Write-Host "Edge Box を起動しました。" -ForegroundColor Green
-Write-Host "  起動画面で Ctrl キーを押しっぱなしにしないでください (工場出荷リセットが選ばれる機種があります)" -ForegroundColor Yellow

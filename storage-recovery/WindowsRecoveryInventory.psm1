@@ -122,6 +122,9 @@ function Get-WindowsRecoveryInventory {
             $numbers=@($disks|ForEach-Object{$_.Number})
             if(@($numbers|Select-Object -Unique).Count -ne $numbers.Count){throw 'DISK_NUMBERS_AMBIGUOUS'}
             foreach($d in $disks){
+                # ATA/CIM providers may pad serials; Linux by-id acquisition
+                # records the unpadded serial. Normalize before cross-OS binding.
+                $d.SerialNumber=([string]$d.SerialNumber).Trim()
                 $d.PartitionStyle=Convert-WriNamedEnum $d.PartitionStyle @('RAW','MBR','GPT')
                 if([string]$d.BusType -in @('Storage Spaces','StorageSpaces')){$d.BusType='Spaces'}
                 if([string]$d.BusType -eq 'FileBackedVirtual'){$d.BusType='File Backed Virtual'}

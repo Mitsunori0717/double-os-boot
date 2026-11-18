@@ -7,7 +7,7 @@ internal static class EdgeBoxInstaller {
     static void Extract(string name,string destination) {
         using(var source=Assembly.GetExecutingAssembly().GetManifestResourceStream(name)) {
             if(source==null) throw new InvalidOperationException("Missing embedded resource: "+name);
-            using(var output=File.Create(destination)) source.CopyTo(output);
+            using(var output=new FileStream(destination,FileMode.CreateNew,FileAccess.Write,FileShare.None)) source.CopyTo(output);
         }
     }
     static int Main() {
@@ -17,6 +17,7 @@ internal static class EdgeBoxInstaller {
             Directory.CreateDirectory(stage);
             Extract("Payload",Path.Combine(stage,"payload.zip"));
             Extract("Installer",Path.Combine(stage,"install.ps1"));
+            Extract("SafetyModule",Path.Combine(stage,"package-safety.psm1"));
             var info=new ProcessStartInfo(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System),"WindowsPowerShell\\v1.0\\powershell.exe"));
             info.Arguments="-NoProfile -ExecutionPolicy Bypass -File \""+Path.Combine(stage,"install.ps1")+"\"";
             info.WorkingDirectory=stage;
@@ -30,7 +31,9 @@ internal static class EdgeBoxInstaller {
         } finally {
             try {
                 string full=Path.GetFullPath(stage);
-                if(full.StartsWith(tempRoot,StringComparison.OrdinalIgnoreCase) && Path.GetFileName(full).StartsWith("EdgeBoxInstall_",StringComparison.Ordinal)) Directory.Delete(full,true);
+                string parent=Path.GetFullPath(Path.GetDirectoryName(full)).TrimEnd(Path.DirectorySeparatorChar)+Path.DirectorySeparatorChar;
+                string expected=tempRoot.TrimEnd(Path.DirectorySeparatorChar)+Path.DirectorySeparatorChar;
+                if(parent.Equals(expected,StringComparison.OrdinalIgnoreCase) && Path.GetFileName(full).StartsWith("EdgeBoxInstall_",StringComparison.Ordinal) && (File.GetAttributes(full)&FileAttributes.ReparsePoint)==0) Directory.Delete(full,true);
             } catch {}
         }
     }

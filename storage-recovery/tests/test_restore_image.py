@@ -211,4 +211,23 @@ class RestoreTests(unittest.TestCase):
         with patch.object(sys.stdin,'isatty',return_value=False):
             with self.assertRaisesRegex(ri.oi.SafetyError,'INTERACTIVE_TARGET_CONFIRMATION_REQUIRED'):ri.confirm_terminal({'SerialNumber':'target','Size':512},(8,0),'a'*64)
 
+    def test_invalid_restore_contract_never_touches_target(self):
+        for size, digest in ((0, hashlib.sha256(b'').hexdigest()), (-1, '0'*64),
+                             (True, '0'*64), (512.0, '0'*64), (512, 'bad'), (512, None)):
+            target = io.BytesIO(b'original contents'); events = []
+            with self.subTest(size=size, digest=digest):
+                with self.assertRaises(ri.oi.SafetyError):
+                    ri.restore_stream(io.BytesIO(b'x'*512), target, size, digest,
+                                      lambda s, **k: events.append((s, k)), lambda: None, lambda f: None)
+                self.assertEqual(target.getvalue(), b'original contents')
+                self.assertFalse(events[-1][1]['TargetMayBePartiallyOverwritten'])
+
+    def test_utf8_bom_manifest_is_accepted(self):
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td); data = b'x'*512
+            (p/'image').write_bytes(data)
+            (p/'manifest').write_text(json.dumps(self.manifest(data)), encoding='utf-8-sig')
+            with ri.verified_image(p/'image', p/'manifest') as (stream, _, *_rest):
+                self.assertEqual(stream.read(), data)
+
 if __name__=='__main__':unittest.main()

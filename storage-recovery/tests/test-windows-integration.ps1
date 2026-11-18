@@ -64,6 +64,10 @@ try {
     Assert-True ($profile.Generation -eq 2 -and $profile.SecureBoot -eq 'On') 'UEFI and secure boot retained in profile'
     Assert-True (-not $profile.BootTested -and -not $profile.RestoreTested -and -not $profile.LicenseValidated) 'generated profile makes no guest recovery claim'
     Assert-True (-not (($profile|ConvertTo-Json -Depth 12).Contains($secret))) 'profile JSON excludes provider secrets'
+    Reset-Fixture
+    & $im {$script:F.Disks[0].SerialNumber='  FIXTURE-SERIAL  '}
+    $r=Inspect-Current
+    Assert-True ($r.Inventory.Disks[0].SerialNumber -ceq 'FIXTURE-SERIAL' -and $r.Assessment.RecoveryProfileAllowed) 'padded Windows provider serial binds to Linux acquisition serial'
     foreach($component in @('Disks','Physical','Partitions','OS','Firmware','SecureBoot','Power','Encryption')) {
         Reset-Fixture;& $im {param($c)$script:F.Fail=$c} $component
         $r=Inspect-Current

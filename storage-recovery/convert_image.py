@@ -22,6 +22,8 @@ from datetime import datetime, timezone
 class ConversionError(RuntimeError):
     pass
 
+MAX_MANIFEST = 65536
+
 def utc():
     return datetime.now(timezone.utc).isoformat()
 
@@ -31,6 +33,8 @@ def safe_path(value, *, exists=True):
         raise ConversionError('UNSAFE_PATH')
     if os.name == 'nt':
         for part in re.split(r'[\\/]', text):
+            if part in ('.', '..'):
+                continue
             if part.endswith(('.', ' ')) or re.match(r'^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\.|$)', part, re.I):
                 raise ConversionError('UNSAFE_WINDOWS_NAME')
         if ':' in text[2:]:
@@ -70,12 +74,15 @@ def hash_file(path):
 @contextlib.contextmanager
 def locked_source(path):
     """Mandatory Windows sharing restriction or Linux kernel read lease, not flock."""
+    path = safe_path(path)
     if os.name == 'nt':
         import msvcrt
         from ctypes import wintypes
         k = ctypes.WinDLL('kernel32', use_last_error=True)
         k.CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, ctypes.c_void_p, wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]
         k.CreateFileW.restype = wintypes.HANDLE
+        k.CloseHandle.argtypes = [wintypes.HANDLE]
+        k.CloseHandle.restype = wintypes.BOOL
         handle = k.CreateFileW(str(path), 0x80000000, 1, None, 3, 0x08000000, None)
         if handle == wintypes.HANDLE(-1).value:
             raise ConversionError('SOURCE_READ_LOCK_FAILED: ' + str(ctypes.get_last_error()))
@@ -95,9 +102,16 @@ def locked_source(path):
         def broken(_signum, _frame):
             raise ConversionError('SOURCE_READ_LEASE_BROKEN')
         old = signal.signal(signal.SIGIO, broken)
-        f = open(path, 'rb')
+        f = None
         leased = False
         try:
+            # Do not follow a link or block on a FIFO substituted after safe_path.
+            fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+            try:
+                f = os.fdopen(fd, 'rb')
+            except BaseException:
+                os.close(fd)
+                raise
             if not stat.S_ISREG(os.fstat(f.fileno()).st_mode):
                 raise ConversionError('REGULAR_FILE_REQUIRED')
             try:
@@ -107,30 +121,78 @@ def locked_source(path):
             leased = True
             yield f
         finally:
-            if leased:
-                fcntl.fcntl(f.fileno(), fcntl.F_SETLEASE, fcntl.F_UNLCK)
-            f.close()
-            signal.signal(signal.SIGIO, old)
+            try:
+                if leased:
+                    fcntl.fcntl(f.fileno(), fcntl.F_SETLEASE, fcntl.F_UNLCK)
+            finally:
+                try:
+                    if f is not None:
+                        f.close()
+                finally:
+                    signal.signal(signal.SIGIO, old)
     else:
         raise ConversionError('SOURCE_LOCK_UNSUPPORTED_OS')
 
+def check_locked_file(stream, before, path=None):
+    """Revalidate the held file and, when supplied, its published pathname."""
+    if sys.platform.startswith('linux'):
+        import fcntl
+        if fcntl.fcntl(stream.fileno(), fcntl.F_GETLEASE) != fcntl.F_RDLCK:
+            raise ConversionError('SOURCE_READ_LEASE_NOT_HELD')
+    after = os.fstat(stream.fileno())
+    fields = ('st_dev', 'st_ino', 'st_size', 'st_mtime_ns', 'st_ctime_ns')
+    if any(getattr(before, key) != getattr(after, key) for key in fields):
+        raise ConversionError('SOURCE_CHANGED')
+    if path is not None:
+        current = safe_path(path).stat()
+        if (current.st_dev, current.st_ino) != (after.st_dev, after.st_ino):
+            raise ConversionError('SOURCE_PATH_REPLACED')
+
+
+def read_manifest(stream):
+    raw = stream.read(MAX_MANIFEST + 1)
+    if len(raw) > MAX_MANIFEST:
+        raise ConversionError('MANIFEST_TOO_LARGE')
+    def unique(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ConversionError('DUPLICATE_MANIFEST_KEY')
+            result[key] = value
+        return result
+    def invalid_constant(_value):
+        raise ConversionError('MANIFEST_JSON_INVALID')
+    try:
+        return json.loads(raw.decode('utf-8-sig'), object_pairs_hook=unique,
+                          parse_constant=invalid_constant), raw
+    except (ValueError, UnicodeError):
+        raise ConversionError('MANIFEST_JSON_INVALID') from None
+
+
 def validate_manifest(m):
-    if not isinstance(m, dict) or m.get('SchemaVersion') != 1 or m.get('State') != 'verified' or m.get('Metadata', {}).get('FullSectorImage') is not True:
+    if not isinstance(m, dict) or type(m.get('SchemaVersion')) is not int or m.get('SchemaVersion') != 1 or m.get('State') != 'verified':
+        raise ConversionError('UNVERIFIED_FULL_SECTOR_SOURCE')
+    meta = m.get('Metadata')
+    if not isinstance(meta, dict) or meta.get('FullSectorImage') is not True:
         raise ConversionError('UNVERIFIED_FULL_SECTOR_SOURCE')
     size = m.get('Size')
     if isinstance(size, bool) or not isinstance(size, int) or size <= 0 or size % 512:
         raise ConversionError('INVALID_RAW_SIZE')
-    if not re.fullmatch('[0-9a-fA-F]{64}', str(m.get('Sha256', ''))):
+    if not isinstance(m.get('Sha256'), str) or not re.fullmatch('[0-9a-fA-F]{64}', m['Sha256']):
         raise ConversionError('INVALID_RAW_HASH')
-    source = m.get('Metadata', {}).get('Source', {})
-    if source.get('Size') != size or source.get('LogicalSectorSize') != 512:
+    source = meta.get('Source')
+    if not isinstance(source, dict) or type(source.get('Size')) is not int or source.get('Size') != size or type(source.get('LogicalSectorSize')) is not int or source.get('LogicalSectorSize') != 512:
         raise ConversionError('SOURCE_SIZE_OR_SECTOR_UNSUPPORTED')
-    if not source.get('UniqueId') or not source.get('SerialNumber'):
-        raise ConversionError('SOURCE_IDENTITY_MISSING')
-    if m.get('Metadata', {}).get('AcquisitionMode') not in ('offline-block', 'fixture-file'):
+    for key in ('UniqueId', 'SerialNumber'):
+        value = source.get(key)
+        if not isinstance(value, str) or not value.strip() or len(value) > 256 or any(ord(c) < 32 for c in value):
+            raise ConversionError('SOURCE_IDENTITY_MISSING')
+    if meta.get('AcquisitionMode') not in ('offline-block', 'fixture-file'):
         raise ConversionError('UNKNOWN_ACQUISITION_MODE')
-    if m['Metadata']['AcquisitionMode'] == 'offline-block' and m['Metadata'].get('SourceWriteProtected') is not True:
+    if meta['AcquisitionMode'] == 'offline-block' and meta.get('SourceWriteProtected') is not True:
         raise ConversionError('SOURCE_WRITE_PROTECTION_UNVERIFIED')
+    if meta['AcquisitionMode'] == 'offline-block' and meta.get('GuestConsistency') != 'offline-environment':
+        raise ConversionError('SOURCE_OFFLINE_CONSISTENCY_UNVERIFIED')
     return size
 
 def run_qemu(executable, args, timeout, record):
@@ -208,21 +270,31 @@ def publish_no_replace(source, destination):
 
 
 def convert(raw, output, qemu, *, timeout=86400, allow_fixture=False, runner=run_qemu):
+    if type(allow_fixture) is not bool:
+        raise ConversionError('FIXTURE_PERMISSION_MUST_BE_BOOLEAN')
     raw = safe_path(raw)
     manifest_path = safe_path(str(raw)+'.manifest.json')
     output = safe_path(output, exists=False)
     executable = safe_path(qemu)
     if output.suffix.lower() != '.vhdx' or executable.name.lower() not in ('qemu-img', 'qemu-img.exe'):
         raise ConversionError('VHDX_AND_EXPLICIT_QEMU_PATH_REQUIRED')
-    if timeout <= 0 or timeout > 7 * 86400:
+    if type(timeout) is not int or timeout <= 0 or timeout > 7 * 86400:
         raise ConversionError('INVALID_TIMEOUT')
     if raw == output or raw == executable:
         raise ConversionError('SOURCE_DESTINATION_COLLISION')
     names = [output, Path(str(output)+'.manifest.json'), Path(str(output)+'.events.jsonl'), Path(str(output)+'.conversion.lock')]
     if any(p.exists() or p.is_symlink() for p in names):
         raise ConversionError('OUTPUT_ALREADY_EXISTS')
-    with open(manifest_path, 'r', encoding='utf-8-sig') as f:
-        m = json.load(f)
+    with locked_source(manifest_path) as manifest:
+        manifest_before = os.fstat(manifest.fileno())
+        m, manifest_bytes = read_manifest(manifest)
+        return _convert_locked(raw, output, executable, names, m, manifest,
+                               manifest_before, manifest_bytes, manifest_path,
+                               timeout, allow_fixture, runner)
+
+
+def _convert_locked(raw, output, executable, names, m, manifest, manifest_before,
+                    manifest_bytes, manifest_path, timeout, allow_fixture, runner):
     size = validate_manifest(m)
     if m['Metadata']['AcquisitionMode'] == 'fixture-file' and not allow_fixture:
         raise ConversionError('FIXTURE_REQUIRES_EXPLICIT_ALLOW')
@@ -254,17 +326,14 @@ def convert(raw, output, qemu, *, timeout=86400, allow_fixture=False, runner=run
             sync_file(partial)
             record('copied', {'Stage':'convert','ContainerBytes':partial.stat().st_size,'VerificationPending':True})
             info = json.loads(runner(executable, ['info','-f','vhdx','--output=json',str(partial)], timeout, record))
-            if info.get('format') != 'vhdx' or info.get('virtual-size') != size or info.get('backing-filename'):
+            if not isinstance(info, dict) or info.get('format') != 'vhdx' or type(info.get('virtual-size')) is not int or info.get('virtual-size') != size or info.get('backing-filename'):
                 raise ConversionError('VHDX_INFO_MISMATCH')
             runner(executable, ['check','-f','vhdx',str(partial)], timeout, record)
             if read_vhdx_sector_size(partial) != 512:
                 raise ConversionError('VHDX_LOGICAL_SECTOR_MISMATCH')
             runner(executable, ['compare','-f','raw','-F','vhdx',qemu_source,str(partial)], timeout, record)
-            after = os.fstat(source.fileno())
-            path_after = raw.stat()
-            if (path_after.st_dev,path_after.st_ino) != (after.st_dev,after.st_ino):
-                raise ConversionError('SOURCE_PATH_REPLACED')
-            if (before.st_dev,before.st_ino,before.st_size,before.st_mtime_ns) != (after.st_dev,after.st_ino,after.st_size,after.st_mtime_ns) or hash_stream(source).lower() != m['Sha256'].lower():
+            check_locked_file(source, before, raw)
+            if hash_stream(source).lower() != m['Sha256'].lower():
                 raise ConversionError('SOURCE_CHANGED')
             container_hash = hash_file(partial)
             result = {'SchemaVersion':1,'State':'verified','Format':'vhdx','Size':partial.stat().st_size,
@@ -276,6 +345,11 @@ def convert(raw, output, qemu, *, timeout=86400, allow_fixture=False, runner=run
                       'IntegrityOnly':True}
             pending_manifest = work / 'manifest.partial.json'
             write_json_new(pending_manifest,result)
+            check_locked_file(source, before, raw)
+            check_locked_file(manifest, manifest_before, manifest_path)
+            manifest.seek(0)
+            if manifest.read(MAX_MANIFEST + 1) != manifest_bytes:
+                raise ConversionError('MANIFEST_CHANGED')
             # Input remains locked until both files are published.
             publish_no_replace(partial,output)
             publish_no_replace(pending_manifest,names[1])

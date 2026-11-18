@@ -74,6 +74,8 @@ try{
  Throws {Invoke-IsolatedVmRecovery -VhdxPath $boot -DataVhdxPaths @($data) -Profile $p -VMName 'Recovery-V2' -VMRoot (Join-Path $temp 'tpm-failure') -Create -StartIsolated -Confirm:$false}
  Assert (-not ((& $m {$script:trace.ToArray()}) -contains 'start')) 'TPM failure no boot'
  Assert (Test-Path (Join-Path $temp 'tpm-failure\disk-0.vhdx')) 'failure preserved artifacts'
+ $failure=Get-Content -LiteralPath (Join-Path $temp 'tpm-failure\recovery-failure.json') -Raw|ConvertFrom-Json
+ Assert ($failure.Stage -eq 'ConfiguringVM' -and $failure.VMId -eq 'fixture-new-vm' -and $failure.ObservedVM.State -eq 'Off' -and $failure.WorkingCopies.Count -eq 2) 'TPM failure records VM identity, observed state and both retained copies'
  # Native vTPM wiring: low-level cmdlets are test functions, not Hyper-V.
  Reset-Mocks
  & $m {

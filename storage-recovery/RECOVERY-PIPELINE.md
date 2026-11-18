@@ -1,4 +1,4 @@
-﻿# OS全領域バックアップから別PCの隔離VMまで
+# OS全領域バックアップから別PCの隔離VMまで
 
 ## 実装済みの経路と実機未確認の範囲
 
@@ -62,6 +62,8 @@ $profile | ConvertTo-Json -Depth 12 | Set-Content 'D:\RecoveryArchive\new-recove
 
 保存名は新しいものにします。同じホストに同じMACの既存VMがある場合、保持モードは拒否します。試験のために勝手に新MACへ変えて続行はしません。
 
+旧版の v1 profile は上記の生成コマンドで再生成してください。元媒体の `SourceSerialNumber`、`SourceSize`、`SourceLogicalSectorSize` を必須保存し、VM 作成時に VHDX manifest と照合します。
+
 ## 4. 計画確認、新規VM作成、初回隔離起動
 
 復旧先WindowsはHyper-V対応と管理者権限が必要です。空きCPU/RAMと保存先容量を事前検査します。VM名、VMRootは未使用のものを指定してください。VMRootの親ディレクトリだけを用意し、VMRoot自身は作成しません。
@@ -90,7 +92,7 @@ $profile | ConvertTo-Json -Depth 12 | Set-Content 'D:\RecoveryArchive\new-recove
 
 ## ログと制限
 
-RAW取得・変換ログは対象/バイト数/例外/ハッシュ/使用ツールを記録します。VM側はVMRootの`recovery.events.jsonl`と`recovery-result.json`を使用します。ログにライセンスキーやディスク内容を載せません。途中失敗分を成功扱いせず、同じ名前で再開/上書きしない設計です。
+RAW取得・変換ログは対象/バイト数/例外/ハッシュ/使用ツールを記録します。VM側はVMRootの`recovery.events.jsonl`と`recovery-result.json`を使用します。途中失敗時は`recovery-failure.json`に工程、作成VMのID・観測状態、残存コピーを記録します。ログにライセンスキーやディスク内容を載せません。途中失敗分を成功扱いせず、同じ名前で再開/上書きしない設計です。
 
 ハッシュとmanifestは改ざん検知の整合性資料であり電子署名ではありません。両方同時に改変された場合の真正性を保証しないため、原本と台帳は保護して別に保管してください。UEFI独自ブート情報やハードウェア依存ライセンスが原因で起動しない場合は、メーカーの復元/移行手順が必要です。
 

@@ -1,82 +1,49 @@
-﻿# Edge Box ストレージ保全・別PC VM復旧
+# Edge Box ストレージ保全・復旧
 
-## 復旧機能拡張版
+Windows・Edge Box の全領域バックアップ、物理 SSD への書戻し、別 PC の隔離 Hyper-V VM 復旧を扱います。現在の対応範囲は下表が基準です。Windows 用の PowerShell 補助関数と、Linux Live 用の物理書込みコマンドを区別してください。
 
-[最新版の経路・条件・未検証範囲](RECOVERY-COMPLETION.md) を最初に確認してください。物理SSDへの全LBA書戻し、独立複数ディスクのセット検証、Windows11/新vTPM、BitLockerの正規手動解除を前提とする隔離VM経路を追加しました。旧v1の制限と新v2の条件は区別します。実機復旧試験は未実施です。
-
-物理復元は宛先全データを失う操作です。既定は計画だけで、明示対象指定・直前再照合・消去内容の対話確認なしには書き込みません。既存VM・ホストのセキュリティ設定は変更しません。
-
-
-## 入口
-
-**[OS全領域バックアップ → VHDX → 隔離Hyper-V VMの手順](RECOVERY-PIPELINE.md)** に、実際に使用できるコマンドと確認事項をまとめています。
-
-| 工程 | 実装 | 安全な既定 |
+| 工程 | 実装・条件 | 手順 |
 |---|---|---|
-| 元構成の収集 | `storage-recovery.ps1 -Action Inventory` | 読取りのみ。権限/情報不足は不完全と表示 |
-| 全LBA RAW取得 | `offline_image.py acquire` | 非永続Linux Live・root・未使用の識別済みディスクのみ。ソースは読取り専用/排他 |
-| RAW→VHDX | `convert_image.py` | 既存通常ファイルのみ。新規出力、原本保持、論理内容比較 |
-| VMプロファイル | `New-RecoveryVmProfile` | 元ディスク/RAW hash照合、未知の判断は未確認のまま拒否 |
-| 別PCのVM構築 | `restore-vm.ps1` | 計画のみ。`-Create`明示で新規隔離VM、`-StartIsolated`明示で初回起動 |
+| 構成収集 | PowerShell。ディスク、VM、Windows、暗号化状態を読取り専用で収集 | [Windows 台帳](WINDOWS-INVENTORY.md) |
+| 全 LBA RAW 取得 | 非永続 Linux Live、root、未使用・kernel read-only の独立ディスク。512 / 4096 byte 論理セクタ | [オフライン取得](OFFLINE-IMAGER.md) |
+| 複数媒体の保全 | 全 RAW・manifest の識別とハッシュ、順序、作業者が記録した静止期間を照合 | [バックアップセット](BACKUP-SET.md) |
+| 物理 SSD へ書戻し | Linux Live の `restore_image.py`。既定は計画だけ。同容量・同セクタ、明示モードでは検証済み basic GPT / primary MBR の大容量先 | [物理復元](PHYSICAL-RESTORE.md) |
+| RAW → VHDX | `convert_image.py` と別途用意した QEMU。512 byte 論理セクタのみ、論理内容比較あり | [VHDX 変換](VHDX-CONVERSION.md) |
+| v1 隔離 VM | 単一ディスク・単一 NIC、Gen1 / Gen2、TPM 依存なし、元媒体と RAW ハッシュの照合 | [VM 復旧](RECOVERY-PIPELINE.md) |
+| v2 隔離 VM | Gen2 / GPT / UEFI、最大 8 独立ディスク、単一 NIC。条件付きで Windows 11、新 vTPM、BitLocker の正規手動解除 | [Windows 評価](WINDOWS-PLAN.md) |
 
-**実SSDの取得・Hyper-V実起動・FSBP復旧/認証の実機試験は未実施です。** ソフトウェアのファイル試験やVM操作のmock試験を、実機成功に読み替えません。実際の操作前には正常停止の保守時間、対象/保存先、管理者権限、メーカーの復元/ライセンス条件を確認してください。
+4Kn の保全・同セクタ物理復元は、4Kn VHDX 変換対応を意味しません。縮小復元、RAID / Storage Spaces / LVM / dynamic disk、故障媒体の救出、旧 TPM 秘密の複製、任意ハードウェアの完全再現は対象外です。大容量復元でもパーティション自体は拡張しません。
 
-この実装は、既存VMや物理ディスクへの復元書込、ディスク初期化、MAC変更、VM停止、ネットワーク接続を自動で行いません。明示して新規作成するVMだけを設定し、NICをスイッチ未接続に保ちます。
+## 実行の区別
 
-## 重要な制限
+- `storage-recovery.ps1` の `PhysicalBackup` / `PhysicalRestore` は拒否を維持しています。Windows 稼働中の物理取得・書戻しは提供しません。
+- `StorageRecovery.psm1` の `New-RestorePlan` は計画のみです。物理書込みは `restore_image.py restore` が担います。
+- 物理復元は宛先全データを上書きします。対象識別、元媒体・保存媒体の除外、実行直前の再照合、確認トークン、対話確認を通過して初めて実行します。
+- VM は `-Create` で新規作成し、`-StartIsolated` を追加したときだけ起動要求します。既存 VM を変更せず、保管原本から稼働コピーを作り、NIC をスイッチ未接続に保ちます。
 
-- Disk番号やWindowsのOfflineだけを信頼しません。識別情報、mount/VM利用、容量、論理セクタを検査します。
-- 全領域取得はLinux Live専用。Windows稼働中の物理ディスク取得は提供しません。
-- 変換/VM経路は512-byte論理セクタ、単一ディスク/単一NICが初版の範囲。4Kn、RAID/LVM、差分VHDX、複数媒体、vTPM必須/不明は別評価または拒否します。
-- Hyper-V VM IDは新しくなります。元IDが必須なら進めません。MAC保持だけでライセンス認証が通るとは限りません。
-- ハッシュ/manifestは電子署名ではありません。原本と台帳を別に保護してください。
-- RAW、変換VHDX、稼働コピーを同じ場所に置く場合は三つ分の最悪容量を見積もります。約1TB元媒体なら、RAW1世代保存用は2TB、三つをまとめるなら4TBが安全側の目安です。
+## 検証と復旧成功
 
-## 詳細手順
+`partial → copied / written → verified` を区別します。短い I/O、flush 失敗、読み戻し不一致は成功になりません。`verified` は保存・変換・書戻しデータの一致であり、OS 起動やアプリ・ライセンス復旧の証明ではありません。Hyper-V が `Running` でも `BootTested` / `RestoreTested` / `LicenseValidated` は false のままです。
 
-- [Linux Live全領域取得](OFFLINE-IMAGER.md)
-- [QEMUによるVHDX変換と検証](VHDX-CONVERSION.md)
-- [一連の復旧と隔離VM](RECOVERY-PIPELINE.md)
-- [Clonezillaの別方式・公式媒体検証](OFFLINE-RECOVERY.md)
+実 SSD 取得・書戻し、Live の実ブロックデバイス排他、Hyper-V ゲスト起動、FSBP・Windows の実動作・認証試験は未実施です。[今回の非破壊検証](../VALIDATION.md) と [実機受入手順](../docs/HARDWARE-ACCEPTANCE.md) を参照してください。
 
-Clonezillaの`device-image/savedisk`はディスク全体を復元対象にできますが、対応FSの使用中ブロック中心に保存する方式です。未使用領域を含む全LBA RAW取得とは区別してください。Clonezillaの複数圧縮ファイル形式と、本モジュールの通常ファイル/manifest形式は互換ではありません。
+RAW、VHDX、稼働コピーを同時に保存する場合は元媒体合計容量の約 3 倍に加え、形式情報・空き予約・失敗時の partial を見積もります。暗号化キーと TPM 内部の秘密、NAS や別媒体だけにあるデータは単一 RAW から復元できません。
 
-## 補助PowerShellモジュール
+## この版への移行
 
-`StorageRecovery.psm1`は、構成収集、事前安全判定、通常イメージファイルのコピー/読み戻し検査、物理復元の**計画だけ**を提供します。物理書込関数はありません。`Allowed=true`は計画条件の確認であり、実行や復旧成功ではありません。
+旧 v1 プロファイルは、元台帳と RAW manifest から `New-RecoveryVmProfile` または `New-WindowsRecoveryVmProfile` で再生成してください。`SourceSerialNumber`、`SourceSize`、`SourceLogicalSectorSize` が必須となり、実行時に変換 manifest と照合します。手書きで検証済みフラグを追加しないでください。
 
-`storage-recovery.ps1`のWindows版`PhysicalBackup`/`PhysicalRestore`アクションは引き続き拒否されます。実取得はLinux Live専用コマンドを使用します。`CopyImage`は独自manifest付きの既存通常ファイルだけを扱います。
-
-```powershell
-# 読取り専用
-.\storage-recovery.ps1 -Action Inventory
-# 通常ファイル+独自manifestの整合検査
-.\storage-recovery.ps1 -Action Verify -ImagePath 'E:\Backup\edgebox.raw'
-# 新しい別名に複製。既存宛先や途中ファイルを上書きしません。
-.\storage-recovery.ps1 -Action CopyImage -ImagePath 'E:\Backup\edgebox.raw' -DestinationPath 'F:\Backup\edgebox-copy.raw'
-```
-
-`Write-ImageFromStream`は下位の通常ストリーム用処理で、物理ディスクを開きません。fixture入力を実機バックアップの証拠にはできません。`New-RestorePlan`は元SSD、ホストOS、画像保存先、VM接続先、容量/セクタ不一致を拒否しますが、物理書込はしません。
-
-## 状態とログ
-
-`partial → copied → verified`を区別し、短い読取り、I/O/flush失敗、読み戻し不一致を成功にしません。中断物を自動再開・上書きしません。エラーログには工程、処理/予定バイト、例外/OSコードを含め、秘密やディスク内容を入れません。
-
-`verified`は保存/変換データの整合性であり、復旧起動成功ではありません。VMが`Running`でも`BootTested`、`RestoreTested`、`LicenseValidated`はfalseのままです。隔離した実機で確認して初めて評価できます。
+VM 作成途中の失敗は VMRoot の `recovery-failure.json` と `recovery.events.jsonl` に記録します。残った VM・partial・コピーを確認してから、新しい VM 名・保存先で再試行します。自動削除・自動再開は行いません。
 
 ## 非破壊テスト
 
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\tests\run-all.ps1
+配布物のルートで実行します。
 
-# 個別実行:
-powershell -NoProfile -ExecutionPolicy Bypass -File .\tests\run-tests.ps1
-powershell -NoProfile -ExecutionPolicy Bypass -File .\tests\test-hyperv-recovery.ps1
-python -B -m unittest discover -s tests -p 'test_*.py' -v
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File tests/run-all.ps1
+# qemu-img を用意して実変換も必須にする場合
+$env:QEMU_IMG_TEST_EXE = 'C:\ApprovedTools\qemu-img.exe'
+powershell -NoProfile -ExecutionPolicy Bypass -File tests/run-all.ps1 -RequireQemu
 ```
 
-PowerShellのHyper-V試験は全操作をmock化し、実コマンド呼出しを禁止します。Pythonは通常ファイルとmockを使用し、実ディスクを触りません。QEMUを用いた合成RAWの実変換試験はクラウドの一時ファイルのみで別途実施しました。実機/Live起動/停電やUSB故障/FSBPライセンス確認はこれらに含みません。
-
-## Windows・一般OSのインストール状態を含む保存
-
-[対応範囲、Windows事前台帳、暗号化・休止・複数ディスクと復旧制限](GENERAL-OS-RECOVERY.md) を参照してください。
+詳しい一連の流れは [RECOVERY-COMPLETION.md](RECOVERY-COMPLETION.md)、Clonezilla の別方式は [OFFLINE-RECOVERY.md](OFFLINE-RECOVERY.md) を参照してください。Clonezilla の圧縮セットと本ツールの RAW / manifest は互換形式ではありません。

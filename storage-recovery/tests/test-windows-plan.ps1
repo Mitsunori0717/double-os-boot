@@ -70,4 +70,15 @@ $f=New-Fixture;$rejected=$false;try{New-WindowsRecoveryVmProfile $f.I $f.M $f.E 
 $f=New-Fixture;$f.I.Firmware.Type='Bios';$f.I.Disks[0].PartitionStyle='MBR'
 $large=2TB+512;$f.M.Size=$large;$f.M.Metadata.Source.Size=$large;$f.I.Disks[0].Size=$large;$f.E.Size=$large
 $a=Assess $f;Assert-True (-not $a.RecoveryProfileAllowed -and $a.Reasons -contains 'GEN1_BOOT_DISK_EXCEEDS_2TB') 'Gen1 boot size boundary'
+$f=New-Fixture
+$f.I.Partitions+=@{DiskNumber=0;DriveLetter='D'}
+$a=Assess $f
+Assert-True (-not $a.RecoveryProfileAllowed -and $a.Reasons -contains 'DEPENDENT_VOLUME_ENCRYPTION_COVERAGE_UNPROVEN') 'missing encryption state for data volume on source disk refuses v1'
+$f=New-Fixture
+$f.I.Disks+=@{Number=9;SerialNumber='BACKUP';UniqueId='BACKUP-ID';Size=8192;LogicalSectorSize=512;PartitionStyle='GPT'}
+$f.I.Partitions+=@{DiskNumber=9;DriveLetter='E'}
+$f.I.Encryption.Volumes+=@{MountPoint='E:';Status='Known';EncryptionMethod='XtsAes256';EncryptionPercentage=100;ConversionStatus='FullyEncrypted';ProtectionStatus='On';LockStatus='Unlocked'}
+Assert-True (Assess $f).RecoveryProfileAllowed 'encrypted backup destination outside source disk does not block v1'
+$f.I.Partitions[-1].DiskNumber=0
+Assert-True (-not(Assess $f).RecoveryProfileAllowed) 'same encrypted volume on source disk still blocks v1'
 Write-Output ("PASS WindowsRecoveryPlan assertions="+$script:Count)
