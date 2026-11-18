@@ -63,6 +63,17 @@ foreach($settings in @(@{MemoryStartupBytes=2GB},@{ProcessorCount=1})){$f=Expand
 Import-Module (Join-Path (Split-Path $PSScriptRoot -Parent) 'HyperVRecovery.psm1')
 foreach($case in @('Clear','Encrypted','Multi')){$f=Expanded;if($case -eq 'Encrypted'){Encrypt $f};if($case -eq 'Multi'){AddDisk $f};$p=Profile2 $f;$v=Test-RecoveryVmProfile $p;Check $v.Allowed ('HyperV schema '+($v.Reasons -join ','))}
 
+$f=Expanded
+$f.I.Disks+=@{Number=9;SerialNumber='BACKUP';UniqueId='BACKUP-ID';Size=160GB;LogicalSectorSize=512;PartitionStyle='GPT';BusType='USB'}
+$f.I.Partitions+=@{DiskNumber=9;DriveLetter='E'}
+$f.I.Encryption.Volumes+=@{MountPoint='E:';Status='Known';EncryptionMethod='XtsAes256';EncryptionPercentage=100;ConversionStatus='FullyEncrypted';ProtectionStatus='On';LockStatus='Unlocked'}
+Check (Assess2 $f).RecoveryProfileAllowed 'encrypted backup destination proven outside source set does not require its own recovery image'
+$f.I.Partitions[-1].DiskNumber=0
+Check (-not(Assess2 $f).RecoveryProfileAllowed) 'encrypted volume on source set still requires recovery evidence'
+$f=Expanded;$f.I.Partitions+=@{DiskNumber=0;DriveLetter='D'}
+$a=Assess2 $f
+Check (-not $a.RecoveryProfileAllowed -and $a.Reasons -contains 'DEPENDENT_VOLUME_ENCRYPTION_COVERAGE_UNPROVEN') 'missing source-volume state still rejected in v2'
+
 # CLI reads synthetic JSON files only; never Inventory action or device APIs.
 $temp=Join-Path ([IO.Path]::GetTempPath()) ('ExpandedPlanFixtures_'+[guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $temp|Out-Null

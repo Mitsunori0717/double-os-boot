@@ -236,7 +236,7 @@ if ($Setup) {
 try {
     . (Join-Path $PSScriptRoot "cpu-ui-theme.ps1")
 } catch {
-    Show-Info ("画面の部品 (cpu-ui-theme.ps1) を読み込めませんでした。update.cmd で更新してください。`n`n" + $_.Exception.Message) "Error"
+    Show-Info ("画面の部品 (cpu-ui-theme.ps1) を読み込めませんでした。配布 ZIP 全体を新しいフォルダーへ展開し直してください。`n`n" + $_.Exception.Message) "Error"
     exit 1
 }
 
@@ -1275,7 +1275,7 @@ $script:btnApps.Add_Click({ Show-AppsDialog })
 # 各コアの負荷をリアルタイム表示する別ウィンドウ (cpu-monitor.ps1)
 $script:btnMon.Add_Click({
     $mon = Join-Path $PSScriptRoot "cpu-monitor.ps1"
-    if (-not (Test-Path $mon)) { Show-Info "cpu-monitor.ps1 が見つかりません。update.cmd で更新してください。" "Warning"; return }
+    if (-not (Test-Path $mon)) { Show-Info "cpu-monitor.ps1 が見つかりません。配布 ZIP 全体を新しいフォルダーへ展開し直してください。" "Warning"; return }
     try {
         Start-Process powershell.exe -ArgumentList (
             "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$mon`" -VMName `"$($script:VmNameSel)`"")

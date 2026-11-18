@@ -35,7 +35,7 @@ Add-Type -AssemblyName System.Drawing
 try {
     . (Join-Path $PSScriptRoot "cpu-ui-theme.ps1")
 } catch {
-    [System.Windows.Forms.MessageBox]::Show(("画面の部品 (cpu-ui-theme.ps1) を読み込めませんでした。update.cmd で更新してください。`n`n" + $_.Exception.Message),
+    [System.Windows.Forms.MessageBox]::Show(("画面の部品 (cpu-ui-theme.ps1) を読み込めませんでした。配布 ZIP 全体を新しいフォルダーへ展開し直してください。`n`n" + $_.Exception.Message),
         "Edge Box 監視", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error) | Out-Null
     exit 1
 }

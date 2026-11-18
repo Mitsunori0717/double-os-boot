@@ -1,5 +1,7 @@
 ﻿#requires -Version 5.1
 $ErrorActionPreference='Stop'
+& (Join-Path $PSScriptRoot 'test-safety.ps1')
+& (Join-Path $PSScriptRoot 'test-vm-create-safety.ps1')
 $project=Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
 $temp=Join-Path ([IO.Path]::GetTempPath()) ('EdgeBoxSetupTests_'+[guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path (Join-Path $temp 'setup') -Force | Out-Null
@@ -13,20 +15,22 @@ try {
         function Assert($Condition,[string]$Message) { if (-not $Condition) { throw "TEST FAILED: $Message" } }
         $script:MockStates=@{}; $script:Applied=@(); $script:Fail=''; $script:NoEffect=''
         function Test-SetupAdmin { $true }
+        # These tests isolate orchestration. test-safety.ps1 exercises the real package preflight.
+        function Get-SetupMissingFiles { @() }
         function Get-SetupStepState([string]$Id) { New-SetupState $script:MockStates[$Id] ('fixture '+$Id) }
         function Invoke-SetupStep([string]$Id) {
             $script:Applied+=$Id
             if ($Id -eq $script:Fail) { throw 'simulated failure' }
             if ($Id -ne $script:NoEffect) { $script:MockStates[$Id]='Done' }
         }
-        function Register-SetupResume { $script:Registered=$true }
+        function Register-SetupResume { param($Step,[switch]$RestartIfNeeded) $script:Registered=$true; $script:RegisteredRestart=[bool]$RestartIfNeeded }
         function Unregister-ScheduledTask { $script:Removed=$true }
         function Restart-Computer { throw 'Tests must never restart the PC' }
         function Get-SetupBootId { 'boot-current' }
         function Write-SetupLog([string]$Message) { if ($script:RunDir) {Add-Content (Join-Path $script:RunDir 'summary.txt') $Message -Encoding UTF8} }
         function Reset-Fixture {
             foreach($d in Get-SetupSteps){$script:MockStates[$d.Id]='Done'}
-            $script:Applied=@();$script:Fail='';$script:NoEffect='';$script:Removed=$false;$script:Registered=$false
+            $script:Applied=@();$script:Fail='';$script:NoEffect='';$script:Removed=$false;$script:Registered=$false;$script:RegisteredRestart=$false
         }
         Reset-Fixture
         $rc=Invoke-EdgeBoxSetup -Status
@@ -63,6 +67,7 @@ try {
         $script:MockStates['02']='RebootRequired'
         $rc=Invoke-EdgeBoxSetup -NoConfirm
         Assert ($rc -eq 3010 -and $script:Registered) 'pending reboot must register resumption and return 3010'
+        Assert (-not $script:RegisteredRestart) 'manual restart preference must survive resumption'
         $state=Join-Path $script:FixtureSetupDir 'resume-state.json'
         @{BootId='boot-previous';Pending=@('02');AutoReboots=1}|ConvertTo-Json|Set-Content $state -Encoding UTF8
         $rc=Invoke-EdgeBoxSetup -Resume -NoConfirm
@@ -70,12 +75,19 @@ try {
         Reset-Fixture
         $script:MockStates['10']='RebootRequired'
         @{BootId='boot-previous';Pending=@('02');AutoReboots=2}|ConvertTo-Json|Set-Content $state -Encoding UTF8
-        $rc=Invoke-EdgeBoxSetup -Resume -NoConfirm
+        $rc=Invoke-EdgeBoxSetup -Resume -NoConfirm -RestartIfNeeded
         Assert ($rc -eq 1 -and -not $script:Registered) 'automatic reboots must be bounded'
         Reset-Fixture
         $script:MockStates['05']='NeedsWork'
         $rc=Invoke-EdgeBoxSetup -Step '05' -NoConfirm
         Assert ($rc -eq 0 -and ($script:Applied -join ',') -eq '05') 'numbered batch must run only its own step'
+        Assert (-not $script:Removed) 'numbered runs must preserve an existing all-steps resume task'
+        Reset-Fixture
+        $script:MockStates['02']='RebootRequired'
+        $before=Get-Content -LiteralPath $state -Raw
+        $rc=Invoke-EdgeBoxSetup -Step '02' -NoConfirm -RestartIfNeeded
+        Assert ($rc -eq 3010 -and -not $script:Registered -and -not $script:Removed) 'numbered pending runs must not register or remove resume tasks'
+        Assert ((Get-Content -LiteralPath $state -Raw) -eq $before) 'numbered runs must preserve all-steps resume state'
         Reset-Fixture
         $settings=Join-Path $script:FixtureSetupDir 'settings.json'
         Set-Content -LiteralPath $settings -Value '{broken' -Encoding UTF8
@@ -84,8 +96,10 @@ try {
         Assert ($rc -eq 0 -and '13' -in $script:Applied) 'corrupt device choices must not block independent settings'
         Remove-Item -LiteralPath $settings -Force
         Set-Content -LiteralPath $state -Value '{broken' -Encoding UTF8
+        $script:MockStates['13']='NeedsWork';$script:Applied=@()
         $rc=Invoke-EdgeBoxSetup -Resume -NoConfirm
         Assert ($rc -eq 1 -and $script:Removed) 'corrupt resume state must stop automatic resumption safely'
+        Assert ($script:Applied.Count -eq 0) 'corrupt resume state must be rejected before changing settings'
         Write-Host 'PASS: setup resumption, idempotence, failure isolation, postchecks, logs and numbered retry'
     }
     # 実際に別プロセスを起動し、引用符・空白・末尾バックスラッシュと終了コードを確認する。

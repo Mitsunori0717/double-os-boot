@@ -26,11 +26,18 @@
 param(
     # Edge Box が入っている物理ディスク番号 (Get-Disk で確認)
     [Parameter(Mandatory = $true)]
-    [int]$DiskNumber,
+    [ValidateRange(0,2147483647)][int]$DiskNumber,
+
+    # Callers bind the disk they selected before launching this child process.
+    [string]$ExpectedUniqueId = "",
+    [UInt64]$ExpectedSize = 0,
+    [string]$ExpectedSerialNumber = "",
+    [string]$ExpectedSwitchId = "",
+    [string]$ExpectedNetAdapterGuid = "",
 
     [string]$VMName   = "EdgeBox",
-    [int]$MemoryGB    = 8,
-    [int]$CpuCount    = 6,
+    [ValidateRange(1,1048576)][int]$MemoryGB = 8,
+    [ValidateRange(1,2048)][int]$CpuCount = 6,
 
     # 外部スイッチを作る物理 NIC 名 (Get-NetAdapter で確認)。IP アドレスでも指定できます。
     # 省略時は Default Switch (NAT) になり、工作機械から Edge Box に到達できないため
@@ -45,6 +52,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+Import-Module (Join-Path $PSScriptRoot 'vm-create-safety.psm1') -Force -ErrorAction Stop
 
 $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
     ).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
@@ -53,20 +61,20 @@ if (-not $isAdmin) {
     exit 1
 }
 if (-not (Get-Command Get-VM -ErrorAction SilentlyContinue)) {
-    Write-Error "Hyper-V が有効になっていません。alternatives\hyperv\windows\01-enable-hyperv.ps1 を実行して再起動してください。"
+    Write-Error "Hyper-V が有効になっていません。setup\02-enable-hyperv.cmd を実行して再起動してください。"
     exit 1
 }
-if (Get-VM -Name $VMName -ErrorAction SilentlyContinue) {
-    Write-Error "登録 '$VMName' は既に存在します。削除するには: Remove-VM $VMName -Force"
+if (@(Get-VM -ErrorAction Stop | Where-Object Name -eq $VMName).Count) {
+    Write-Error "登録 '$VMName' は既に存在します。既存 VM は変更せず停止します。"
     exit 1
 }
 
-# --- 安全確認: システムディスク (C:) ではないこと ---
-$sysDisk = (Get-Partition -DriveLetter C).DiskNumber
-if ($DiskNumber -eq $sysDisk) {
-    Write-Error "ディスク $DiskNumber は Windows のシステムディスクです。Edge Box のディスク番号を指定してください。"
-    exit 1
+# NoConfirm skips only the prompt; an unattended caller must supply the selected identity.
+if ($NoConfirm -and ([string]::IsNullOrWhiteSpace($ExpectedUniqueId) -or -not $ExpectedSize)) {
+    throw '-NoConfirm には選択済みディスクの -ExpectedUniqueId と -ExpectedSize が必要です。'
 }
+$disk=Get-EdgeBoxCreateDisk -DiskNumber $DiskNumber -ExpectedUniqueId $ExpectedUniqueId -ExpectedSize $ExpectedSize -ExpectedSerialNumber $ExpectedSerialNumber
+$selectedDisk=[pscustomobject]@{Number=$disk.Number;UniqueId=[string]$disk.UniqueId;Size=[UInt64]$disk.Size;SerialNumber=[string]$disk.SerialNumber;IsOffline=[bool]$disk.IsOffline}
 
 # --- ネットワーク NIC の確認 (ディスクに触れる前に済ませる) ---
 # 名前・IP アドレス・説明のどれで指定されても、実際のアダプター名に解決する
@@ -100,8 +108,11 @@ function Show-VMSwitches {
 
 # Windows 側のアダプター名 (vEthernet (X)) から、その外部スイッチを探す
 function Get-SwitchByHostAdapter([string]$AdapterName) {
-    foreach ($sw in @(Get-VMSwitch -ErrorAction SilentlyContinue)) {
-        if ($AdapterName -eq ("vEthernet (" + $sw.Name + ")")) { return $sw }
+    $matching=@(Get-VMSwitch -ErrorAction Stop | Where-Object { $AdapterName -eq ("vEthernet (" + $_.Name + ")") })
+    if ($matching.Count -gt 1) { throw 'LAN アダプターの所属スイッチを一意に確認できません。' }
+    if ($matching.Count) {
+        if ([string]$matching[0].SwitchType -ne 'External') { throw '指定されたアダプターは外部スイッチ用ではありません。' }
+        return $matching[0]
     }
     return $null
 }
@@ -109,29 +120,36 @@ function Get-SwitchByHostAdapter([string]$AdapterName) {
 # 物理 NIC が既にどれかの外部スイッチに割り当て済みかを調べる
 function Get-SwitchByPhysicalNic($Nic) {
     if (-not $Nic) { return $null }
-    foreach ($sw in @(Get-VMSwitch -SwitchType External -ErrorAction SilentlyContinue)) {
-        if ($sw.NetAdapterInterfaceDescription -eq $Nic.InterfaceDescription) { return $sw }
-    }
+    if ([string]::IsNullOrWhiteSpace([string]$Nic.InterfaceGuid)) { throw '物理 LAN の ID を確認できません。' }
+    $matching=@(Get-VMSwitch -SwitchType External -ErrorAction Stop | Where-Object {
+        $guids=@($_.NetAdapterInterfaceGuid)+@($_.NetAdapterInterfaceGuids)
+        [string]$Nic.InterfaceGuid -in @($guids | ForEach-Object { [string]$_ })
+    })
+    if ($matching.Count -gt 1) { throw '物理 LAN の所属スイッチを一意に確認できません。' }
+    if ($matching.Count) { return $matching[0] }
     return $null
 }
 
 function Resolve-NetAdapterName([string]$Spec) {
-    $a = Get-NetAdapter -Name $Spec -ErrorAction SilentlyContinue
-    if ($a) { return $a.Name }
+    $allAdapters=@(Get-NetAdapter -ErrorAction Stop)
+    $a = @($allAdapters | Where-Object Name -eq $Spec)
+    if ($a.Count -eq 1) { return $a[0].Name }
+    if ($a.Count -gt 1) { throw 'LAN アダプター名を一意に確認できません。' }
     # IPv4 アドレスで指定された場合は、そのアドレスを持つアダプターを探す
     if ($Spec -match '^\d{1,3}(\.\d{1,3}){3}$') {
-        $ip = @(Get-NetIPAddress -IPAddress $Spec -AddressFamily IPv4 -ErrorAction SilentlyContinue)[0]
-        if ($ip) {
-            $byIp = Get-NetAdapter -InterfaceIndex $ip.InterfaceIndex -ErrorAction SilentlyContinue
-            if ($byIp) {
+        $ips = @(Get-NetIPAddress -AddressFamily IPv4 -ErrorAction Stop | Where-Object IPAddress -eq $Spec)
+        if ($ips.Count -gt 1) { throw 'IP アドレスに対応する LAN を一意に確認できません。' }
+        if ($ips.Count) {
+            $byIp = @($allAdapters | Where-Object InterfaceIndex -eq $ips[0].InterfaceIndex)
+            if ($byIp.Count -eq 1) {
                 Write-Host "IP $Spec は LAN アダプター『$($byIp.Name)』のものでした。これを使います。" -ForegroundColor Cyan
-                return $byIp.Name
+                return $byIp[0].Name
             }
         }
         return $null
     }
     # 製品名 (説明) の一部でも探す
-    $byDesc = @(Get-NetAdapter -ErrorAction SilentlyContinue | Where-Object { $_.InterfaceDescription -like "*$Spec*" })
+    $byDesc = @($allAdapters | Where-Object { ([string]$_.InterfaceDescription).IndexOf($Spec,[StringComparison]::OrdinalIgnoreCase) -ge 0 })
     if ($byDesc.Count -eq 1) {
         Write-Host "『$Spec』は LAN アダプター『$($byDesc[0].Name)』と判断しました。" -ForegroundColor Cyan
         return $byDesc[0].Name
@@ -145,7 +163,8 @@ $createFrom = ""
 
 if ($SwitchName) {
     # --- 既にあるスイッチを指定された ---
-    $sw = Get-VMSwitch -Name $SwitchName -ErrorAction SilentlyContinue
+    $sw = @(Get-VMSwitch -ErrorAction Stop | Where-Object Name -eq $SwitchName)
+    if ($sw.Count -gt 1) { throw '外部スイッチを一意に確認できません。' }
     if (-not $sw) {
         Write-Host ""
         Write-Host "外部スイッチ『$SwitchName』がありません。" -ForegroundColor Red
@@ -153,6 +172,8 @@ if ($SwitchName) {
         Write-Host "ディスクには何も変更していません。" -ForegroundColor Green
         exit 1
     }
+    if ([string]$sw[0].SwitchType -ne 'External') { throw '-SwitchName には外部スイッチを指定してください。' }
+    $sw=$sw[0]
     $useSwitch = $sw.Name
     Write-Host "既存の外部スイッチ『$useSwitch』($($sw.SwitchType)) を使います。" -ForegroundColor Cyan
 
@@ -176,7 +197,7 @@ if ($SwitchName) {
     if (-not $sw) {
         # 物理 NIC が既に外部スイッチへ割り当て済みなら、それを再利用する
         # (1 枚の NIC を 2 つの外部スイッチに割り当てることはできないため)
-        $sw = Get-SwitchByPhysicalNic (Get-NetAdapter -Name $resolvedNic -ErrorAction SilentlyContinue)
+        $sw = Get-SwitchByPhysicalNic (Get-NetAdapter -Name $resolvedNic -ErrorAction Stop)
     }
     if ($sw) {
         $useSwitch = $sw.Name
@@ -189,7 +210,7 @@ if ($SwitchName) {
 
 } else {
     # --- 指定なし: 外部スイッチが 1 つだけならそれを使う ---
-    $ext = @(Get-VMSwitch -SwitchType External -ErrorAction SilentlyContinue)
+    $ext = @(Get-VMSwitch -SwitchType External -ErrorAction Stop)
     if ($ext.Count -eq 1) {
         $useSwitch = $ext[0].Name
         Write-Host "外部スイッチ『$useSwitch』が 1 つだけあるため、これを使います。" -ForegroundColor Cyan
@@ -206,26 +227,29 @@ if ($SwitchName) {
     }
 }
 
-# --- 同じ物理ディスクを既に他の Edge Box が使っていないか (同時使用は不可) ---
-foreach ($other in @(Get-VM -ErrorAction SilentlyContinue)) {
-    foreach ($d in @(Get-VMHardDiskDrive -VMName $other.Name -ErrorAction SilentlyContinue)) {
-        if ($d.DiskNumber -eq $DiskNumber) {
-            Write-Host ""
-            Write-Host "ディスク $DiskNumber は既に 登録『$($other.Name)』が使っています。" -ForegroundColor Red
-            Write-Host "  1 つの物理ディスクを 2 つの Edge Box から同時に使うことはできません。" -ForegroundColor Yellow
-            Write-Host "  旧構成の Edge Box が残っている場合は、先に削除してください: Remove-VM '$($other.Name)' -Force" -ForegroundColor Yellow
-            Write-Host "ディスクには何も変更していません。" -ForegroundColor Green
-            exit 1
-        }
+$selectedSwitchId='';$selectedNicGuid=''
+if ($createFrom) {
+    if ($ExpectedSwitchId) { throw '選択済みの既存スイッチを、新規スイッチで置き換えません。' }
+    $nic=@(Get-NetAdapter -Physical -ErrorAction Stop | Where-Object Name -eq $createFrom)
+    if ($nic.Count -ne 1 -or [string]::IsNullOrWhiteSpace([string]$nic[0].InterfaceGuid)) { throw '作成先の物理 LAN を一意に確認できません。' }
+    $selectedNicGuid=[string]$nic[0].InterfaceGuid
+    if ($ExpectedNetAdapterGuid -and $selectedNicGuid -ne $ExpectedNetAdapterGuid) { throw '選択時から物理 LAN の ID が変わりました。' }
+    if (@(Get-VMSwitch -ErrorAction Stop | Where-Object Name -eq $useSwitch).Count) { throw '作成予定と同名のスイッチが既にあります。' }
+} else {
+    $selectedSwitch=@(Get-VMSwitch -ErrorAction Stop | Where-Object Name -eq $useSwitch)
+    if ($selectedSwitch.Count -ne 1) { throw '使用するスイッチを一意に確認できません。' }
+    $selectedSwitchId=[string]$selectedSwitch[0].Id
+    if ($ExpectedSwitchId -and $selectedSwitchId -ne $ExpectedSwitchId) { throw '選択時から外部スイッチの ID が変わりました。' }
+    if ($ExpectedNetAdapterGuid) {
+        $nicGuids=@($selectedSwitch[0].NetAdapterInterfaceGuid)+@($selectedSwitch[0].NetAdapterInterfaceGuids)
+        if ($ExpectedNetAdapterGuid -notin @($nicGuids | ForEach-Object { [string]$_ })) { throw '外部スイッチの物理 LAN が選択時と一致しません。' }
     }
 }
-
-$disk = Get-Disk -Number $DiskNumber
 Write-Host "対象ディスク:" -ForegroundColor Cyan
 Write-Host ("  番号 {0}: {1} ({2:N0} GB)" -f $disk.Number, $disk.FriendlyName, ($disk.Size / 1GB))
 if (-not $NoConfirm) {
     $ans = Read-Host "このディスクを Edge Box として起動します。よろしいですか? (y/N)"
-    if ($ans -ne "y") { exit 0 }
+    if ($ans -ne "y") { Write-Host '作成を中止しました。'; exit 1 }
 }
 
 # --- WSL にアタッチされたままだと衝突するため注意喚起 ---
@@ -233,62 +257,67 @@ Write-Host "注意: このディスクを wsl --mount している場合は、�
 
 # 以降は「作った順に戻せる」ように段階を記録し、途中で失敗したら逆順で元に戻す。
 # ディスクのオフライン化は最後 (ディスク接続の直前) に行い、失敗時の影響を最小にする。
-$createdSwitch = $false
-$createdVm     = $false
-$offlinedDisk  = $false
+$createdSwitchId = ''
+$createdVmId = ''
+$diskOfflineAttempted = $false
 try {
+    # Recheck after prompts and before the first host mutation.
+    $disk=Get-EdgeBoxCreateDisk -DiskNumber $DiskNumber -ExpectedUniqueId $selectedDisk.UniqueId -ExpectedSize $selectedDisk.Size -ExpectedSerialNumber $selectedDisk.SerialNumber
+    if (@(Get-VM -ErrorAction Stop | Where-Object Name -eq $VMName).Count) { throw '確認後に同名の VM が作成されました。' }
     # --- ネットワークスイッチ (必要な場合のみ新規作成) ---
     if ($createFrom) {
+        $freshNic=@(Get-NetAdapter -Physical -ErrorAction Stop | Where-Object { $_.Name -eq $createFrom -and [string]$_.InterfaceGuid -eq $selectedNicGuid })
+        if ($freshNic.Count -ne 1) { throw '確認後に物理 LAN が変わりました。' }
         Write-Host "外部スイッチ '$useSwitch' を作成しています (NIC: $createFrom)..." -ForegroundColor Cyan
         Write-Host "  ※ 作成の瞬間、ネットワークが数秒切断されます。"
-        New-VMSwitch -Name $useSwitch -NetAdapterName $createFrom -AllowManagementOS $true | Out-Null
-        $createdSwitch = $true
+        $madeSwitch=New-VMSwitch -Name $useSwitch -NetAdapterName $createFrom -AllowManagementOS $true -ErrorAction Stop
+        $createdSwitchId=[string]$madeSwitch.Id
+        if (-not $createdSwitchId) { throw '作成したスイッチの ID を確認できません。' }
+    } else {
+        $freshSwitch=@(Get-VMSwitch -ErrorAction Stop | Where-Object { $_.Name -eq $useSwitch -and [string]$_.Id -eq $selectedSwitchId })
+        if ($freshSwitch.Count -ne 1) { throw '確認後にスイッチが変わりました。' }
     }
 
     Write-Host "登録 '$VMName' を作成しています..." -ForegroundColor Cyan
-    New-VM -Name $VMName `
+    $madeVm=New-VM -Name $VMName `
         -Generation 2 `
         -MemoryStartupBytes ($MemoryGB * 1GB) `
         -NoVHD `
-        -SwitchName $useSwitch | Out-Null
-    $createdVm = $true
+        -SwitchName $useSwitch -ErrorAction Stop
+    $createdVmId=[string]$madeVm.Id
+    if (-not $createdVmId) { throw '作成した VM の ID を確認できません。' }
 
     # Edge Box は独自の署名済みブートチェーンを持つため、MS のセキュアブートは無効化
-    Set-VMFirmware -VMName $VMName -EnableSecureBoot Off
+    # Keep every operation bound to the object returned by New-VM. A name may
+    # be renamed or reused while this transaction is running.
+    Set-VMFirmware -VM $madeVm -EnableSecureBoot Off -ErrorAction Stop
 
-    Set-VMProcessor -VMName $VMName -Count $CpuCount
+    Set-VMProcessor -VM $madeVm -Count $CpuCount -ErrorAction Stop
 
     # 物理ディスクのためチェックポイントは使用不可。自動停止はシャットダウン要求に
-    Set-VM -Name $VMName -CheckpointType Disabled -AutomaticStopAction ShutDown
+    Set-VM -VM $madeVm -CheckpointType Disabled -AutomaticStopAction ShutDown -ErrorAction Stop
 
     # --- ディスクをオフライン化 (Windows 側から見えなくし、Edge Box 専有にする) ---
+    $disk=Get-EdgeBoxCreateDisk -DiskNumber $DiskNumber -ExpectedUniqueId $selectedDisk.UniqueId -ExpectedSize $selectedDisk.Size -ExpectedSerialNumber $selectedDisk.SerialNumber
     if (-not $disk.IsOffline) {
         Write-Host "ディスクをオフライン化しています (Windows からの誤アクセス防止)..." -ForegroundColor Cyan
-        Set-Disk -Number $DiskNumber -IsOffline $true
-        $offlinedDisk = $true
+        $diskOfflineAttempted=$true
+        Set-Disk -Number $DiskNumber -IsOffline $true -ErrorAction Stop
     }
 
     # 物理ディスクを無改造のまま接続し、起動デバイスに設定
-    Add-VMHardDiskDrive -VMName $VMName -DiskNumber $DiskNumber
-    $bootDisk = Get-VMHardDiskDrive -VMName $VMName
-    Set-VMFirmware -VMName $VMName -FirstBootDevice $bootDisk
+    $disk=Get-EdgeBoxCreateDisk -DiskNumber $DiskNumber -ExpectedUniqueId $selectedDisk.UniqueId -ExpectedSize $selectedDisk.Size -ExpectedSerialNumber $selectedDisk.SerialNumber
+    if (-not $disk.IsOffline) { throw '接続直前にディスクのオフライン状態を確認できません。' }
+    Add-VMHardDiskDrive -VM $madeVm -DiskNumber $DiskNumber -ErrorAction Stop
+    $bootDisk = @(Get-VMHardDiskDrive -VM $madeVm -ErrorAction Stop | Where-Object { $null -ne $_.DiskNumber -and $_.DiskNumber -eq $DiskNumber })
+    if ($bootDisk.Count -ne 1) { throw '作成した VM の起動ディスク接続を一意に確認できません。' }
+    Set-VMFirmware -VM $madeVm -FirstBootDevice $bootDisk[0] -ErrorAction Stop
 } catch {
     Write-Host ""
     Write-Host "Edge Box の作成に失敗しました: $($_.Exception.Message)" -ForegroundColor Red
     Write-Host "ここまでの変更を元に戻しています..." -ForegroundColor Yellow
-    if ($createdVm) {
-        Remove-VM -Name $VMName -Force -ErrorAction SilentlyContinue
-        Write-Host "  - 作成途中の 登録 '$VMName' を削除しました"
-    }
-    if ($offlinedDisk) {
-        Set-Disk -Number $DiskNumber -IsOffline $false -ErrorAction SilentlyContinue
-        Write-Host "  - ディスク $DiskNumber をオンラインに戻しました"
-    }
-    if ($createdSwitch) {
-        Remove-VMSwitch -Name $useSwitch -Force -ErrorAction SilentlyContinue
-        Write-Host "  - 作成した外部スイッチ '$useSwitch' を削除しました (ネットワークが数秒切断されます)"
-    }
-    Write-Host "ディスクの中身には何も変更していません。原因を直してから再実行してください。" -ForegroundColor Green
+    $null=Undo-EdgeBoxVmCreation -DiskSnapshot $selectedDisk -CreatedVmId $createdVmId -CreatedSwitchId $createdSwitchId -RestoreDiskOnline:($diskOfflineAttempted -and -not $selectedDisk.IsOffline)
+    Write-Host '後処理の結果を確認し、原因を直してから再実行してください。' -ForegroundColor Yellow
     exit 1
 }
 

@@ -1,6 +1,37 @@
 ﻿#requires -Version 5.1
 # Command wiring tests. Native Hyper-V cmdlets are shadowed; no real VM is used.
 $ErrorActionPreference='Stop'
+# Where the real module is installed, validate command metadata before replacing
+# commands. This catches invalid parameters/parameter sets that permissive mocks
+# cannot detect. Get-Command imports metadata only; no VM cmdlet is invoked.
+if(Get-Module -ListAvailable -Name Hyper-V){
+    $contracts=@{
+        'New-VM'=@('Name','Generation','MemoryStartupBytes','NoVHD','Path')
+        'Set-VMProcessor'=@('VM','Count','CompatibilityForMigrationEnabled')
+        'Set-VMMemory'=@('VM','DynamicMemoryEnabled')
+        'Set-VM'=@('VM','AutomaticStartAction','AutomaticStopAction','CheckpointType')
+        'Add-VMHardDiskDrive'=@('VM','ControllerType','ControllerNumber','ControllerLocation','Path')
+        'Set-VMFirmware'=@('VM','EnableSecureBoot','FirstBootDevice','SecureBootTemplate')
+        'Set-VMBios'=@('VM','StartupOrder')
+        'Set-VMNetworkAdapter'=@('VMNetworkAdapter','StaticMacAddress')
+        'Set-VMKeyProtector'=@('VM','NewLocalKeyProtector')
+        'Enable-VMTPM'=@('VM')
+        'Get-VMSecurity'=@('VM')
+        'Get-VMMemory'=@('VM')
+        'Get-VMProcessor'=@('VM')
+        'Get-VMHardDiskDrive'=@('VM')
+        'Get-VMNetworkAdapter'=@('VM')
+        'Get-VHD'=@('Path')
+        'Start-VM'=@('VM')
+    }
+    foreach($name in $contracts.Keys){
+        $command=Get-Command -Name ('Hyper-V\'+$name) -CommandType Cmdlet -ErrorAction Stop
+        $expected=$contracts[$name]
+        $sets=@($command.ParameterSets|Where-Object {$names=$_.Parameters.Name;@($expected|Where-Object{$names -notcontains $_}).Count -eq 0})
+        if($sets.Count -eq 0){throw ('NATIVE_CMDLET_CONTRACT_MISMATCH: '+$name)}
+    }
+    Write-Host ('PASS: '+$contracts.Count+' installed Hyper-V command metadata contracts; no VM commands invoked')
+}else{Write-Host 'SKIP: installed Hyper-V command metadata unavailable; mock wiring tests still run'}
 $m=Import-Module (Join-Path (Split-Path $PSScriptRoot -Parent) 'HyperVRecovery.psm1') -Force -PassThru
 & $m {
     $script:N=0;$script:Calls=[Collections.Generic.List[object]]::new();$script:Disk=$null;$script:Connected=$false

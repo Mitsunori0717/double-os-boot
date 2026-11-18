@@ -22,6 +22,27 @@ function Get-SetupSteps {
 function New-SetupState([string]$State, [string]$Detail) {
     [pscustomobject]@{ State=$State; Detail=$Detail }
 }
+function Get-SetupRequiredFiles([string]$Step='All') {
+    $files=@{
+        '02'=@()
+        '05'=@('windows-host\01-create-field-vm.ps1','windows-host\vm-create-safety.psm1')
+        '06'=@('windows-host\06-auto-logon.ps1')
+        '09'=@('windows-host\03-field-display-kiosk.ps1','windows-host\build-startup-cover.ps1','windows-host\startup-cover.cs')
+        '10'=@('windows-cpu-partition\cpu-partition.ps1','setup\cpu-topology.cs')
+        '11'=@('windows-host\00-field-launcher.ps1','windows-host\01-create-field-vm.ps1','windows-host\02-start-field-vm.ps1','windows-host\03-field-display-kiosk.ps1','windows-host\build-startup-cover.ps1','windows-host\startup-cover.cs','windows-host\08-settings-console.ps1','windows-host\05-shutdown-all.ps1','windows-host\vm-shutdown.psm1','windows-host\10-restart-edgebox.ps1','windows-host\11-io-passthrough.ps1','windows-cpu-partition\cpu-console.ps1','windows-cpu-partition\cpu-monitor.ps1','windows-cpu-partition\cpu-partition.ps1','windows-cpu-partition\cpu-apps.ps1','windows-cpu-partition\cpu-ui-theme.ps1')
+        '12'=@('windows-host\12-windows-update.ps1')
+        '13'=@('windows-host\13-quiet-windows.ps1')
+    }
+    $required=@('setup\setup-all.ps1','setup\setup-engine.psm1','setup\run-child.ps1')
+    foreach ($id in $files.Keys) { if ($Step -eq 'All' -or $Step -eq $id) { $required+=@($files[$id]) } }
+    if ($Step -eq 'All' -or $Step -eq '11') { $required+='windows-host\vm-create-safety.psm1' }
+    $required | Sort-Object -Unique
+}
+function Get-SetupMissingFiles([string]$Step='All') {
+    foreach ($relative in @(Get-SetupRequiredFiles $Step)) {
+        if (-not (Test-Path -LiteralPath (Join-Path $script:Root $relative) -PathType Leaf)) { $relative }
+    }
+}
 function Test-SetupAdmin {
     ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 }
@@ -54,12 +75,46 @@ function Test-SetupTask([string]$Name, [string]$Script, [string]$Argument = '', 
 }
 function Get-SetupVM {
     $all = @(Get-VM -ErrorAction Stop)
-    if ($script:Settings.VMName) { return ($all | Where-Object Name -eq $script:Settings.VMName | Select-Object -First 1) }
+    if ($script:SettingsLoadError) { throw $script:SettingsLoadError }
+    if ($script:Settings.VMName) {
+        $matches=@($all | Where-Object Name -eq $script:Settings.VMName)
+        if ($matches.Count -gt 1) { throw '同名の VM が複数あります。対象を一意にできません。' }
+        if ($script:Settings.VMId -and ($matches.Count -ne 1 -or [string]$matches[0].Id -ne [string]$script:Settings.VMId)) {
+            throw '選択済み VM の ID が一致しないか、VM が見つかりません。別 VM を自動採用しません。'
+        }
+        if ($matches.Count) {
+            if (-not $script:Settings.VMId) { $script:Settings.VMId=[string]$matches[0].Id }
+            return $matches[0]
+        }
+        return
+    }
+    if ($script:Settings.VMId) { throw 'VMId に対応する VMName がありません。settings.json を確認してください。' }
     $named = @($all | Where-Object Name -eq 'EdgeBox')
-    if ($named.Count) { return $named[0] }
     $found = @($all | Where-Object { @(Get-VMHardDiskDrive -VMName $_.Name -ErrorAction Stop | Where-Object { $null -ne $_.DiskNumber }).Count -gt 0 })
-    if ($found.Count -gt 1) { throw '物理ディスクを使う VM が複数あります。settings.json の VMName に対象を指定してください。' }
-    if ($found.Count -eq 1) { return $found[0] }
+    if ($named.Count -or $found.Count) { throw '既存 VM は自動採用しません。対象を確認し、setup\settings.json の VMName に名前を明示指定してください。' }
+}
+function Assert-SetupDiskIdentity($Disk) {
+    if (-not $Disk -or [string]::IsNullOrWhiteSpace([string]$Disk.UniqueId)) { throw 'ディスクの一意 ID を確認できません。自動設定を保留します。' }
+    if ($script:Settings.DiskUniqueId -and [string]$Disk.UniqueId -ne [string]$script:Settings.DiskUniqueId) {
+        throw '接続ディスクの一意 ID が選択済み DiskUniqueId と一致しません。ディスクを自動変更しません。'
+    }
+}
+function Test-SetupMountedPartition($Partition) {
+    if ($Partition.DriveLetter) { return $true }
+    foreach ($path in @($Partition.AccessPaths)) {
+        if ($path -and [string]$path -notmatch '^\\\\\?\\Volume\{[^}]+\}\\$') { return $true }
+    }
+    return $false
+}
+function Assert-SetupSwitchIdentity($Switch) {
+    if ($script:Settings.SwitchId -and [string]$Switch.Id -ne [string]$script:Settings.SwitchId) {
+        throw '接続先の外部スイッチが選択済み SwitchId と一致しません。接続先を自動変更しません。'
+    }
+    if ($script:Settings.NetAdapterGuid) {
+        $guids=@($Switch.NetAdapterInterfaceGuid) + @($Switch.NetAdapterInterfaceGuids)
+        $matches=@($guids | Where-Object { [string]$_ -eq [string]$script:Settings.NetAdapterGuid })
+        if (-not $matches.Count) { throw '外部スイッチの物理 LAN が選択済み NetAdapterGuid と一致することを確認できません。' }
+    }
 }
 function Get-SetupCpuConfig { Read-SetupJson (Join-Path $script:Root 'windows-cpu-partition\cpu-partition.json') }
 function Get-SetupBcd {
@@ -114,7 +169,7 @@ function Get-SetupCpuState {
 function Get-SetupStepState([string]$Id) {
     try {
         if (-not (Test-SetupAdmin)) { return (New-SetupState Unknown '管理者権限がないため確認できません。未設定とは判定しません。') }
-        if ($script:SettingsLoadError -and $Id -in @('05','09','10')) { return (New-SetupState Unknown $script:SettingsLoadError) }
+        if ($script:SettingsLoadError -and $Id -in @('05','09','10','11')) { return (New-SetupState Unknown $script:SettingsLoadError) }
         switch ($Id) {
             '02' {
                 $f = Get-WindowsOptionalFeature -Online -FeatureName Microsoft-Hyper-V-All -ErrorAction Stop
@@ -132,13 +187,20 @@ function Get-SetupStepState([string]$Id) {
                 $d = @(Get-VMHardDiskDrive -VMName $vm.Name -ErrorAction Stop | Where-Object { $null -ne $_.DiskNumber })
                 if ($d.Count -ne 1) { return (New-SetupState NeedsWork '物理ディスクが未接続、または複数接続されています。') }
                 $disk = Get-Disk -Number $d[0].DiskNumber -ErrorAction Stop
+                Assert-SetupDiskIdentity $disk
                 if ($disk.IsBoot -or $disk.IsSystem -or -not $disk.IsOffline) { return (New-SetupState NeedsWork '対象ディスクが Windows と共有されているか、オフラインではありません。') }
                 $net = @(Get-VMNetworkAdapter -VMName $vm.Name -ErrorAction Stop | Where-Object { $_.SwitchName })
                 $ext = @($net | ForEach-Object { Get-VMSwitch -Name $_.SwitchName -ErrorAction Stop } | Where-Object SwitchType -eq External)
                 if (-not $ext.Count) { return (New-SetupState NeedsWork 'ライン側の外部スイッチへ未接続です。') }
+                if ($script:Settings.SwitchId -or $script:Settings.NetAdapterGuid) {
+                    if ($ext.Count -ne 1) { throw '外部 LAN 接続が複数あり、選択済み接続先を一意に確認できません。' }
+                    Assert-SetupSwitchIdentity $ext[0]
+                }
                 if ([string](Get-VMFirmware -VMName $vm.Name -ErrorAction Stop).SecureBoot -ne 'Off' -or [string]$vm.AutomaticStopAction -ne 'ShutDown' -or [string]$vm.CheckpointType -ne 'Disabled') {
                     return (New-SetupState NeedsWork 'セキュアブート・チェックポイント・正常終了の設定に不足があります。')
                 }
+                $script:Settings.DiskUniqueId=[string]$disk.UniqueId
+                if ($ext.Count -eq 1) { $script:Settings.SwitchId=[string]$ext[0].Id }
                 return (New-SetupState Done ("登録 '$($vm.Name)' の物理ディスクと外部 LAN、正常終了設定を確認しました。"))
             }
             '06' {
@@ -216,19 +278,29 @@ function Resolve-SetupDisk($VM) {
     $attached=@(); if ($VM) { $attached=@(Get-VMHardDiskDrive -VMName $VM.Name -ErrorAction Stop | Where-Object { $null -ne $_.DiskNumber }) }
     if ($attached.Count -gt 1) { throw '物理ディスクが複数接続されています。Hyper-V マネージャーで対象を確認してください。' }
     $disk=$null
-    if ($attached.Count -eq 1) { $disk=$disks | Where-Object Number -eq $attached[0].DiskNumber }
+    if ($attached.Count -eq 1) {
+        $matching=@($disks | Where-Object Number -eq $attached[0].DiskNumber)
+        if ($matching.Count -ne 1) { throw '接続済み物理ディスクを一意に確認できません。' }
+        $disk=$matching[0]
+    }
     elseif ($script:Settings.DiskUniqueId) {
-        $disk=$disks | Where-Object UniqueId -eq $script:Settings.DiskUniqueId
-        if (-not $disk) { throw '選択済みディスクが見つかりません。接続を確認してください（別ディスクへ自動変更しません）。' }
+        $matching=@($disks | Where-Object UniqueId -eq $script:Settings.DiskUniqueId)
+        if ($matching.Count -ne 1) { throw '選択済みディスクを一意に確認できません。接続を確認してください（別ディスクへ自動変更しません）。' }
+        $disk=$matching[0]
     } else {
         $choices=@($disks | Where-Object { $_.Number -notin $sys -and -not $_.IsBoot -and -not $_.IsSystem -and [string]$_.BusType -notin @('USB','File Backed Virtual') } | ForEach-Object {
-            $mounted=@(Get-Partition -DiskNumber $_.Number -ErrorAction Stop | Where-Object { $_.DriveLetter })
+            $mounted=@(Get-Partition -DiskNumber $_.Number -ErrorAction Stop | Where-Object { Test-SetupMountedPartition $_ })
             if (-not $mounted.Count) { [pscustomobject]@{Disk=$_;Label=("ディスク {0}: {1} ({2:N0} GB)" -f $_.Number,$_.FriendlyName,($_.Size/1GB))} }
         })
         if (-not $choices.Count) { throw 'Windows 用・USB・ドライブ文字のあるディスクを除くと候補がありません。Edge Box のディスクを確認してください。' }
         $disk=(Select-SetupItem $choices 'Edge Box の物理ディスク').Disk
     }
+    Assert-SetupDiskIdentity $disk
+    if (@($disks | Where-Object UniqueId -eq $disk.UniqueId).Count -ne 1) { throw 'ディスクの一意 ID が重複しています。自動設定を保留します。' }
     if ($disk.IsBoot -or $disk.IsSystem -or $disk.Number -in $sys) { throw 'Windows の起動用ディスクは利用できません。' }
+    if (@(Get-Partition -DiskNumber $disk.Number -ErrorAction Stop | Where-Object { Test-SetupMountedPartition $_ }).Count) {
+        throw '対象ディスクにドライブ文字またはフォルダーのマウントがあります。使用中のディスクを自動でオフラインにしません。'
+    }
     foreach ($other in @(Get-VM -ErrorAction Stop | Where-Object { -not $VM -or $_.Id -ne $VM.Id })) {
         if (@(Get-VMHardDiskDrive -VMName $other.Name -ErrorAction Stop | Where-Object DiskNumber -eq $disk.Number).Count) { throw "ディスクは別 VM '$($other.Name)' に接続済みです。接続を自動で外さず保留します。" }
     }
@@ -238,12 +310,21 @@ function Resolve-SetupDisk($VM) {
 function Resolve-SetupSwitch {
     $sw=@(Get-VMSwitch -SwitchType External -ErrorAction Stop)
     if ($script:Settings.SwitchId) {
-        $chosen=$sw | Where-Object { [string]$_.Id -eq $script:Settings.SwitchId }
-        if (-not $chosen) { throw '選択済み外部スイッチがありません。settings.json の SwitchId を確認してください。' }
-        return @{SwitchName=$chosen.Name}
+        $matching=@($sw | Where-Object { [string]$_.Id -eq $script:Settings.SwitchId })
+        if ($matching.Count -ne 1) { throw '選択済み外部スイッチを一意に確認できません。settings.json の SwitchId を確認してください。' }
+        Assert-SetupSwitchIdentity $matching[0]
+        return @{SwitchName=$matching[0].Name}
     }
-    if ($sw.Count) {
-        $chosen=(Select-SetupItem @($sw | ForEach-Object { [pscustomobject]@{Switch=$_;Label=$_.Name} }) '外部スイッチ').Switch
+    $eligible=$sw
+    if ($script:Settings.NetAdapterGuid) {
+        $eligible=@($sw | Where-Object {
+            $guidValues=@($_.NetAdapterInterfaceGuid) + @($_.NetAdapterInterfaceGuids)
+            @($guidValues | Where-Object { [string]$_ -eq [string]$script:Settings.NetAdapterGuid }).Count -gt 0
+        })
+    }
+    if ($eligible.Count) {
+        $chosen=(Select-SetupItem @($eligible | ForEach-Object { [pscustomobject]@{Switch=$_;Label=$_.Name} }) '外部スイッチ').Switch
+        Assert-SetupSwitchIdentity $chosen
         $script:Settings.SwitchId=[string]$chosen.Id; Save-SetupSettings
         return @{SwitchName=$chosen.Name}
     }
@@ -311,26 +392,39 @@ function Invoke-SetupStep([string]$Id) {
             if (Get-Service vmms -ErrorAction SilentlyContinue) { Start-Service vmms -ErrorAction Stop }
         }
         '05' {
+            Import-Module (Join-Path $script:Root 'windows-host\vm-create-safety.psm1') -Force -ErrorAction Stop
             $vm=Get-SetupVM; $disk=Resolve-SetupDisk $vm
+            $disk=Get-EdgeBoxCreateDisk -DiskNumber $disk.Number -ExpectedUniqueId ([string]$disk.UniqueId) -ExpectedSize ([UInt64]$disk.Size) -ExpectedSerialNumber ([string]$disk.SerialNumber) -AllowedVmId ([string]$vm.Id)
+            $selectedDisk=[pscustomobject]@{UniqueId=[string]$disk.UniqueId;Size=[UInt64]$disk.Size;SerialNumber=[string]$disk.SerialNumber}
             $script:Settings.VMName=if ($vm) {$vm.Name} elseif ($script:Settings.VMName) {$script:Settings.VMName} else {'EdgeBox'}
+            if ($vm) { $script:Settings.VMId=[string]$vm.Id }
             Save-SetupSettings
             if (-not $vm) {
                 $sw=Resolve-SetupSwitch
                 $total=(Get-CimInstance Win32_ComputerSystem -ErrorAction Stop).TotalPhysicalMemory/1GB
                 if ($total -lt 16) { throw 'Edge Box 8 GB と Windows 8 GB のため、16 GB 以上のメモリが必要です。' }
-                $args=@('-DiskNumber',[string]$disk.Number,'-VMName',$script:Settings.VMName,'-NoConfirm')
+                $args=@('-DiskNumber',[string]$disk.Number,'-VMName',$script:Settings.VMName,'-ExpectedUniqueId',$selectedDisk.UniqueId,'-ExpectedSize',[string]$selectedDisk.Size,'-NoConfirm')
+                if ($selectedDisk.SerialNumber) { $args+=@('-ExpectedSerialNumber',$selectedDisk.SerialNumber) }
+                if ($script:Settings.SwitchId) { $args+=@('-ExpectedSwitchId',[string]$script:Settings.SwitchId) }
+                if ($script:Settings.NetAdapterGuid) { $args+=@('-ExpectedNetAdapterGuid',[string]$script:Settings.NetAdapterGuid) }
                 foreach ($k in $sw.Keys) { $args+=@('-'+$k,[string]$sw[$k]) }
                 Invoke-SetupChild 'windows-host\01-create-field-vm.ps1' $args
+                $created=Get-SetupVM
+                if (-not $created) { throw 'VM 作成後に対象 VM を確認できません。' }
+                $script:Settings.VMId=[string]$created.Id; Save-SetupSettings
             } else {
                 if ([string]$vm.State -ne 'Off') { throw 'VM が稼働中で構成が未完了です。正常終了後、この番号を再実行してください。' }
                 $d=@(Get-VMHardDiskDrive -VMName $vm.Name -ErrorAction Stop | Where-Object { $null -ne $_.DiskNumber })
+                $nets=@(Get-VMNetworkAdapter -VMName $vm.Name -ErrorAction Stop)
+                $external=@($nets | Where-Object SwitchName | ForEach-Object {Get-VMSwitch -Name $_.SwitchName -ErrorAction Stop} | Where-Object SwitchType -eq External)
+                if ($external.Count -gt 1) { throw '外部 LAN 接続が複数あります。対象を確認してください。' }
+                if ($external.Count) { Assert-SetupSwitchIdentity $external[0] }
+                $disk=Get-EdgeBoxCreateDisk -DiskNumber $disk.Number -ExpectedUniqueId $selectedDisk.UniqueId -ExpectedSize $selectedDisk.Size -ExpectedSerialNumber $selectedDisk.SerialNumber -AllowedVmId ([string]$vm.Id)
                 if (-not $disk.IsOffline) { Set-Disk -Number $disk.Number -IsOffline $true -ErrorAction Stop }
                 if (-not $d.Count) { Add-VMHardDiskDrive -VMName $vm.Name -DiskNumber $disk.Number -ErrorAction Stop }
                 $boot=@(Get-VMHardDiskDrive -VMName $vm.Name -ErrorAction Stop | Where-Object { $null -ne $_.DiskNumber })[0]
                 Set-VMFirmware -VMName $vm.Name -EnableSecureBoot Off -FirstBootDevice $boot -ErrorAction Stop
                 Set-VM -Name $vm.Name -CheckpointType Disabled -AutomaticStopAction ShutDown -ErrorAction Stop
-                $nets=@(Get-VMNetworkAdapter -VMName $vm.Name -ErrorAction Stop)
-                $external=@($nets | Where-Object SwitchName | ForEach-Object {Get-VMSwitch -Name $_.SwitchName -ErrorAction Stop} | Where-Object SwitchType -eq External)
                 if (-not $external.Count) {
                     $sw=Resolve-SetupSwitch
                     if ($sw.NetAdapterName) { $new=New-VMSwitch -Name 'EdgeBox-External' -NetAdapterName $sw.NetAdapterName -AllowManagementOS $true -ErrorAction Stop; $sw=@{SwitchName=$new.Name} }
@@ -411,9 +505,11 @@ function Invoke-SetupOne($Definition, [switch]$Status) {
     }
     $s
 }
-function Register-SetupResume([string]$Step) {
+function Register-SetupResume([string]$Step, [switch]$RestartIfNeeded) {
     $file=Join-Path $PSScriptRoot 'setup-all.ps1'
-    $action=New-ScheduledTaskAction -Execute (Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe') -Argument ('-NoProfile -ExecutionPolicy Bypass -File '+(ConvertTo-SetupArgument $file)+' -Step '+$Step+' -Resume -NoConfirm -RestartIfNeeded')
+    $arguments='-NoProfile -ExecutionPolicy Bypass -File '+(ConvertTo-SetupArgument $file)+' -Step '+$Step+' -Resume -NoConfirm'
+    if ($RestartIfNeeded) { $arguments+=' -RestartIfNeeded' }
+    $action=New-ScheduledTaskAction -Execute (Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe') -Argument $arguments
     $user=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value
     $principal=New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Highest
     $trigger=New-ScheduledTaskTrigger -AtLogOn -User $user
@@ -426,12 +522,25 @@ function Invoke-EdgeBoxSetup {
     param([string]$Step='All',[switch]$Status,[switch]$NoConfirm,[switch]$RestartIfNeeded,[switch]$Resume,[switch]$NoPause)
     $script:RunDir=$null; $script:ResumeMode=[bool]$Resume; $script:Settings=@{}; $script:SettingsLoadError=''
     $saved=$null
-    try { $saved=Read-SetupJson (Join-Path $PSScriptRoot 'settings.json') }
-    catch { $script:SettingsLoadError='settings.json を読めません: '+$_.Exception.Message+'。内容を修正するか退避して、05-create-edgebox.cmd を再実行してください。' }
+    try {
+        $saved=Read-SetupJson (Join-Path $PSScriptRoot 'settings.json')
+        if ($null -ne $saved -and $saved -isnot [pscustomobject]) { throw 'JSON オブジェクトが必要です。' }
+        foreach ($key in @('VMName','VMId','DiskUniqueId','SwitchId','NetAdapterGuid')) {
+            if ($saved -and $null -ne $saved.$key -and ($saved.$key -isnot [string] -or [string]::IsNullOrWhiteSpace($saved.$key))) { throw "$key は空でない文字列で指定してください。" }
+        }
+    }
+    catch { $saved=$null; $script:SettingsLoadError='settings.json を読めません: '+$_.Exception.Message+'。内容を修正するか退避して、05-create-edgebox.cmd を再実行してください。' }
     if ($saved) { foreach ($p in $saved.PSObject.Properties) { $script:Settings[$p.Name]=$p.Value } }
     $steps=@(Get-SetupSteps | Where-Object { $Step -eq 'All' -or $_.Id -eq $Step })
     if (-not $steps.Count) { throw "不明な手順番号です: $Step" }
+    $missing=@(Get-SetupMissingFiles $Step)
+    if ($missing.Count) {
+        Write-Host ('必要な配布ファイルがありません。設定変更前に停止します: '+($missing -join ', '))
+        if ($Status) { return 2 }
+        return 1
+    }
     if (-not $Status -and -not (Test-SetupAdmin)) { throw '管理者として setup-all.cmd または番号別バッチを実行してください。' }
+    if ($Resume -and $Step -ne 'All') { Write-Host '番号別実行は自動再開しません。該当バッチを手動で再実行してください。'; return 1 }
     $lock=$null
     try {
         if (-not $Status) {
@@ -440,6 +549,19 @@ function Invoke-EdgeBoxSetup {
             catch { throw '別のセットアップが実行中です。終了してから再実行してください。' }
             $script:RunDir=Join-Path $PSScriptRoot ('logs\'+(Get-Date -Format 'yyyyMMdd-HHmmss')+'-'+[guid]::NewGuid().ToString('N').Substring(0,6))
             New-Item -ItemType Directory -Path $script:RunDir -Force | Out-Null
+            $statePath=Join-Path $PSScriptRoot 'resume-state.json'
+            $previous=$null
+            if ($Step -eq 'All') {
+                try {
+                    $previous=Read-SetupJson $statePath
+                    if ($Resume -and -not $previous) { throw '再開情報がありません。' }
+                    if ($previous -and ($previous -isnot [pscustomobject] -or -not $previous.BootId -or -not @($previous.Pending).Count -or $null -eq $previous.AutoReboots -or [int]$previous.AutoReboots -lt 0)) { throw '再開情報の形式が不正です。' }
+                } catch {
+                    Write-SetupLog ('resume-state.json を確認できないため設定変更前に停止します: '+$_.Exception.Message+'。このファイルを確認し、一括セットアップを手動で再実行してください。')
+                    Unregister-ScheduledTask -TaskName $script:TaskName -Confirm:$false -ErrorAction SilentlyContinue
+                    return 1
+                }
+            }
             if (-not $NoConfirm -and -not $Resume) {
                 Write-Host '未完了の設定を適用します。ディスクと LAN は候補を確認し、パスワードは必要な場合に入力します。'
                 Write-Host '対象: Hyper-V、VM、自動サインイン、CPU 分離、アイコン、自動更新・通知・スリープの抑止。'
@@ -451,6 +573,7 @@ function Invoke-EdgeBoxSetup {
         $rows=@()
         foreach ($def in $steps) {
             $s=Invoke-SetupOne $def -Status:$Status
+            if (-not $Status -and $def.Id -eq '05' -and $s.State -eq 'Done' -and $script:Settings.VMId) { Save-SetupSettings }
             Write-SetupLog ("[$($def.Id)] $($def.Name): $($labels[$s.State])`r`n  原因・状態: $($s.Detail)")
             if ($s.State -ne 'Done') { Write-SetupLog ("  対処法: $($def.Help)`r`n  再実行: " + (Join-Path $PSScriptRoot $def.Batch)) }
             $rows+=[pscustomobject]@{Number=$def.Id;Name=$def.Name;State=$s.State;Cause=$s.Detail;Remedy=$def.Help;RetryBatch=(Join-Path $PSScriptRoot $def.Batch)}
@@ -458,32 +581,29 @@ function Invoke-EdgeBoxSetup {
         if ($Status) { if (@($rows | Where-Object State -ne Done).Count) { return 2 }; return 0 }
         $rows | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $script:RunDir 'results.json') -Encoding UTF8
         Write-SetupLog ('ログ: '+$script:RunDir)
-        $statePath=Join-Path $PSScriptRoot 'resume-state.json'
-        $previous=$null
-        try { $previous=Read-SetupJson $statePath }
-        catch {
-            Write-SetupLog ('resume-state.json を読めないため自動再起動を保留します: '+$_.Exception.Message+'。このファイルを退避して setup-all.cmd を再実行してください。')
-            Unregister-ScheduledTask -TaskName $script:TaskName -Confirm:$false -ErrorAction SilentlyContinue
-            return 1
-        }
         $pending=@($rows | Where-Object State -eq RebootRequired)
+        if ($Step -ne 'All') {
+            if ($pending.Count) { Write-SetupLog '番号別実行は自動再開・再起動を登録しません。通常の再起動後、この番号を手動で再実行してください。'; return 3010 }
+            if (@($rows | Where-Object State -ne Done).Count) { return 1 }
+            return 0
+        }
         if ($pending.Count) {
             $boot=Get-SetupBootId
             $samePending=@($pending | Where-Object { $previous -and $_.Number -in $previous.Pending -and $previous.BootId -ne $boot })
-            if ($samePending.Count -or ($Resume -and $previous.AutoReboots -ge 2)) {
+            if ($samePending.Count -or ($RestartIfNeeded -and $previous.AutoReboots -ge 2)) {
                 Write-SetupLog '再起動後も反映されない設定が残りました。自動再起動を止めます。該当番号のログを確認してください。'
                 foreach ($row in $pending) { $row.State='Failed'; $row.Cause='再起動後も設定が反映されない、または自動再起動回数の上限に達しました。'+$row.Cause }
                 $rows | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $script:RunDir 'results.json') -Encoding UTF8
                 Unregister-ScheduledTask -TaskName $script:TaskName -Confirm:$false -ErrorAction SilentlyContinue
                 return 1
             }
-            $count=if($Resume -and $previous){[int]$previous.AutoReboots}else{0}
-            try { Register-SetupResume $Step }
+            $count=if($previous){[int]$previous.AutoReboots}else{0}
+            try { Register-SetupResume $Step -RestartIfNeeded:$RestartIfNeeded }
             catch {
                 Write-SetupLog ('再開タスクを登録できません: '+$_.Exception.Message+'。再起動後に setup-all.cmd を再実行してください。')
                 return 1
             }
-            @{BootId=$boot;Pending=@($pending | ForEach-Object Number);AutoReboots=($count+1)} | ConvertTo-Json | Set-Content -LiteralPath $statePath -Encoding UTF8
+            @{BootId=$boot;Pending=@($pending | ForEach-Object Number);AutoReboots=($count+[int][bool]$RestartIfNeeded)} | ConvertTo-Json | Set-Content -LiteralPath $statePath -Encoding UTF8
             Write-SetupLog '再起動後、このユーザーのサインイン時に管理者タスクで再判定します。パスワードが未設定なら最初のサインインは手動です。'
             if ($RestartIfNeeded) {
                 Write-SetupLog 'Windows に通常の再起動を要求します（アプリ・VM の強制終了はしません）。'

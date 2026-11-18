@@ -31,7 +31,7 @@ def verified_image(image, manifest):
         require(stat.S_ISREG(os.fstat(mf.fileno()).st_mode), 'MANIFEST_NOT_REGULAR')
         raw = mf.read(MAX_MANIFEST + 1)
         require(len(raw) <= MAX_MANIFEST, 'MANIFEST_TOO_LARGE')
-        m = json.loads(raw.decode('utf-8'), object_pairs_hook=no_duplicates)
+        m = json.loads(raw.decode('utf-8-sig'), object_pairs_hook=no_duplicates)
         require(isinstance(m, dict) and type(m.get('SchemaVersion')) is int and m.get('SchemaVersion') == 1 and m.get('State') == 'verified', 'VERIFIED_MANIFEST_REQUIRED')
         meta = m.get('Metadata', {})
         require(isinstance(meta, dict) and meta.get('AcquisitionMode') == 'offline-block' and meta.get('FullSectorImage') is True and meta.get('SourceWriteProtected') is True and meta.get('GuestConsistency') == 'offline-environment', 'PRODUCTION_OFFLINE_IMAGE_REQUIRED')
@@ -197,6 +197,8 @@ def restore_stream(source, target, size, sha256, event, recheck, sync):
     written = 0
     phase = 'prewrite'
     try:
+        require(type(size) is int and size > 0, 'RESTORE_SIZE_INVALID')
+        require(isinstance(sha256, str) and re.fullmatch('[0-9a-f]{64}', sha256), 'RESTORE_HASH_INVALID')
         recheck(); source.seek(0); target.seek(0)
         event('partial', BytesCompleted=0, Phase=phase)
         phase = 'writing'; digest = hashlib.sha256(); next_progress = 256 * 1024 * 1024

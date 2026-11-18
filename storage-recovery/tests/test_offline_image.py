@@ -188,4 +188,17 @@ class OfflineImageTests(unittest.TestCase):
         with self.assertRaises(m.SafetyError): m.digest_file(io.BytesIO(b'x'),2)
         with self.assertRaises(m.SafetyError): m.digest_file(io.BytesIO(b'xx'),1)
 
+    def test_invalid_geometry_identity_or_mode_never_creates_output(self):
+        for changes in ({'Size': True, 'LogicalSectorSize': True}, {'Size': 1024.0},
+                        {'LogicalSectorSize': 512.0}, {'LogicalSectorSize': 0},
+                        {'SerialNumber': '   '}, {'UniqueId': ['id']}, {'Model': 'model\nforged log'}):
+            identity = dict(self.identity, **changes)
+            with self.subTest(changes=changes):
+                with self.assertRaises(m.SafetyError):
+                    m.copy_stream(io.BytesIO(self.data), self.root, 'invalid', identity, 'fixture-file')
+                self.assertEqual(list(self.root.iterdir()), [])
+        with self.assertRaisesRegex(m.SafetyError, 'ACQUISITION_MODE_INVALID'):
+            m.copy_stream(io.BytesIO(self.data), self.root, 'invalid', self.identity, 'live')
+        self.assertEqual(list(self.root.iterdir()), [])
+
 if __name__=='__main__': unittest.main()

@@ -130,7 +130,7 @@ if (-not (Test-Admin)) {
 }
 $vm = Get-VM -Name $VMName -ErrorAction SilentlyContinue
 if (-not $vm) { Show-Msg "登録 '$VMName' が見つかりません。" "EdgeBox" "Warning"; exit 1 }
-if (-not (Test-Path $Script03)) { Show-Msg "03-field-display-kiosk.ps1 が見つかりません。update.cmd で更新してください。" "EdgeBox" "Warning"; exit 1 }
+if (-not (Test-Path $Script03)) { Show-Msg "03-field-display-kiosk.ps1 が見つかりません。配布 ZIP 全体を新しいフォルダーへ展開し直してください。" "EdgeBox" "Warning"; exit 1 }
 
 # --- 『Edge Box 画面』: 左画面にコンソールを表示するだけ ---
 if ($ShowOnly) {

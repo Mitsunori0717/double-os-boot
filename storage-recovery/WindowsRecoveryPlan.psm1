@@ -74,10 +74,22 @@ function Test-WindowsRecoverySuitability {
     $enc=Get-WRPValue $Inventory Encryption;$volumes=@(Get-WRPValue $enc Volumes)
     if((Get-WRPValue $enc Status) -cne 'Known' -or $volumes.Count -lt 1){$r.Add('ENCRYPTION_STATE_UNKNOWN')}
     else {
+        $seen=@()
         foreach($v in $volumes){
-            if((Get-WRPValue $v Status) -cne 'Known' -or (Get-WRPValue $v EncryptionMethod) -cne 'None' -or (Get-WRPValue $v EncryptionPercentage) -is [bool] -or (Get-WRPValue $v EncryptionPercentage) -ne 0 -or $null -eq (Get-WRPValue $v EncryptionPercentage) -or (Get-WRPValue $v ConversionStatus) -cne 'FullyDecrypted' -or (Get-WRPValue $v ProtectionStatus) -cne 'Off' -or (Get-WRPValue $v LockStatus) -cne 'Unlocked'){$r.Add('ENCRYPTED_LOCKED_OR_UNKNOWN_VOLUME_UNSUPPORTED');break}
+            $mount=([string](Get-WRPValue $v MountPoint)).TrimEnd('\')
+            $mapping=@($parts|Where-Object {([string](Get-WRPValue $_ DriveLetter)).TrimEnd(':') -ieq $mount.TrimEnd(':')})
+            if($mount -notmatch '^[A-Za-z]:$' -or $mapping.Count -ne 1){$r.Add('VOLUME_SOURCE_MAPPING_UNPROVEN');continue}
+            # Inventory covers the whole PC. A volume proven to be on another
+            # disk (for example the backup destination) is not part of this RAW.
+            if((Get-WRPValue $mapping[0] DiskNumber) -ne (Get-WRPValue $disk Number)){continue}
+            if($seen -contains $mount){$r.Add('VOLUME_SOURCE_MAPPING_UNPROVEN');continue};$seen+=$mount
+            if((Get-WRPValue $v Status) -cne 'Known' -or (Get-WRPValue $v EncryptionMethod) -cne 'None' -or (Get-WRPValue $v EncryptionPercentage) -is [bool] -or (Get-WRPValue $v EncryptionPercentage) -ne 0 -or $null -eq (Get-WRPValue $v EncryptionPercentage) -or (Get-WRPValue $v ConversionStatus) -cne 'FullyDecrypted' -or (Get-WRPValue $v ProtectionStatus) -cne 'Off' -or (Get-WRPValue $v LockStatus) -cne 'Unlocked'){$r.Add('ENCRYPTED_LOCKED_OR_UNKNOWN_VOLUME_UNSUPPORTED')}
         }
-        if(@($volumes|Where-Object {([string](Get-WRPValue $_ MountPoint)).TrimEnd('\') -ieq ($systemDrive+':')}).Count -ne 1){$r.Add('OS_ENCRYPTION_COVERAGE_UNPROVEN')}
+        foreach($part in $parts){
+            $letter=([string](Get-WRPValue $part DriveLetter)).TrimEnd(':')
+            if((Get-WRPValue $part DiskNumber) -eq (Get-WRPValue $disk Number) -and $letter -match '^[A-Za-z]$' -and $seen -notcontains ($letter+':')){$r.Add('DEPENDENT_VOLUME_ENCRYPTION_COVERAGE_UNPROVEN')}
+        }
+        if($seen -notcontains ($systemDrive+':')){$r.Add('OS_ENCRYPTION_COVERAGE_UNPROVEN')}
     }
     foreach($flag in @('FullShutdownVerified','FastStartupNotUsed','NotHibernated','AllApplicationDataOnSourceDisk','NoExternalStorageDependencies','TpmDependencyAbsent','IdentityChangeAccepted')){
         if(-not(Test-WRPTrue (Get-WRPValue $Evidence $flag))){$r.Add('OPERATOR_EVIDENCE_REQUIRED: '+$flag)}
@@ -112,7 +124,7 @@ function New-WindowsRecoveryVmProfile {
         Generation=$a.Generation;MemoryStartupBytes=$MemoryStartupBytes;ProcessorCount=$ProcessorCount
         SecureBoot=$a.SecureBoot;SecureBootTemplate='MicrosoftWindows';TpmRequired=$false;EncryptionDependenciesResolved=$true
         IdentityPolicy='NewVmId';MacPolicy='New';SourceType='WindowsPhysical';SourceInventoryDiskId=(Get-WRPValue $a.SourceDisk UniqueId)
-        SourceSerialNumber=(Get-WRPValue $a.SourceDisk SerialNumber);SourceSize=(Get-WRPValue $a.SourceDisk Size)
+        SourceSerialNumber=(Get-WRPValue $a.SourceDisk SerialNumber);SourceSize=(Get-WRPValue $a.SourceDisk Size);SourceLogicalSectorSize=(Get-WRPValue $a.SourceDisk LogicalSectorSize)
         OperatorEvidenceRecordedUtc=(Get-WRPValue $Evidence RecordedUtc);BootTested=$false;RestoreTested=$false;LicenseValidated=$false
     }
 }
@@ -197,7 +209,9 @@ function Test-WRPExpanded($Inventory,$RawManifest,$Evidence,[object[]]$Additiona
     if((Get-WRPValue $enc Status) -cne 'Known' -or $volumes.Count -lt 1){$r.Add('ENCRYPTION_STATE_UNKNOWN')}
     foreach($v in $volumes){
         $mount=([string](Get-WRPValue $v MountPoint)).TrimEnd('\');$mapping=@($parts|Where-Object {([string](Get-WRPValue $_ DriveLetter)).TrimEnd(':') -ieq $mount.TrimEnd(':')})
-        if($mount -notmatch '^[A-Za-z]:$' -or $seen -contains $mount -or $mapping.Count -ne 1 -or $numbers -notcontains (Get-WRPValue $mapping[0] DiskNumber)){$r.Add('VOLUME_SOURCE_MAPPING_UNPROVEN');continue};$seen+=$mount
+        if($mount -notmatch '^[A-Za-z]:$' -or $mapping.Count -ne 1){$r.Add('VOLUME_SOURCE_MAPPING_UNPROVEN');continue}
+        if($numbers -notcontains (Get-WRPValue $mapping[0] DiskNumber)){continue}
+        if($seen -contains $mount){$r.Add('VOLUME_SOURCE_MAPPING_UNPROVEN');continue};$seen+=$mount
         $pct=Get-WRPValue $v EncryptionPercentage;$conversion=Get-WRPValue $v ConversionStatus;$method=Get-WRPValue $v EncryptionMethod;$protect=Get-WRPValue $v ProtectionStatus;$lock=Get-WRPValue $v LockStatus
         if((Get-WRPValue $v Status) -cne 'Known' -or $pct -is [bool] -or $null -eq $pct -or $lock -notin @('Locked','Unlocked')){$r.Add('ENCRYPTION_STATE_UNKNOWN');continue}
         if($conversion -ceq 'FullyDecrypted' -and $method -ceq 'None' -and $pct -eq 0 -and $protect -ceq 'Off' -and $lock -ceq 'Unlocked'){continue}

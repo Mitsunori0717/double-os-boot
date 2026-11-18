@@ -6,7 +6,7 @@ $script:Count=0
 function Assert-True($Condition,[string]$Message) { if(-not $Condition){throw "TEST FAILED: $Message"};$script:Count++ }
 function Assert-Throws([scriptblock]$Action,[string]$Message) { $failed=$false;try{& $Action|Out-Null}catch{$failed=$true};Assert-True $failed $Message }
 function New-TestProfile {
-    [pscustomobject]@{ProfileVersion=1;SourceDiskCount=1;NetworkAdapterCount=1;SourceImageSha256=('a'*64);Generation=2;MemoryStartupBytes=[uint64]1GB;ProcessorCount=2;SecureBoot='Off';SecureBootTemplate='';TpmRequired=$false;EncryptionDependenciesResolved=$true;IdentityPolicy='NewVmId';MacPolicy='New';SourceVmId='11111111-2222-3333-4444-555555555555'}
+    [pscustomobject]@{ProfileVersion=1;SourceDiskCount=1;NetworkAdapterCount=1;SourceImageSha256=('a'*64);SourceSerialNumber='SOURCE-SERIAL';SourceSize=16384;SourceLogicalSectorSize=512;Generation=2;MemoryStartupBytes=[uint64]1GB;ProcessorCount=2;SecureBoot='Off';SecureBootTemplate='';TpmRequired=$false;EncryptionDependenciesResolved=$true;IdentityPolicy='NewVmId';MacPolicy='New';SourceVmId='11111111-2222-3333-4444-555555555555'}
 }
 $temp=Join-Path ([IO.Path]::GetTempPath()) ('EdgeBoxHyperVTests_'+[guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $temp | Out-Null
@@ -14,14 +14,14 @@ try {
     $vhd=Join-Path $temp 'fixture.vhdx'
     [IO.File]::WriteAllBytes($vhd,(New-Object byte[] 4096))
     $hash=(Get-FileHash -LiteralPath $vhd -Algorithm SHA256).Hash.ToLowerInvariant()
-    $manifest=[ordered]@{SchemaVersion=1;SourceSha256=('a'*64);State='verified';Format='vhdx';Size=4096;VirtualSize=16384;Sha256=$hash;LogicalSectorSize=512;SourceAcquisitionMode='offline-block';Metadata=@{SourceWriteProtected=$true};FullSectorImage=$true;Verification=@{VirtualSize=$true;QemuCheck=$true;LogicalCompare=$true;ReadbackSha256=$true;LogicalSectorSize=$true};RestoreTested=$false;BootTested=$false}
+    $manifest=[ordered]@{SchemaVersion=1;SourceSha256=('a'*64);State='verified';Format='vhdx';Size=4096;VirtualSize=16384;Sha256=$hash;LogicalSectorSize=512;SourceAcquisitionMode='offline-block';Metadata=@{SourceWriteProtected=$true;Source=@{SerialNumber='SOURCE-SERIAL';Size=16384;LogicalSectorSize=512}};FullSectorImage=$true;Verification=@{VirtualSize=$true;QemuCheck=$true;LogicalCompare=$true;ReadbackSha256=$true;LogicalSectorSize=$true};RestoreTested=$false;BootTested=$false}
     $manifestPath=$vhd+'.manifest.json'
     $manifestJson=$manifest|ConvertTo-Json -Depth 8
     [IO.File]::WriteAllText($manifestPath,$manifestJson,[Text.UTF8Encoding]::new($false))
     $vmRoot=Join-Path $temp 'vms'
 
     & $module {
-        function script:Get-RecoveryHostState { if($script:F.HostFailure){throw 'fixture host inventory failure'}; $script:F.Host }
+        function script:Get-RecoveryHostState { if($script:F.HostFailure){throw 'fixture host inventory failure'}; $script:F.HostReads++;if($script:F.LoseMemory -and $script:F.HostReads -gt 1){$script:F.Host.AvailableMemoryBytes=256MB};$script:F.Host }
         function script:Get-RecoveryVhdInfo([string]$Path) { $script:F.Vhd }
         function script:New-RecoveryVM([string]$Name,[int]$Generation,[long]$Memory,[string]$Path) {
             $script:F.Calls.Add('New')
@@ -55,7 +55,7 @@ try {
                 Host=[pscustomobject]@{VMs=@();MacAddresses=@();ProcessorCount=8;AvailableMemoryBytes=[uint64]8GB}
                 Vhd=[pscustomobject]@{VhdFormat='VHDX';VhdType='Dynamic';Attached=$false;Size=16384;LogicalSectorSize=512;ParentPath=''}
                 Calls=[Collections.Generic.List[string]]::new();VM=$null;Root='';State='Off';Generation=2;Isolated=$true;Macs=@('00155D123456');DiskPaths=@()
-                HostFailure=$false;CreateFailure=$false;HardwareFailure=$false;LoseIsolation=$false
+                HostFailure=$false;CreateFailure=$false;HardwareFailure=$false;LoseIsolation=$false;HostReads=0;LoseMemory=$false
             }
         }
     }
@@ -111,7 +111,7 @@ try {
     [System.Management.Automation.Language.Parser]::ParseFile($cli,[ref]$tokens,[ref]$parseErrors)|Out-Null
     Assert-True (@($parseErrors).Count -eq 0) 'restore CLI syntax parses without executing Hyper-V'
     Assert-True (Test-RecoveryVmProfile (New-TestProfile)).Allowed 'valid profile'
-    foreach($field in @('SourceDiskCount','NetworkAdapterCount','SourceImageSha256','ProfileVersion','Generation','MemoryStartupBytes','ProcessorCount','SecureBoot','TpmRequired','EncryptionDependenciesResolved','IdentityPolicy','MacPolicy')) {
+    foreach($field in @('SourceDiskCount','NetworkAdapterCount','SourceImageSha256','SourceSerialNumber','SourceSize','SourceLogicalSectorSize','ProfileVersion','Generation','MemoryStartupBytes','ProcessorCount','SecureBoot','TpmRequired','EncryptionDependenciesResolved','IdentityPolicy','MacPolicy')) {
         $profile=New-TestProfile;$profile.PSObject.Properties.Remove($field)
         Assert-True (-not (Test-RecoveryVmProfile $profile).Allowed) "unknown profile field $field rejected"
     }
@@ -157,6 +157,16 @@ try {
     [IO.File]::WriteAllText($manifestPath,($m|ConvertTo-Json -Depth 8))
     Assert-Throws {Run-Recovery -Create} 'fixture acquisition cannot create VM'
     [IO.File]::WriteAllText($manifestPath,$manifestJson)
+    # A correctly hashed archive from a different source must not pass a profile
+    # generated for the intended source merely because an operator copied its hash.
+    foreach($field in @('SerialNumber','Size','LogicalSectorSize')){
+        $m=$manifestJson|ConvertFrom-Json
+        $m.Metadata.Source.$field=$(if($field -eq 'SerialNumber'){'OTHER-SERIAL'}else{4096})
+        [IO.File]::WriteAllText($manifestPath,($m|ConvertTo-Json -Depth 8))
+        Assert-Throws {Run-Recovery -Create} ('manifest source binding rejected: '+$field)
+        Assert-True ((Calls).Count -eq 0 -and -not(Test-Path -LiteralPath $vmRoot)) 'wrong source refused before any copy or VM mutation'
+    }
+    [IO.File]::WriteAllText($manifestPath,$manifestJson)
     foreach($case in @('Attached','ParentPath','Size','LogicalSectorSize','VhdType')) {
         Reset-Fixture
         & $module {param($case) switch($case){Attached{$script:F.Vhd.Attached=$true};ParentPath{$script:F.Vhd.ParentPath='parent.vhdx'};Size{$script:F.Vhd.Size=9999};LogicalSectorSize{$script:F.Vhd.LogicalSectorSize=4096};VhdType{$script:F.Vhd.VhdType='Differencing'}}} $case
@@ -176,10 +186,19 @@ try {
     [IO.File]::WriteAllBytes($vhd,(New-Object byte[] 4096))
     Assert-True ((Calls).Count -eq 0) 'invalid archives cause no mutations'
     Reset-Fixture
+    & $module {$script:F.LoseMemory=$true}
+    Assert-Throws {Run-Recovery -Create} 'host resources rechecked after potentially long copy'
+    Assert-True ((Calls).Count -eq 0) 'resource loss prevents VM creation'
+    $failure=Get-Content -LiteralPath (Join-Path $vmRoot 'recovery-failure.json') -Raw|ConvertFrom-Json
+    Assert-True ($failure.State -eq 'Failed' -and $failure.ArtifactsRetained -and -not $failure.BootTested) 'failed copy workflow records retained artifacts without a success claim'
+    $vmRoot=Join-Path $temp 'creation-failure'
+    Reset-Fixture
     & $module {$script:F.CreateFailure=$true}
     Assert-Throws {Run-Recovery -Create} 'VM creation failure propagated'
     Assert-True ((Get-Content -LiteralPath (Join-Path $vmRoot 'recovery.events.jsonl') -Raw).Contains('fixture create failure')) 'creation failure logged'
     Assert-True (-not (Test-Path -LiteralPath (Join-Path $vmRoot 'recovery-result.json'))) 'failure cannot publish success result'
+    $failure=Get-Content -LiteralPath (Join-Path $vmRoot 'recovery-failure.json') -Raw|ConvertFrom-Json
+    Assert-True ($failure.Stage -eq 'CreatingVM' -and $failure.State -eq 'Failed') 'VM creation failure has machine-readable stage'
     Assert-True ((Get-FileHash -LiteralPath $vhd).Hash.ToLowerInvariant() -eq $hash) 'failure leaves original archive unchanged'
     $vmRoot=Join-Path $temp 'isolated-failure'
     Reset-Fixture

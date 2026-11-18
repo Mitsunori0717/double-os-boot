@@ -9,7 +9,7 @@ from pathlib import Path
 import re
 import sys
 
-from convert_image import safe_path, locked_source, hash_stream
+from convert_image import safe_path, locked_source, hash_stream, check_locked_file, ConversionError
 
 
 class SetError(RuntimeError):
@@ -39,7 +39,7 @@ def identity(value):
     keys(value, ('UniqueId', 'SerialNumber', 'Model', 'Size', 'LogicalSectorSize'))
     for name in ('UniqueId', 'SerialNumber', 'Model'):
         text = value[name]
-        require(isinstance(text, str) and 0 < len(text) <= 256 and
+        require(isinstance(text, str) and text.strip() and len(text) <= 256 and
                 not any(ord(c) < 32 for c in text), 'IDENTITY_INVALID')
         # No user-supplied notes, credentials or recovery-key fields are accepted.
         require(not re.search(r'\b\d{6}(?:-\d{6}){7}\b', text), 'SECRET_PATTERN_REJECTED')
@@ -105,8 +105,10 @@ def check_member(manifest, spec, allow_fixture):
     return disk, mode
 
 
-def verify_members(raw_paths, spec, *, allow_fixture=False):
-    """Hold all source locks until every member's hash has been verified."""
+@contextlib.contextmanager
+def _verified_members(raw_paths, spec, *, allow_fixture=False):
+    """Keep images and manifests locked through the caller's ledger publication."""
+    require(type(allow_fixture) is bool, 'FIXTURE_PERMISSION_MUST_BE_BOOLEAN')
     specification(spec)
     require(len(raw_paths) == len(spec['ExpectedDisks']), 'DEPENDENT_DISK_SET_INCOMPLETE')
     paths = [safe_path(x) for x in raw_paths]
@@ -121,11 +123,12 @@ def verify_members(raw_paths, spec, *, allow_fixture=False):
             manifest_path = safe_path(str(path) + '.manifest.json')
             mf = stack.enter_context(locked_source(manifest_path))
             rf = stack.enter_context(locked_source(path))
+            held.extend(((mf, os.fstat(mf.fileno()), manifest_path),
+                         (rf, os.fstat(rf.fileno()), path)))
             manifest = load_json(mf)
             disk, mode = check_member(manifest, spec, allow_fixture)
             require(os.fstat(rf.fileno()).st_size == disk['Size'], 'RAW_SIZE_MISMATCH')
             require(hash_stream(rf).lower() == manifest['Sha256'].lower(), 'RAW_HASH_MISMATCH')
-            held.append((rf, os.fstat(rf.fileno())))
             members.append(dict(RawFile=path.name, ManifestFile=manifest_path.name,
                 ManifestSha256=hash_stream(mf), Sha256=manifest['Sha256'].lower(), Source=disk,
                 AcquisitionMode=mode))
@@ -133,35 +136,55 @@ def verify_members(raw_paths, spec, *, allow_fixture=False):
         require({m['Source']['UniqueId'] for m in members} ==
                 {d['UniqueId'] for d in spec['ExpectedDisks']}, 'DEPENDENT_DISK_SET_INCOMPLETE')
         require([m['Source'] for m in members] == spec['ExpectedDisks'], 'DISK_ORDER_MISMATCH')
-        for stream, before in held:
-            after = os.fstat(stream.fileno())
-            require((before.st_size, before.st_mtime_ns) == (after.st_size, after.st_mtime_ns), 'SOURCE_CHANGED')
-    return members
+        def recheck():
+            for stream, before, path in held:
+                try:
+                    check_locked_file(stream, before, path)
+                except ConversionError as exc:
+                    raise SetError('SOURCE_CHANGED_OR_LOCK_LOST') from exc
+        recheck()
+        yield members, recheck
+        recheck()
+
+
+def verify_members(raw_paths, spec, *, allow_fixture=False):
+    """Verify a point-in-time snapshot; this never authorizes a later restore."""
+    with _verified_members(raw_paths, spec, allow_fixture=allow_fixture) as (members, _):
+        return members
 
 
 def build(raw_paths, spec, output, *, fixture=False):
     output = safe_path(output, exists=False)
     require(not output.exists(), 'OUTPUT_EXISTS')
-    members = verify_members(raw_paths, spec, allow_fixture=fixture)
-    require(output.parent == safe_path(raw_paths[0]).parent, 'SET_MUST_SHARE_IMAGE_DIRECTORY')
-    result = dict(SchemaVersion=1, Kind='OfflineDiskSet', State='fixture-verified-set' if fixture else 'integrity-verified-set',
-                  CreatedUtc=dt.datetime.now(dt.timezone.utc).isoformat(), Specification=spec, Members=members,
-                  Consistency='operator-attested-not-proven', RestoreTested=False, BootTested=False,
-                  AutomaticRestoreAuthorized=False, Fixture=bool(fixture))
-    # CreateNew avoids overwriting any existing artifact. Failure leaves a partial file, never a final success ledger.
-    partial = safe_path(str(output) + '.partial', exists=False)
-    with open(partial, 'x', encoding='utf-8') as f:
-        json.dump(result, f, ensure_ascii=True, indent=2)
-        f.write('\n'); f.flush(); os.fsync(f.fileno())
-    os.link(partial, output)
-    partial.unlink()
-    return result
+    with _verified_members(raw_paths, spec, allow_fixture=fixture) as (members, recheck):
+        require(output.parent == safe_path(raw_paths[0]).parent, 'SET_MUST_SHARE_IMAGE_DIRECTORY')
+        result = dict(SchemaVersion=1, Kind='OfflineDiskSet', State='fixture-verified-set' if fixture else 'integrity-verified-set',
+                      CreatedUtc=dt.datetime.now(dt.timezone.utc).isoformat(), Specification=spec, Members=members,
+                      Consistency='operator-attested-not-proven', RestoreTested=False, BootTested=False,
+                      AutomaticRestoreAuthorized=False, Fixture=bool(fixture))
+        # A final ledger is published only while every verified member is still locked.
+        partial = safe_path(str(output) + '.partial', exists=False)
+        with open(partial, 'x', encoding='utf-8') as f:
+            json.dump(result, f, ensure_ascii=True, indent=2)
+            f.write('\n'); f.flush(); os.fsync(f.fileno())
+        recheck()
+        os.link(partial, output)
+        partial.unlink()
+        return result
 
 
 def verify(path, *, allow_fixture=False):
+    require(type(allow_fixture) is bool, 'FIXTURE_PERMISSION_MUST_BE_BOOLEAN')
     path = safe_path(path)
     with locked_source(path) as stream:
+        before = os.fstat(stream.fileno())
         ledger = load_json(stream)
+        result = _verify_ledger(ledger, path, allow_fixture=allow_fixture)
+        check_locked_file(stream, before, path)
+        return result
+
+
+def _verify_ledger(ledger, path, *, allow_fixture=False):
     keys(ledger, ('SchemaVersion', 'Kind', 'State', 'CreatedUtc', 'Specification', 'Members',
                   'Consistency', 'RestoreTested', 'BootTested', 'AutomaticRestoreAuthorized', 'Fixture'))
     require(type(ledger['SchemaVersion']) is int and ledger['SchemaVersion'] == 1 and ledger['Kind'] == 'OfflineDiskSet', 'SET_SCHEMA_INVALID')
