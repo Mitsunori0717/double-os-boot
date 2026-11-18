@@ -80,3 +80,7 @@ ZIP を展開して使う場合はルートの `setup-all.cmd` を実行して�
 ## ストレージ保全・復元準備
 
 [storage-recovery/](storage-recovery/README.md) に、読み取り専用の構成収集、事前安全判定、既存イメージの複製・SHA-256読み戻し検査、復元計画を追加しています。Linux Liveの全領域RAW取得、検証付きVHDX変換、新規隔離Hyper-V VM構築は [一連の復旧手順](storage-recovery/RECOVERY-PIPELINE.md) を参照してください。既存物理ディスクへの復元書込は行いません。別PCでの起動・認証・復元は実機検証が必要です。
+
+## Windowsアプリの整理（独立ツール）
+
+[windows-app-manager/](windows-app-manager/README.md) は、アプリ登録一覧・用途の推定・保護理由・複数選択・確認付きMSIアンインストールの独立ツールです。Edge Boxの設定や起動には自動で組み込みません。最初は `start-demo.cmd` で合成データだけを確認できます。未知・必須候補は保護し、通信や情報流出を断定しません。
