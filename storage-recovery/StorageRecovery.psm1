@@ -38,8 +38,18 @@ function Get-RecoveryInventory {
             $nics = @(Get-VMNetworkAdapter -VM $vm -ErrorAction Stop | Select-Object Name,SwitchName,MacAddress,DynamicMacAddressEnabled,IPAddresses)
             $assigned = @(Get-VMAssignableDevice -VMName $vm.Name -ErrorAction Stop)
             if ($assigned.Count -gt 0) { $errors.Add('ASSIGNED_DEVICE_UNSUPPORTED: ' + $vm.Name); $complete=$false }
-            $firmware = if ($vm.Generation -eq 2) { Get-VMFirmware -VM $vm -ErrorAction Stop | Select-Object SecureBoot,SecureBootTemplate } else { $null }
-            $vms += [pscustomobject]@{Name=$vm.Name;Id=[string]$vm.Id;State=[string]$vm.State;Generation=$vm.Generation;Version=$vm.Version;MemoryStartup=$vm.MemoryStartup;ProcessorCount=$vm.ProcessorCount;Disks=$drives;NetworkAdapters=$nics;Firmware=$firmware;CheckpointType=[string]$vm.CheckpointType}
+            $firmware=$null; $bios=$null; $security=$null
+            if($vm.Generation -eq 2){
+                $f=Get-VMFirmware -VM $vm -ErrorAction Stop
+                $firmware=[pscustomobject]@{SecureBoot=[string]$f.SecureBoot;SecureBootTemplate=$f.SecureBootTemplate;BootOrder=@($f.BootOrder|Select-Object BootType,Description,FirmwarePath)}
+                $sec=Get-VMSecurity -VM $vm -ErrorAction Stop
+                $security=[pscustomobject]@{TpmEnabled=(Get-RecoveryProperty $sec TpmEnabled);EncryptStateAndVmMigrationTraffic=(Get-RecoveryProperty $sec EncryptStateAndVmMigrationTraffic);Shielded=(Get-RecoveryProperty $sec Shielded);BindToHostTpm=(Get-RecoveryProperty $sec BindToHostTpm)}
+            } else {
+                $bios=Get-VMBios -VM $vm -ErrorAction Stop|Select-Object StartupOrder
+                $security=[pscustomobject]@{TpmEnabled=$false;EncryptStateAndVmMigrationTraffic=$false;Shielded=$false;BindToHostTpm=$false}
+            }
+            $vlans=@(Get-VMNetworkAdapterVlan -VMName $vm.Name -ErrorAction Stop|Select-Object OperationMode,AccessVlanId,NativeVlanId,AllowedVlanIdList)
+            $vms += [pscustomobject]@{Name=$vm.Name;Id=[string]$vm.Id;State=[string]$vm.State;Generation=$vm.Generation;Version=$vm.Version;MemoryStartup=$vm.MemoryStartup;ProcessorCount=$vm.ProcessorCount;Disks=$drives;NetworkAdapters=$nics;Firmware=$firmware;Bios=$bios;Security=$security;Vlans=$vlans;CheckpointType=[string]$vm.CheckpointType}
         }
     } catch { $errors.Add('VM_INVENTORY_UNAVAILABLE: ' + $_.Exception.Message); $complete=$false }
     [pscustomobject]@{SchemaVersion=1;Host=$env:COMPUTERNAME;CapturedUtc=[DateTime]::UtcNow.ToString('o');Disks=$disks;VirtualMachines=$vms;VmInventoryComplete=$complete;Errors=$errors.ToArray();PhysicalAcquisitionEnabled=$false}

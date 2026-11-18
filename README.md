@@ -79,4 +79,4 @@ ZIP を展開して使う場合はルートの `setup-all.cmd` を実行して�
 
 ## ストレージ保全・復元準備
 
-[storage-recovery/](storage-recovery/README.md) に、読み取り専用の構成収集、事前安全判定、既存イメージの複製・SHA-256読み戻し検査、復元計画を追加しています。**この初版は物理ディスクの取得・復元を自動実行しません。** 実際のOS全体取得は [オフライン取得・復元手順](storage-recovery/OFFLINE-RECOVERY.md) を参照してください。別PCでの起動・認証・復元は実機検証が必要です。
+[storage-recovery/](storage-recovery/README.md) に、読み取り専用の構成収集、事前安全判定、既存イメージの複製・SHA-256読み戻し検査、復元計画を追加しています。Linux Liveの全領域RAW取得、検証付きVHDX変換、新規隔離Hyper-V VM構築は [一連の復旧手順](storage-recovery/RECOVERY-PIPELINE.md) を参照してください。既存物理ディスクへの復元書込は行いません。別PCでの起動・認証・復元は実機検証が必要です。

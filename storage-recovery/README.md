@@ -1,92 +1,71 @@
-﻿# Edge Box ストレージ保全・復旧準備
+# Edge Box ストレージ保全・別PC VM復旧
 
-## この版の範囲
+## 入口
 
-このツールは、OS を含む全ストレージのバックアップを安全に実装するための**事前検査・イメージ整合性検査・復旧計画の基盤**です。
+**[OS全領域バックアップ → VHDX → 隔離Hyper-V VMの手順](RECOVERY-PIPELINE.md)** に、実際に使用できるコマンドと確認事項をまとめています。
 
-- ディスクと Hyper-V の構成を読み取り、危険な組み合わせを拒否します。
-- テスト用の通常ファイル／ストリームからイメージを作成して SHA-256 で検証できます。
-- 既存イメージと復旧先の条件から、書き込みを伴わない復旧計画を作れます。
-- **物理ディスクの取得・クローン・復元書き込みは、この版では実装していません。**
-- VM の停止・開始、チェックポイント、ディスクの Online/Offline 変更、MAC 変更、再起動は行いません。
+| 工程 | 実装 | 安全な既定 |
+|---|---|---|
+| 元構成の収集 | `storage-recovery.ps1 -Action Inventory` | 読取りのみ。権限/情報不足は不完全と表示 |
+| 全LBA RAW取得 | `offline_image.py acquire` | 非永続Linux Live・root・未使用の識別済みディスクのみ。ソースは読取り専用/排他 |
+| RAW→VHDX | `convert_image.py` | 既存通常ファイルのみ。新規出力、原本保持、論理内容比較 |
+| VMプロファイル | `New-RecoveryVmProfile` | 元ディスク/RAW hash照合、未知の判断は未確認のまま拒否 |
+| 別PCのVM構築 | `restore-vm.ps1` | 計画のみ。`-Create`明示で新規隔離VM、`-StartIsolated`明示で初回起動 |
 
-実 SSD のバックアップが作成済みという意味ではありません。物理ディスクの排他と静止を実機で検証するまで、自動取得を有効にしません。特定の SSD や PC での復旧、FSBP の起動やライセンス認証も未検証です。
+**実SSDの取得・Hyper-V実起動・FSBP復旧/認証の実機試験は未実施です。** ソフトウェアのファイル試験やVM操作のmock試験を、実機成功に読み替えません。実際の操作前には正常停止の保守時間、対象/保存先、管理者権限、メーカーの復元/ライセンス条件を確認してください。
 
-## なぜディスク番号だけでは選ばないのか
+この実装は、既存VMや物理ディスクへの復元書込、ディスク初期化、MAC変更、VM停止、ネットワーク接続を自動で行いません。明示して新規作成するVMだけを設定し、NICをスイッチ未接続に保ちます。
 
-SSD の着脱や別 PC への移動で Disk 0 / Disk 1 は変わります。コピー元は `UniqueId`、シリアル番号、実バイト容量、論理セクタサイズの組で照合します。空欄・重複・不一致では続行できません。
+## 重要な制限
 
-**Windows で Offline でも、Hyper-V VM が使用中の場合があります。** Offline は「誰も書き込んでいない」の証明ではありません。VM 情報を権限不足で取得できない場合も、停止済みとみなしません。Running、Paused、Saved、遷移中、不明の状態は拒否します。
+- Disk番号やWindowsのOfflineだけを信頼しません。識別情報、mount/VM利用、容量、論理セクタを検査します。
+- 全領域取得はLinux Live専用。Windows稼働中の物理ディスク取得は提供しません。
+- 変換/VM経路は512-byte論理セクタ、単一ディスク/単一NICが初版の範囲。4Kn、RAID/LVM、差分VHDX、複数媒体、vTPM必須/不明は別評価または拒否します。
+- Hyper-V VM IDは新しくなります。元IDが必須なら進めません。MAC保持だけでライセンス認証が通るとは限りません。
+- ハッシュ/manifestは電子署名ではありません。原本と台帳を別に保護してください。
+- RAW、変換VHDX、稼働コピーを同じ場所に置く場合は三つ分の最悪容量を見積もります。約1TB元媒体なら、RAW1世代保存用は2TB、三つをまとめるなら4TBが安全側の目安です。
 
-検査合格はその時点の計画が条件を満たすことを示すだけです。後で取得を実装する際には開始直前の再照合、排他取得、処理中の状態保護が別途必要です。
+## 詳細手順
 
-## 事前検査の条件
+- [Linux Live全領域取得](OFFLINE-IMAGER.md)
+- [QEMUによるVHDX変換と検証](VHDX-CONVERSION.md)
+- [一連の復旧と隔離VM](RECOVERY-PIPELINE.md)
+- [Clonezillaの別方式・公式媒体検証](OFFLINE-RECOVERY.md)
 
-- コピー元の識別情報が一意に一致すること。
-- Windows の起動・システムディスクではなく、Windows 側 Offline であること。
-- Hyper-V の全 VM と接続ディスク情報が取得できること。
-- コピー元を利用する VM が停止済み (`Off`) と確認できること。
-- 保存先とコピー元が同じ物理ディスクではないこと。
-- 非圧縮イメージ全量と管理情報を置く容量があること。
-- 不明な状態を自動補正せず、理由付きで停止すること。
+Clonezillaの`device-image/savedisk`はディスク全体を復元対象にできますが、対応FSの使用中ブロック中心に保存する方式です。未使用領域を含む全LBA RAW取得とは区別してください。Clonezillaの複数圧縮ファイル形式と、本モジュールの通常ファイル/manifest形式は互換ではありません。
 
-保存先は故障する元の PC とは別に保管できる SSD などを用意してください。圧縮率を期待して容量不足を無視しないでください。ディスクの接続方式、RAID、暗号化、4Kn/512e、外付け USB ケース、NAS などは実機確認が必要です。この版は「どの構成でも取得できる」と保証しません。
+## 補助PowerShellモジュール
 
-## イメージの検証とログ
+`StorageRecovery.psm1`は、構成収集、事前安全判定、通常イメージファイルのコピー/読み戻し検査、物理復元の**計画だけ**を提供します。物理書込関数はありません。`Allowed=true`は計画条件の確認であり、実行や復旧成功ではありません。
 
-通常ファイルからの取得では未完成の出力と完成した出力を区別し、予定サイズを読み切れない場合は成功にしません。完成イメージを再読込して整合性を検査します。検証に合格したかどうかを確認し、単にファイルが存在するだけで成功と判断しないでください。
-
-SHA-256 は偶発的な破損・内容変更を検出するものです。マニフェストは署名されていないため、イメージとマニフェストの両方を改ざんできる相手に対する真正性の保証はありません。バックアップはアクセス制限した別媒体に保管し、秘密鍵・資格情報を含む可能性があるため、勝手にクラウドへアップロードしないでください。
-
-エラー時は例外の内容、検査の拒否理由、対象の識別情報、処理段階、サイズとハッシュを確認してください。ライセンスキー、認証トークン、パスワードを通常ログへ追加しないでください。中断後の未完成ファイルは成功扱いせず、原因を確認してから新しい保存先でやり直します。
-
-## 別 PC へ復旧するために別途必要なもの
-
-ストレージイメージだけでなく、以下を保全します。
-
-1. Hyper-V VM の世代・構成バージョン、CPU／メモリ、起動方式、ファームウェア、ストレージ接続。
-2. VM ID、仮想 NIC ごとの MAC と固定／動的の区別、仮想スイッチとの接続。
-3. FSBP のバージョン、正規ライセンス情報と機器交換時の再認証条件。
-4. 復旧先のハードウェア・Hyper-V との互換性、十分な実容量、論理セクタサイズ。
-5. 元の機体が故障しても読める復旧手順とバックアップ媒体。
-
-MAC を保存しても、ライセンスを別 PC で利用できる保証にはなりません。既存の正規ライセンス条件をメーカーに確認してください。復元後はまずネットワークを隔離し、元 VM と同じ MAC/IP の機器を同時に工場 LAN へ接続しないでください。
-
-復旧計画は元 SSD、起動／システムディスク、Online、書き込み禁止、容量不足、異なる論理セクタサイズ、識別できない対象を拒否します。**計画は書き込みを実行しません。** 実際の復元では対象内容が消去されるため、将来の実装でも対象の確定とユーザー確認が必要です。
-
-実ディスクの保全作業を計画する場合は [オフライン復旧手順](OFFLINE-RECOVERY.md) も参照してください。停止・取得・復元はその手順の条件を確認してから行い、このツールの検査合格だけを実行許可にしないでください。
-
-## 利用コマンド
+`storage-recovery.ps1`のWindows版`PhysicalBackup`/`PhysicalRestore`アクションは引き続き拒否されます。実取得はLinux Live専用コマンドを使用します。`CopyImage`は独自manifest付きの既存通常ファイルだけを扱います。
 
 ```powershell
-# 構成を読み取り、JSON として表示。Hyper-V 読み取りには適切な権限が必要です。
-powershell -NoProfile -File .\storage-recovery\storage-recovery.ps1 -Action Inventory
-
-# このツール形式の完成イメージ＋隣接 .manifest.json を検証します。
-powershell -NoProfile -File .\storage-recovery\storage-recovery.ps1 -Action Verify -ImagePath 'E:\Backup\edgebox.img'
-
-# 検証済みの通常イメージファイルを別の新しいファイルへ複製します。
-# 元 SSD の取得ではありません。NAS/UNC、raw device、既存ファイルは扱いません。
-powershell -NoProfile -File .\storage-recovery\storage-recovery.ps1 -Action CopyImage -ImagePath 'E:\Backup\edgebox.img' -DestinationPath 'F:\Backup\edgebox-copy.img'
+# 読取り専用
+.\storage-recovery.ps1 -Action Inventory
+# 通常ファイル+独自manifestの整合検査
+.\storage-recovery.ps1 -Action Verify -ImagePath 'E:\Backup\edgebox.raw'
+# 新しい別名に複製。既存宛先や途中ファイルを上書きしません。
+.\storage-recovery.ps1 -Action CopyImage -ImagePath 'E:\Backup\edgebox.raw' -DestinationPath 'F:\Backup\edgebox-copy.raw'
 ```
 
-保存先ディレクトリは先に用意してください。ドライブ文字とパスは実環境に合わせます。上記は使用例であり、この開発中に実バックアップを実施した記録ではありません。`PhysicalBackup` / `PhysicalRestore` は明示的にエラーで終了します。復旧計画はモジュールの `New-RestorePlan` を使い、取得した VM 構成とイメージを保存している物理ディスク番号も渡します。不明な場合、イメージ格納ディスク自身の場合、復旧先が停止 VM を含むいずれかの VM に接続されている場合は拒否します。
-## テスト
+`Write-ImageFromStream`は下位の通常ストリーム用処理で、物理ディスクを開きません。fixture入力を実機バックアップの証拠にはできません。`New-RestorePlan`は元SSD、ホストOS、画像保存先、VM接続先、容量/セクタ不一致を拒否しますが、物理書込はしません。
 
-管理者権限は不要です。実ディスク、VM、サービス、ネットワーク、再起動は操作しません。
+## 状態とログ
+
+`partial → copied → verified`を区別し、短い読取り、I/O/flush失敗、読み戻し不一致を成功にしません。中断物を自動再開・上書きしません。エラーログには工程、処理/予定バイト、例外/OSコードを含め、秘密やディスク内容を入れません。
+
+`verified`は保存/変換データの整合性であり、復旧起動成功ではありません。VMが`Running`でも`BootTested`、`RestoreTested`、`LicenseValidated`はfalseのままです。隔離した実機で確認して初めて評価できます。
+
+## 非破壊テスト
 
 ```powershell
-powershell -NoProfile -File .\storage-recovery\tests\run-tests.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File .\tests\run-all.ps1
+
+# 個別実行:
+powershell -NoProfile -ExecutionPolicy Bypass -File .\tests\run-tests.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File .\tests\test-hyperv-recovery.ps1
+python -B -m unittest discover -s tests -p 'test_*.py' -v
 ```
 
-合成した構成と一時ファイルで、識別不一致、VM 稼働・状態不明、容量不足、短い読み取り、既存ファイル保護、破損検知、復旧先保護をテストします。この合格は実ストレージ取得や別 PC 起動の合格ではありません。
-
-## 公開資料
-
-- [Microsoft: Hyper-V VM のエクスポート／インポート](https://learn.microsoft.com/en-us/windows-server/virtualization/hyper-v/deploy/export-and-import-virtual-machines)
-- [Microsoft: DPM の Hyper-V バックアップとパススルーディスクの制限](https://learn.microsoft.com/en-us/system-center/dpm/back-up-hyper-v-virtual-machines)
-- [FANUC: FIELD system Basic Package の商品構成](https://www.fanuc.co.jp/ja/product/field/basic/specification/)
-
-Hyper-V の VM エクスポートに、パススルー物理ディスクの内容まで含まれると考えてはいけません。現在の公開 FSBP 製品仕様はハードウェア版と VMware ESXi の VM 版を区別しており、ここでの Hyper-V 構成がメーカー対応構成であることは確認できていません。
-
-構成収集は部分的な補助台帳です。VMの完全エクスポートではなく、BootOrder、第1世代BIOS、VLAN、TPM/鍵保護等を含む完全な復旧構成は別途確認が必要です。
+PowerShellのHyper-V試験は全操作をmock化し、実コマンド呼出しを禁止します。Pythonは通常ファイルとmockを使用し、実ディスクを触りません。QEMUを用いた合成RAWの実変換試験はクラウドの一時ファイルのみで別途実施しました。実機/Live起動/停電やUSB故障/FSBPライセンス確認はこれらに含みません。
