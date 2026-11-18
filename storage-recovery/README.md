@@ -69,3 +69,7 @@ python -B -m unittest discover -s tests -p 'test_*.py' -v
 ```
 
 PowerShellのHyper-V試験は全操作をmock化し、実コマンド呼出しを禁止します。Pythonは通常ファイルとmockを使用し、実ディスクを触りません。QEMUを用いた合成RAWの実変換試験はクラウドの一時ファイルのみで別途実施しました。実機/Live起動/停電やUSB故障/FSBPライセンス確認はこれらに含みません。
+
+## Windows・一般OSのインストール状態を含む保存
+
+[対応範囲、Windows事前台帳、暗号化・休止・複数ディスクと復旧制限](GENERAL-OS-RECOVERY.md) を参照してください。

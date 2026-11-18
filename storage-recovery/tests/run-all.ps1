@@ -2,7 +2,7 @@
 # File fixtures and mocked Hyper-V only. Does not create/stop real VMs or open raw devices.
 $ErrorActionPreference='Stop'
 $root=Split-Path $PSScriptRoot -Parent
-foreach($test in @('run-tests.ps1','test-hyperv-recovery.ps1','test-hyperv-wiring.ps1')) {
+foreach($test in @('run-tests.ps1','test-hyperv-recovery.ps1','test-hyperv-wiring.ps1','test-windows-inventory.ps1','test-windows-plan.ps1','test-windows-integration.ps1')) {
     & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot $test)
     if($LASTEXITCODE -ne 0){throw ('Validation failed: '+$test+' exit='+$LASTEXITCODE)}
 }
