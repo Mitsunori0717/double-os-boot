@@ -3,6 +3,7 @@
 param(
     [ValidateSet('Help','Inventory','Assess','Profile')][string]$Action='Help',
     [string]$InventoryPath,[string]$RawManifestPath,[string]$EvidencePath,[string]$OutputPath,
+    [string[]]$AdditionalRawManifestPaths=@(),
     [ValidateRange(2147483648,1099511627776)][long]$MemoryStartupBytes=4GB,
     [ValidateRange(1,256)][int]$ProcessorCount=2
 )
@@ -41,9 +42,10 @@ try {
         $inventory=Read-LocalJson $InventoryPath
         $manifest=Read-LocalJson $RawManifestPath
         $evidence=Read-LocalJson $EvidencePath
+        $additional=@();foreach($path in $AdditionalRawManifestPaths){$additional+=Read-LocalJson $path}
         Import-Module (Join-Path $PSScriptRoot 'WindowsRecoveryPlan.psm1') -Force
-        if($Action -eq 'Assess'){$result=Test-WindowsRecoverySuitability $inventory $manifest $evidence}
-        else{$result=New-WindowsRecoveryVmProfile $inventory $manifest $evidence -MemoryStartupBytes $MemoryStartupBytes -ProcessorCount $ProcessorCount}
+        if($Action -eq 'Assess'){$result=Test-WindowsRecoverySuitability $inventory $manifest $evidence -AdditionalRawManifests $additional}
+        else{$result=New-WindowsRecoveryVmProfile $inventory $manifest $evidence -MemoryStartupBytes $MemoryStartupBytes -ProcessorCount $ProcessorCount -AdditionalRawManifests $additional}
     }
     $bytes=[Text.UTF8Encoding]::new($false).GetBytes(($result|ConvertTo-Json -Depth 20))
     $dest.Write($bytes,0,$bytes.Length);$dest.Flush($true)

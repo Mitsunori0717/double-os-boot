@@ -1,4 +1,4 @@
-# OS全領域バックアップから別PCの隔離VMまで
+﻿# OS全領域バックアップから別PCの隔離VMまで
 
 ## 実装済みの経路と実機未確認の範囲
 
@@ -8,14 +8,14 @@
 
 コードと合成ファイル試験はありますが、実SSD取得・Hyper-V実起動・FSBP機能/ライセンス・異機種互換は未検証です。どんなPCでも復旧できる保証ではありません。ソースOS/FSBPを正常終了する保守時間、Live起動媒体、管理者権限、対応SSDが必要です。これらの停止・起動・設定変更を開発試験では実行していません。
 
-## 初版の対応条件
+## v1 経路の対応条件（v2 の拡張は後述）
 
-- 単一の物理パススルーディスク、単一NICの既存Hyper-V構成を対象にします。
-- RAWの論理セクタサイズは512 bytes。4Kn、複数ディスク/NIC、差分VHDXチェーン、RAID/LVMのホスト側構成は拒否または別評価です。
+- v1 は単一の物理パススルーディスク、単一NICの既存Hyper-V構成を対象にします。v2 は後述の単一起動ディスク＋データディスク集合に対応します。
+- RAWの論理セクタサイズは512 bytes。v1 の複数ディスク、複数NIC、4KnのVHDX変換、差分VHDXチェーン、RAID/LVMのホスト側構成は拒否または別評価です。v2の複数独立ディスク集合は後述。
 - 既存VM IDを新規IDにすることを明示承認する方式です。元VM ID保持が必須ならこの経路を使わず、正規Importとライセンス移行を検討してください。
-- vTPM必須/不明は拒否。暗号化・機器固有鍵の依存が解決していない場合も進めません。鍵そのものはログやGitに入れません。
+- v1 はvTPM必須/不明を拒否。v2 は後述の新規vTPMを明示設定する経路のみ対応。暗号化・機器固有鍵の依存が解決していない場合も進めません。鍵そのものはログやGitに入れません。
 - VM世代とSecure Boot設定は元構成から取り、未知の場合は停止します。エラー時に勝手にSecure BootをOffへ変えません。
-- MACは明示的に新規または保持を選びます。保持してもFSBP認証が通る保証はありません。NICは常にスイッチ未接続、MAC spoofingは有効にしません。
+- v1 のMACは明示的に新規または保持を選びます。v2は新規MACのみです。保持してもFSBP認証が通る保証はありません。NICは常にスイッチ未接続、MAC spoofingは有効にしません。
 
 ## 容量の考え方
 
@@ -93,3 +93,63 @@ $profile | ConvertTo-Json -Depth 12 | Set-Content 'D:\RecoveryArchive\new-recove
 RAW取得・変換ログは対象/バイト数/例外/ハッシュ/使用ツールを記録します。VM側はVMRootの`recovery.events.jsonl`と`recovery-result.json`を使用します。ログにライセンスキーやディスク内容を載せません。途中失敗分を成功扱いせず、同じ名前で再開/上書きしない設計です。
 
 ハッシュとmanifestは改ざん検知の整合性資料であり電子署名ではありません。両方同時に改変された場合の真正性を保証しないため、原本と台帳は保護して別に保管してください。UEFI独自ブート情報やハードウェア依存ライセンスが原因で起動しない場合は、メーカーの復元/移行手順が必要です。
+
+
+## ProfileVersion 2: Windows 11、新規 vTPM、複数ディスク
+
+v1 の単一ディスク・非 TPM 経路は互換維持しています。v2 は **Generation 2、新しい VM ID/MAC、NIC 1 枚、起動ディスク 1 枚とデータディスク最大 7 枚**に限定します。既存 VM を変更する経路ではありません。v2 プロファイルの生成・作業者証拠については [WINDOWS-PLAN.md](WINDOWS-PLAN.md) を参照してください。
+
+- Windows 11: 4 GiB 以上のメモリ、2 個以上の仮想 CPU、64 GiB 以上の起動仮想ディスク、Secure Boot On / MicrosoftWindows、新規 vTPM が必要です。
+- ホスト CPU の Windows 11 対応は `HostWindows11CpuSupported=true` の作業者確認を要求します。ツールは対応 CPU 一覧、世代別の命令セット、ライセンス条件を自動実証していません。適切な公式要件と実機で確認してください。
+- `TpmPolicy=NewLocalProtector` は新しい VM にだけ新しいローカル key protector と vTPM を作ります。**元 PC/VM の TPM 秘密、Windows Hello、TPM に結び付いた証明書・アプリ秘密は復元しません。**
+- `OriginalTpmSecretsRequired=false` と `AcceptNewTpmIdentity=true` が必要です。元の TPM 秘密が必須または不明なら進めません。
+- BitLocker 暗号化ディスクは `BitLockerState=Encrypted` と、対応する正規の回復キーを別保管・対象と一致確認済み・手動解除を受け入れる確認が必要です。`RecoveryKeyStoredSeparately` / `RecoveryKeyMatchesSource` / `AcceptManualUnlock` は全て true、`RecoveryUnlockPolicy=UserConsoleOnly` とします。**回復キーそのものを JSON、ログ、コマンド引数へ入力しません。** コピーした VM の画面で本人が必要時に入力します。暗号化解除成功は未保証です。
+- Win10/Server の v2 は最低 2 GiB・1 CPU。TPM が不要なら `TpmPolicy=None` を指定できます。TPM や暗号化の未知情報を既定値で許可しません。
+- 全ディスクの論理セクタは 512 bytes。4Kn RAW→VHDX は引き続き拒否します。
+
+### 全ディスクを一つの静止した集合として扱う
+
+`Sources` 配列は先頭 `Role=Boot,ControllerLocation=0`、以降 `Role=Data,ControllerLocation=1..7` です。各要素に元 RAW の `SourceImageSha256,SerialNumber,Size,LogicalSectorSize` を保持します。hash、シリアル、順序、コントローラー位置を曖昧にしません。
+
+`SourceSetComplete=true`（全依存ディスクを含む）、`SourceSetQuiescedTogether=true`、`NoWritesDuringAcquisition=true`、`QuiescentStartUtc/QuiescentEndUtc` が必要です。InventoryCollectedUtc ≤ QuiescentStartUtc ≤ QuiescentEndUtc ≤ EvidenceRecordedUtc の時系列も検査します。OS と全依存ディスクを同じ停止区間で保持し、途中に再起動・書込みを挟まないでください。単に別々の日の検証済みイメージを集めても、DB・アプリ・起動依存の整合性は保証されません。
+
+`SourceSetSha256` は以下の純粋関数で Sources の順序付き識別情報に結び付きます。
+
+```powershell
+Import-Module .\HyperVRecovery.psm1
+Get-RecoverySourceSetHash -Sources $profile.Sources
+```
+
+セットハッシュと停止確認は**完全性の結合と作業者申告**です。署名付き証明でも、ツールが停止区間を観測し続けた証明でもありません。VHDX manifest の CreatedUtc は変換日時であり、RAW の取得日時とは区別します。
+
+### 別ホストでの計画と作成
+
+パスの順序は Sources の Boot→Data と一致させます。全 VHDX と manifest の原本ハッシュ、元 RAW ハッシュ、シリアル、実容量・論理セクタを照合します。全ファイルの読み取りロックを保持して検証し、全ての新規稼働コピーの読み戻し検証を終えてから VM を作ります。
+
+```powershell
+# 計画だけ。VMやキー保護機構は作らない。
+.\restore-vm.ps1 -VhdxPath 'E:\Archive\os.vhdx' `
+  -DataVhdxPaths @('E:\Archive\data.vhdx') `
+  -ProfilePath 'E:\Archive\windows-v2-profile.json' `
+  -VMName 'Windows-Recovery-01' -VMRoot 'D:\RecoveryVMs\Windows-Recovery-01'
+
+# 運用時に内容を確認して実行。既定は作成後Off、起動には別途-StartIsolated。
+.\restore-vm.ps1 -VhdxPath 'E:\Archive\os.vhdx' `
+  -DataVhdxPaths @('E:\Archive\data.vhdx') `
+  -ProfilePath 'E:\Archive\windows-v2-profile.json' `
+  -VMName 'Windows-Recovery-01' -VMRoot 'D:\RecoveryVMs\Windows-Recovery-01' -Create
+```
+
+-Create の確認対象には新規 vTPM 設定も含みます。既存 VM、ホストの一般設定、原本 VHDX、実ディスクは変更しません。プロファイルから任意の key protector や既存 VM ID を読み込む機能はありません。
+
+新規 VM は起動前に Off/ネットワーク未接続/物理ディスクなし/全稼働コピーの接続、Secure Boot、固定メモリ/CPU、CPU互換モード無効、各ディスクのSCSI位置、要求した vTPM が有効なことを読み返して確認します。途中失敗なら起動しません。作成済みの新規 VM や部分コピーは調査用に保持し、自動削除しません。ログにはディスク番号と処理済みバイト数を記録します。
+
+この vTPM はローカルホスト用の新規設定です。その新 VM をさらに別ホストへ移す場合の protector 移行は別課題です。VM が Running でも Windows 起動・BitLocker解除・アプリ動作・ライセンス検証を終えた意味ではなく、BootTested/RestoreTested/LicenseValidated は false のままです。
+
+### 実装根拠と試験範囲
+
+- [Windows 11 の VM 要件](https://learn.microsoft.com/en-us/windows/whats-new/windows-11-requirements)
+- [Set-VMKeyProtector](https://learn.microsoft.com/en-us/powershell/module/hyper-v/set-vmkeyprotector)
+- [Enable-VMTPM](https://learn.microsoft.com/en-us/powershell/module/hyper-v/enable-vmtpm)
+
+`tests/test-hyperv-v2.ps1` は合成ファイルと差し替えた Hyper-V 関数だけを使います。新規 key protector/vTPM コマンドの配線も mock 検査であり、開発中に実行したものではありません。実 SSD、実 Hyper-V、Windows 11 ゲスト起動、BitLocker 手動解除は実機未検証です。
