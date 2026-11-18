@@ -32,3 +32,12 @@ powershell -NoProfile -ExecutionPolicy Bypass -File storage-recovery\tests\run-a
 - 不良セクタがある故障媒体の救出、複数ディスク/NIC、RAID/LVM、4Kn変換
 
 元SSD、既存VM、MAC、ネットワーク接続、ブート設定を変更していません。開発テストは通常ファイルとmockだけです。実機復旧成功の代わりにはなりません。
+
+## 一般Windows拡張の追加検証
+
+- Windows台帳: 66 assertions（全OS問い合わせをmock、現PC台帳は取得せず）
+- Windows適合判定/プロファイル: 105 assertions
+- 台帳→判定→Hyper-V profile schema・CLI: 66 assertions
+- 既存128/90/40 assertions、Python53件中51合格・2skip、setup回帰も再実行して合格
+
+暗号化状態だけの問い合わせ、秘密の余剰フィールド/例外非漏洩、UEFI/BIOSとディスク依存、enumのJSON往復、partition範囲、unknown拒否、Windows11/BitLockerと保全可否の分離、誤った作業者記録、CLI既存出力保護を試験しました。新Windows collectorはモック検証であり、実Windows PCのWMI/BitLocker/firmware応答は未検証です。全LBA取得・復元・Windows/インストール済みアプリの起動は実施していません。前段のCloud QEMU結果はPR #94時点の同一変換器の試験記録であり、今回はCloud試験を再実行していません。
