@@ -11,9 +11,9 @@
 | 対象 | 全LBA保存 | 本実装での自動VMプロファイル |
 |---|---|---|
 | 単一ディスクのWindows、複数パーティション | Linux Liveでの既存安全条件を満たせば対象 | 対応OS・世代・暗号化・依存確認が合格した場合のみ |
-| Windows 11 | 対象 | 現VM作成器はvTPM未対応のため拒否 |
-| BitLocker / Device Encryption | 暗号化されたままのバイト保全は対象 | 復号/TPM依存があるため拒否。鍵を移したことにはならない |
-| 複数ディスクにまたがるOS/アプリ/データ | 個別イメージは取得可能だが一貫したセットの保証なし | 拒否。ディスク集合と整合取得・起動構成の別設計が必要 |
+| Windows 11 | 対象 | v2 の既知 build・UEFI/GPT・新 vTPM・移行先 CPU 確認等を満たす場合のみ。旧 TPM 秘密は再現しない |
+| BitLocker / Device Encryption | 暗号化されたバイトをそのまま保全 | v2 は完全暗号化状態とキー別保管・ID 照合の申告がある場合に計画可能。本人による隔離ゲスト console 入力が必要。解除成功は未検証 |
+| 複数ディスクにまたがるOS/アプリ/データ | 個別 raw の取得と整合した集合が必要 | v2 は最大8枚、全依存・同一静止期間・無書込の申告と集合 hash 結合が必要。未知/RAID/Spaces/スパンは拒否 |
 | Linuxや他OS | 生ディスク保全自体はOS非依存 | Windows用評価器では拒否。既存Edge Box経路とは区別 |
 | 4Kn | 既存取得の安全条件で保存可 | 現VHDX変換/VM経路は512-byte論理セクタのみ |
 | RAID / Storage Spaces / 動的・スパン構成 | 完全性・依存関係未確認 | 自動対応としない |
@@ -37,7 +37,7 @@ BitLocker回復情報は本人が元PCとは独立した安全な場所に保管
 ## 復旧・仮想化時の注意
 
 - UEFI/GPTはGeneration 2、BIOS/MBRはGeneration 1の候補ですが、パーティション方式だけでOS互換を推測しません。元のSecure Boot状態を尊重し、失敗時に勝手に無効化しません。
-- Windows 11 VMにはGeneration 2/vTPM等の要件があります。制約回避をせず、現在は自動VM経路を拒否します。[Microsoft: Windows 11要件](https://learn.microsoft.com/en-us/windows/whats-new/windows-11-requirements)
+- Windows 11 VM は Generation 2・Secure Boot・新 vTPM 等を要求します。v2 は対応条件を満たす入力から計画を生成しますが、旧 TPM 秘密の移行や実機起動の成功を保証しません。[Microsoft: Windows 11要件](https://learn.microsoft.com/en-us/windows/whats-new/windows-11-requirements)
 - アーカイブを元PCにMount-VHDして検査しません。ディスク署名の変更でBCD参照と一致しなくなる場合があります。Disk2vhdはBitLocker有効ボリューム非対応で、選択ボリューム変換なので全LBA原本の代わりにしません。[Microsoft: Disk2vhd](https://learn.microsoft.com/en-us/sysinternals/downloads/disk2vhd)
 - 起動ドライバ/ストレージコントローラー、BCD、UEFI NVRAM、TPM/EFS証明書、ドメイン・アプリ認証等は別評価が必要です。BCD修復やドライバ注入は原本に対して自動実行しません。
 - ハードウェア変更でWindows/アプリの再認証が必要な場合があります。ライセンス移転可否は元契約によります。[Microsoft: ハードウェア変更後の再認証](https://support.microsoft.com/en-us/windows/activation/reactivating-windows-after-a-hardware-change)
@@ -55,3 +55,10 @@ BitLocker回復情報は本人が元PCとは独立した安全な場所に保管
 - [Windows台帳の読取と項目](WINDOWS-INVENTORY.md)
 - [適合判定・未確認の作業記録テンプレート・VMプロファイル作成](WINDOWS-PLAN.md)
 - windows-recovery.ps1 は引数なしでは説明だけです。Inventory は現在PCの台帳を読み、Assess / Profile はJSONだけを処理します。既存出力を上書きせず、失敗時は空/途中ファイルを残します。Profile が拒否された場合は先に Assess の理由コードを確認してください。
+
+
+### v2 計画の注意
+
+[Windows 計画 v2](WINDOWS-PLAN.md#schemaversion-2-windows-11bitlocker複数ディスク) の作業者記録が必要です。正常な完全停止後、全依存ディスクを同一静止期間に無書込で取得したことを確認し、各 raw の取得時刻と集合ハッシュを結び付けます。これらは申告であり、プログラムが停止・整合性を実証したものではありません。元の TPM 秘密を要求する構成は拒否します。
+
+回復キー本文は収集・JSON保存・コマンド引数渡し・ログ出力しません。回復キー ID の照合も手動申告です。本人が別保管したキーを隔離ゲストの console に入力し、その後の Windows/アプリ/データ/ライセンス確認を行います。実機変更・物理書戻しはこの計画生成に含まれません。

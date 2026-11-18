@@ -1,4 +1,4 @@
-# 非破壊検証結果（2026-11-18）
+﻿# 非破壊検証結果（2026-11-18）
 
 ## 実施済み
 
@@ -41,3 +41,23 @@ powershell -NoProfile -ExecutionPolicy Bypass -File storage-recovery\tests\run-a
 - 既存128/90/40 assertions、Python53件中51合格・2skip、setup回帰も再実行して合格
 
 暗号化状態だけの問い合わせ、秘密の余剰フィールド/例外非漏洩、UEFI/BIOSとディスク依存、enumのJSON往復、partition範囲、unknown拒否、Windows11/BitLockerと保全可否の分離、誤った作業者記録、CLI既存出力保護を試験しました。新Windows collectorはモック検証であり、実Windows PCのWMI/BitLocker/firmware応答は未検証です。全LBA取得・復元・Windows/インストール済みアプリの起動は実施していません。前段のCloud QEMU結果はPR #94時点の同一変換器の試験記録であり、今回はCloud試験を再実行していません。
+
+
+## 復旧機能拡張版の検証（2026-11-18）
+
+storage-recovery/tests/run-all.ps1 の最終結果:
+- 既存PowerShell: 128 / 90 / 40 / 66 / 105 / 66 assertions 合格。
+- v2隔離Hyper-V: 50 assertions 合格。
+- v2 Windows評価・profile: 213 assertions 合格（前準備として旧105も再実行）。
+- Python: 108 tests中106合格、2 skip。実QEMU未設定とWindows symlink権限不足によるskipで、合格扱いにはしていません。
+- setup全回帰合格。
+
+新しい物理復元はファイル/メモリstreamとモックで全LBA、512/4Kn、短いI/O、書込・flush・readback失敗、宛先誤選択、image/manifest改変、同一媒体、mount、確認不足、lease失敗を検証しました。Linux Liveの実ブロックデバイス操作は未実施です。
+
+複数diskセットは依存全点、順序、hash、時刻窓、重複、fixture混入、秘密フィールド、既存出力保護を検証。正常停止・同時静止はoperator attestationであり自動証明ではありません。
+
+v2 VMは新規VMのみの新local protector/vTPM、全VHDX先行検証と稼働copy、全disk接続、SecureBoot/CPU/memory/隔離readback、TPM失敗時にStartしないことをmockで検証。Windows11・BitLocker・複数diskのprofileを含みます。旧TPM秘密の移植、実Win11起動、BitLocker実解除、実アプリ動作、ライセンスは未実施・未保証です。
+
+開発中は実物理SSDへの読書き、既存VMの変更、ホストセキュリティ設定の変更を行っていません。CLI/ドキュメントは実運用の最終確認を省略させません。以前の未対応記述は旧版の試験記録であり、新版の対応範囲はRECOVERY-COMPLETION.mdと各v2手順を参照してください。
+
+大容量復元も追加検証済み: 512/4KnのGPTを最小1セクタおよび追加64セクタへ適応し、partition内容不変更、両header/array CRC、末尾backup移設、ゼロtail、全target期待SHAと読戻しを検証。MBRはGPT痕跡/hybrid/extended/dynamic/未知を拒否。これは合成ディスクbytesの検証であり実媒体試験ではありません。

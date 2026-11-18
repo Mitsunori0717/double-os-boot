@@ -1,4 +1,4 @@
-﻿# Windows 復旧計画と隔離 VM プロファイル
+# Windows 復旧計画と隔離 VM プロファイル
 
 この処理は JSON の適合性確認とプロファイル生成だけです。ディスク取得、停止、設定変更、VHDX のマウント、VM の作成・起動は行いません。管理者権限はこの評価自体には不要です。
 
@@ -76,7 +76,7 @@ $p | ConvertTo-Json -Depth 8
 
 後続の変換は元 raw の実ハッシュを検証し、VM 復旧側は VHDX の実ハッシュと raw 由来ハッシュの結び付きを検証します。manifest は署名されていないため、ファイルと manifest を一緒に改ざんされた場合の真正性は保証できません。
 
-## 現行の VM 計画対応範囲
+## SchemaVersion 1 の互換経路
 
 - x64 Windows 10 build 19044 / 19045、ProductType 1。
 - x64 Windows Server 2016 / 2019 / 2022 build 14393 / 17763 / 20348、ProductType 3。
@@ -86,7 +86,7 @@ $p | ConvertTo-Json -Depth 8
 - 単一ディスクで現在の Windows の起動と全アプリ・データが完結。複数起動依存ディスク、別ディスク上の EFI/System、未知の依存は拒否。
 - 論理セクタ 512 のみ。4Kn raw の保全評価は可能だが VHDX プロファイルは拒否。
 - 暗号化状態が既知で、列挙されたボリュームが Known / FullyDecrypted / Off / Unlocked / EncryptionMethod None / 0%、OS ボリュームのカバレッジが確認できること。
-- Windows 11 は vTPM を作成する復旧経路が未実装のため **raw 保全のみ**。自動 VM プロファイルは拒否。
+- Windows 11 は SchemaVersion 1 では拒否。新しい SchemaVersion 2 の条件は後述。
 - ドメインコントローラー、ARM、未知の OS/build、未知・暗号化済みボリュームは自動プロファイル対象外。
 
 この一覧は本ツールの実装対象であり、Microsoft のサポート期間やセキュリティ更新提供を保証しません。物理ハードウェアへの直接書き戻しはこの経路では実装していません。
@@ -94,3 +94,61 @@ $p | ConvertTo-Json -Depth 8
 OS と同じディスクにあるインストール済みアプリ・設定・ユーザーデータは全セクタ取得に含まれます。ただしドライバー、TPM、OEM/機器ライセンス、クラウド専用ファイル、別ディスク・NAS のデータはディスク内容だけでは再現できません。元の稼働 PC は変更せず、隔離されたコピーで実機復旧試験が必要です。
 
 Generation 1 の起動ディスクは2TB超を拒否します。これは保全自体の容量上限ではなく、現Hyper-V起動経路の制限です。[Microsoft 世代比較](https://learn.microsoft.com/en-us/windows-server/virtualization/hyper-v/plan/should-i-create-a-generation-1-or-2-virtual-machine-in-hyper-v)
+
+
+## SchemaVersion 2: Windows 11・BitLocker・複数ディスク
+
+この経路も JSON の評価・プロファイル生成だけです。実機の停止、読み取り取得、解除、VM 作成は行いません。全依存ディスクを同じ正常停止期間に取得したことを作業者が確認します。独立したディスク集合の完全性はソフトが自動証明したものではありません。
+
+- 対象: x64 Windows 10 build 19044/19045、Windows 11 build 22000/22621/22631/26100/26200、Server build 14393/17763/20348/26100。Version は `10.0.<build>` と一致。これはツールの入力適合範囲であり、Microsoft のサポート期間や実機起動保証ではありません。
+- v2 は UEFI/GPT、Generation 2、512-byte 論理セクタ、1〜8 ディスク。起動候補が複数なら拒否。最初の raw は唯一の EFI/起動候補を含むディスク、残りは接続順の Data。OS とデータが別ディスクの場合も全依存を含めます。
+- SATA/NVMe/USB/SCSI/ATA/SAS の基本ディスク構成を作業者が独立確認します。RAID、Storage Spaces、iSCSI、Virtual、File Backed Virtual、未知は拒否。Dynamic/スパン構成を通常ディスクと推定しません。
+- Windows 11 は 4 GB 以上、2 CPU 以上、起動ディスク 64 GB 以上、Secure Boot On/MicrosoftWindows、新 vTPM、移行先 CPU 対応の明示確認を要求します。CPU 対応は作業者の申告であり実測ではありません。
+- BitLocker は既知の FullyEncrypted/100%/既知 AES 方式か FullyDecrypted/0%/None のみ。進行中・中断・不明・ハードウェア暗号化は拒否します。暗号化された各ボリュームの回復キー ID と対象 image hash の結び付け、キー別保管・ID 照合の確認が必要です。鍵そのものは読み取りも出力もしません。
+- 新 TPM は旧 TPM の秘密を再現できません。`OriginalTpmSecretsRequired` が true/不明なら拒否。Windows Hello、証明書、EFS、アプリ秘密、機器依存ライセンス等は別確認が必要です。解除は本人が隔離ゲストのコンソールで手入力します。
+
+### v2 作業者記録
+
+以下は**未確認テンプレート**です。実際に検証していないフラグを true にしないでください。未知のフィールド、回復パスワード等の欄、48 桁の秘密文字列は拒否対象です。コマンドライン、JSON、ログ、Git、チャットに回復キー本文を入れないでください。
+
+```json
+{
+  "SchemaVersion": 2,
+  "Operator": "Unconfirmed",
+  "RecordedUtc": "Unconfirmed",
+  "Sources": [],
+  "SourceSetSha256": "Unconfirmed",
+  "SourceSetComplete": false,
+  "SourceSetQuiescedTogether": false,
+  "NoWritesDuringAcquisition": false,
+  "QuiescentStartUtc": "Unconfirmed",
+  "QuiescentEndUtc": "Unconfirmed",
+  "FullShutdownVerified": false,
+  "FastStartupNotUsed": false,
+  "NotHibernated": false,
+  "AllDependentDisksBackedUp": false,
+  "AllApplicationDataIncluded": false,
+  "BasicStorageTopologyVerified": false,
+  "NoExternalStorageDependencies": false,
+  "IdentityChangeAccepted": false,
+  "AcceptNewTpmIdentity": false,
+  "OriginalTpmSecretsRequired": null,
+  "HostWindows11CpuSupported": false,
+  "BitLockerVolumes": [],
+  "RecoveryKeyStoredSeparately": false,
+  "RecoveryKeyMatchesSource": false,
+  "AcceptManualUnlock": false
+}
+```
+
+`Sources` は順序付き配列。各要素は `SourceImageSha256`, `SerialNumber`, `Size`, `LogicalSectorSize`, `Role`（先頭 Boot、以後 Data）, `ControllerLocation`（0 から連番）だけです。各 raw manifest と台帳に一致させます。`Get-RecoverySourceSetHash -Sources $e.Sources` はこの集合の整合ハッシュを計算します。ハッシュは申告の真実性や署名を保証しません。
+
+暗号化ボリュームごとの `BitLockerVolumes` は `MountPoint`, `SourceImageSha256`, `RecoveryKeyId`（GUID のみ）, `SeparateStorageVerified`, `RecoveryKeyIdMatched` だけです。ID は手動確認用で、collector はキー本文も ID も収集していません。profile には ID を伝播しません。
+
+静止期間は台帳取得以後、作業記録以前で、全 raw manifest の `CreatedUtc` がその開始〜終了内であることが必要です。作業中に起動や書き込みがなかったことは申告であり、時刻比較だけで整合性を実証しません。VHDX の `CreatedUtc` は変換時刻なので raw 取得時刻の代わりにはなりません。
+
+```powershell
+.\windows-recovery.ps1 -Action Profile -InventoryPath E:\Backup\inventory.json -RawManifestPath E:\Backup\boot.raw.manifest.json -AdditionalRawManifestPaths E:\Backup\data.raw.manifest.json -EvidencePath E:\Backup\evidence-v2.json -OutputPath E:\Backup\profile-v2.json
+```
+
+`-AdditionalRawManifestPaths` は Sources の Data 順です。VM 作成側も同じ順の VHDX を `-DataVhdxPaths` へ渡します。アーカイブは不変のまま、新規作業コピー、未接続 NIC、新 VM ID、新 TPM を使います。生成成功は OS 起動・解除・アプリ動作・ライセンス確認の成功ではありません。
