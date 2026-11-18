@@ -1,4 +1,4 @@
-﻿Import-Module (Join-Path $PSScriptRoot 'PurposeCatalog.psm1') -Force -ErrorAction Stop
+﻿Import-Module (Join-Path $PSScriptRoot 'PurposeCatalog.psm1') -ErrorAction Stop
 Set-StrictMode -Version Latest
 function Get-AiValue($Object,[string]$Name,$Default=$null) {
  if ($null -eq $Object) { return $Default }
@@ -18,7 +18,7 @@ function Get-AiRegistryEntries([string]$Hive,[string]$View) {
     $key=$root.OpenSubKey($name,$false)
     if($null -eq $key){throw 'REGISTRY_ENTRY_CHANGED'}
     $item=[ordered]@{Key="$path\$name"}
-    foreach($field in @('DisplayName','DisplayVersion','Publisher','InstallLocation','UninstallString','QuietUninstallString','WindowsInstaller','SystemComponent','ReleaseType','ParentKeyName','NoRemove','InstallDate')) {
+    foreach($field in @('DisplayName','DisplayVersion','Publisher','InstallLocation','UninstallString','QuietUninstallString','WindowsInstaller','SystemComponent','ReleaseType','ParentKeyName','NoRemove','InstallDate','DisplayIcon','Comments','URLInfoAbout','HelpLink','EstimatedSize')) {
      $item[$field]=$key.GetValue($field,$null,[Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
     }
     [pscustomobject]$item
@@ -36,7 +36,7 @@ function Get-AiHash([string]$Text) {
 }
 function Get-AiRecordHash($Record) {
  $data=[ordered]@{}
- foreach($field in @('Id','Source','DisplayName','DisplayVersion','Publisher','InstallLocation','UninstallString','QuietUninstallString','WindowsInstaller','ProductCode','SystemComponent','NoRemove','Category','PurposeSummary','ClassificationBasis','Protection','Evidence')) {$data[$field]=Get-AiValue $Record $field}
+ foreach($field in @('Id','Source','DisplayName','DisplayVersion','Publisher','InstallLocation','UninstallString','QuietUninstallString','WindowsInstaller','ProductCode','SystemComponent','NoRemove','Category','PurposeSummary','ClassificationBasis','Protection','Evidence','Metadata')) {$data[$field]=Get-AiValue $Record $field}
  Get-AiHash (ConvertTo-Json -InputObject $data -Depth 12 -Compress)
 }
 function Test-AppRecordIntegrity {
@@ -55,6 +55,23 @@ function Get-AiRegistrationFlag($Entry,[string]$Name) {
  if($null -eq $value){return [pscustomobject]@{Valid=$true;Enabled=$false}}
  $valid=($value -is [int] -and ($value -eq 0 -or $value -eq 1))
  [pscustomobject]@{Valid=$valid;Enabled=($valid -and $value -eq 1)}
+}
+function Get-AiMetadata($Entry) {
+ $result=[ordered]@{}
+ foreach($field in @('DisplayIcon','Comments','URLInfoAbout','HelpLink','ParentKeyName','ReleaseType')) {
+  $value=$null
+  if($Entry -is [Collections.IDictionary]){if($Entry.Contains($field)){$value=$Entry[$field]}}elseif($Entry.PSObject.Properties[$field]){$value=$Entry.$field}
+  if($value -isnot [string]){$value=''}
+  $value=$value -replace '[\x00-\x1f\x7f\u202a-\u202e\u2066-\u2069]',' '
+  if($value.Length -gt 2048){$value=$value.Substring(0,2048)}
+  $result[$field]=$value
+ }
+ $size=$null
+ if($Entry -is [Collections.IDictionary]){if($Entry.Contains('EstimatedSize')){$size=$Entry['EstimatedSize']}}elseif($Entry.PSObject.Properties['EstimatedSize']){$size=$Entry.EstimatedSize}
+ $result.EstimatedSizeKiB=$null
+ if(($size -is [int] -or $size -is [long]) -and $size -ge 0){$result.EstimatedSizeKiB=$size}
+ $result.Trust='UnverifiedRegistrationClaims; URLsAndCommandsNotOpened'
+ [pscustomobject]$result
 }
 function New-AiRecord($Entry,$Source) {
  $name=[string](Get-AiValue $Entry 'DisplayName' '')
@@ -102,6 +119,7 @@ function New-AiRecord($Entry,$Source) {
   WindowsInstaller=$isMsi;ProductCode=$productCode;SystemComponent=$system;NoRemove=$noRemove
   Category=$category;PurposeSummary=$purpose;ClassificationBasis=$analysis.ClassificationBasis;Protection=[pscustomobject][ordered]@{Protected=($reasons.Count -gt 0);Reasons=@($reasons)}
   Evidence=[pscustomobject][ordered]@{Classification='HeuristicNotVerified';Installation=$(if($Source.Kind -eq 'Appx'){'PackageRegistration'}else{'RegistryRegistration'});NetworkActivity='NotMeasured';InstallDateDeclared=[string](Get-AiValue $Entry 'InstallDate' '');InstallerActor='Unknown';ActualInstalledFiles='NotVerified';Dependencies='Unknown';PublisherAuthenticity='NotVerified';Necessity='Unknown';PurposeRuleId=$analysis.RuleId;PurposeGroup=$analysis.PurposeGroup;PurposeSourceUrls=@($analysis.SourceUrls);PurposeCatalogReviewedUtc=$analysis.CatalogReviewedUtc}
+  Metadata=(Get-AiMetadata $Entry)
   RecordHash=''
  }
  $record.RecordHash=Get-AiRecordHash $record

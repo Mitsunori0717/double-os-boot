@@ -11,7 +11,7 @@ try{
     $before=(Get-FileHash $path).Hash
     $zip=[IO.Compression.ZipFile]::OpenRead($path)
     try{
-        Assert ($zip.Entries.Count -eq 11) 'eleven whitelisted release files'
+        Assert ($zip.Entries.Count -eq 14) 'fourteen whitelisted release files'
         foreach($e in $zip.Entries){
             Assert ($e.FullName -notmatch '\.\.\.|tests|jsonl' -and $e.FullName.StartsWith('windows-app-manager/')) 'safe archive entry'
             $reader=New-Object IO.BinaryReader($e.Open());try{$bytes=$reader.ReadBytes([int]$e.Length)}finally{$reader.Dispose()}

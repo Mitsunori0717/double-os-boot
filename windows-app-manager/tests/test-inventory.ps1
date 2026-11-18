@@ -63,4 +63,12 @@ foreach($field in @('SystemComponent','NoRemove','WindowsInstaller')) {
  $r=(Get-AppInventory).Records[0]
  Assert (-not ($r.Protection.Reasons -contains "Invalid${field}Registration")) 'missing flag permitted'
 }
+& $m {$script:entry.Comments='x'*3000;$script:entry.DisplayIcon=@('C:\app.exe');$script:entry.HelpLink='https://untrusted.invalid';$script:entry.EstimatedSize=123}
+$r=(Get-AppInventory).Records[0]
+Assert ($r.Metadata.Comments.Length -eq 2048) 'metadata length cap'
+Assert ($r.Metadata.DisplayIcon -eq '') 'metadata arrays rejected'
+Assert ($r.Metadata.HelpLink -eq 'https://untrusted.invalid') 'URL untrusted text only'
+Assert ($r.Metadata.EstimatedSizeKiB -eq 123) 'size declared'
+Assert (Test-AppRecordIntegrity $r) 'metadata hashed'
+$r.Metadata.HelpLink='changed';Assert (-not (Test-AppRecordIntegrity $r)) 'metadata tamper detection'
 Write-Output "PASS: $script:n inventory assertions (all registry and Appx queries mocked)"

@@ -8,7 +8,7 @@ $full=[IO.Path]::GetFullPath($OutputPath)
 if($full -notmatch '^[A-Za-z]:\\' -or $full.Substring(2).Contains(':')){throw 'LOCAL_ZIP_PATH_REQUIRED'}
 $parent=[IO.Path]::GetDirectoryName($full)
 while($parent){if(([IO.File]::GetAttributes($parent) -band [IO.FileAttributes]::ReparsePoint) -ne 0){throw 'REPARSE_OUTPUT_REFUSED'};$parent=[IO.Path]::GetDirectoryName($parent)}
-$files=@('PurposeCatalog.psm1','NetworkSnapshot.psm1','NetworkView.psm1','AppInventory.psm1','SafeUninstall.psm1','AppManager.psm1','start.ps1','start.cmd','start-demo.cmd','README.md','VALIDATION.md')
+$files=@('AppEvidence.psm1','AppAssessment.psm1','AssessmentView.psm1','PurposeCatalog.psm1','NetworkSnapshot.psm1','NetworkView.psm1','AppInventory.psm1','SafeUninstall.psm1','AppManager.psm1','start.ps1','start.cmd','start-demo.cmd','README.md','VALIDATION.md')
 foreach($name in $files){if(-not [IO.File]::Exists((Join-Path $PSScriptRoot $name))){throw 'PACKAGE_SOURCE_MISSING'}}
 $stream=[IO.File]::Open($OutputPath,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None)
 try{
