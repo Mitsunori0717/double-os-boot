@@ -3,6 +3,8 @@ Set-StrictMode -Version Latest
 Import-Module (Join-Path $PSScriptRoot 'AppInventory.psm1') -Force
 Import-Module (Join-Path $PSScriptRoot 'SafeUninstall.psm1') -Force
 Import-Module (Join-Path $PSScriptRoot 'NetworkView.psm1') -Force
+Import-Module (Join-Path $PSScriptRoot 'AppAssessment.psm1')
+Import-Module (Join-Path $PSScriptRoot 'AssessmentView.psm1') -Force
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 $script:Ui=$null
@@ -19,6 +21,45 @@ function Get-DemoAppInventory {
     }
     [pscustomobject]@{SchemaVersion=1;Kind='WindowsAppInventory';Complete=$true;ReadOnly=$true;AppxIncluded=$false;Records=$rows;Errors=@();CollectedUtc=[DateTime]::UtcNow.ToString('o')}
 }
+function Get-UiAssessmentConfidence($a){
+    if($null -eq $a){return '不明'}
+    if(@($a.CandidateCategories|Where-Object Confidence -eq 'Medium').Count -gt 0){return '中（用途推定）'}
+    if(@($a.CandidateCategories).Count -gt 0){return '低（候補のみ）'}
+    return '不明'
+}
+function Get-UiSelectedRecord {if($script:Ui.Grid.SelectedRows.Count -gt 0){return $script:Ui.Grid.SelectedRows[0].Tag};return $null}
+function Show-UiAssessment($Record,$Evidence=$null){
+    if($null -eq $Record){return}
+    $a=Get-AppAssessment -Record $Record -AppEvidence $Evidence
+    $script:Ui.Assessments[[string]$Record.Id]=$a
+    if($null -ne $Evidence){$script:Ui.Evidences[[string]$Record.Id]=$Evidence}
+    foreach($row in $script:Ui.Grid.Rows){if($row.Tag.Id -eq $Record.Id){$row.Cells['Purpose'].Value=$a.Summary;$row.Cells['Confidence'].Value=Get-UiAssessmentConfidence $a}}
+    $script:Ui.Details.Text=Format-AppAssessmentText -Record $Record -Assessment $a
+    $window=New-AppAssessmentWindow -Record $Record -Assessment $a -AppEvidence $Evidence -Demo:$script:Ui.Demo
+    try{[void]$window.ShowDialog($script:Ui.Form)}finally{$window.Dispose()}
+}
+function Get-DemoLocalEvidence($Record){
+    [pscustomobject]@{SchemaVersion=1;Kind='AppLocalEvidence';RecordId=$Record.Id;RecordHash=$Record.RecordHash;ObservedUtc=[DateTime]::UtcNow.ToString('o');Complete=$true;File=[pscustomobject]@{Status='Read';Path='X:\DEMO\sample.exe';Size=4096;Sha256=('0'*64);Association='UserSelectedNotProvenOwnership';Metadata=[pscustomobject]@{CompanyName=$Record.Publisher;ProductName=$Record.DisplayName;FileDescription='Synthetic demonstration file';FileVersion=$Record.DisplayVersion;ProductVersion=$Record.DisplayVersion;OriginalFilename='sample.exe'}};Signature=[pscustomobject]@{Status='NotVerified';CertificateTable='Present';PublisherTrust='Unknown';CertificateSubject='NotInspected'};Errors=@();Limitations=@('Synthetic evidence only; not a real file. Signature not verified.')}
+}
+function Start-UiFileEvidence {
+    $record=Get-UiSelectedRecord
+    if($null -eq $record -or $script:Ui.Busy){return}
+    if($script:Ui.Demo){Show-UiAssessment $record (Get-DemoLocalEvidence $record);return}
+    $pick=New-Object Windows.Forms.OpenFileDialog;$pick.Title='このアプリのものと確認したローカルEXEを選択（実行しません）';$pick.Filter='Windows実行ファイル (*.exe)|*.exe';$pick.CheckFileExists=$true;$pick.Multiselect=$false;$pick.InitialDirectory=[Environment]::GetFolderPath([Environment+SpecialFolder]::Windows);$pick.RestoreDirectory=$true
+    if($pick.ShowDialog($script:Ui.Form) -ne [Windows.Forms.DialogResult]::OK){$pick.Dispose();return}
+    $path=$pick.FileName;$pick.Dispose()
+    $shared=[hashtable]::Synchronized(@{CancelRequested=$false})
+    $ps=[PowerShell]::Create();$rs=[RunspaceFactory]::CreateRunspace();$rs.ApartmentState='STA';$rs.ThreadOptions='ReuseThread';$rs.Open();$ps.Runspace=$rs
+    $work={param($ModulePath,$Record,$Path)
+        $ErrorActionPreference='Stop'
+        Import-Module $ModulePath
+        Get-AppEvidence -Record $Record -ExecutablePath $Path
+    }
+    $null=$ps.AddScript($work.ToString()).AddArgument((Join-Path $PSScriptRoot 'AppEvidence.psm1')).AddArgument($record).AddArgument($path)
+    $script:Ui.WorkerKind='Evidence';$script:Ui.EvidenceRecord=$record;$script:Ui.Shared=$shared;$script:Ui.Worker=$ps;$script:Ui.Runspace=$rs
+    Set-UiBusy $true;Set-UiStatus '選択したEXEを読み取っています（実行しません）。中止指定は結果を破棄し、読み取り完了を待ちます。'
+    try{$script:Ui.Async=$ps.BeginInvoke();$script:Ui.Timer.Start()}catch{$ps.Dispose();$rs.Dispose();Set-UiBusy $false;Set-UiStatus 'ローカル情報の読取を開始できませんでした。'}
+}
 function Set-UiStatus([string]$s){$script:Ui.Status.Text=$s}
 function Reset-UiPlan {$script:Ui.Plan=$null;$script:Ui.Run.Enabled=$false}
 function Update-UiSelection {
@@ -28,27 +69,30 @@ function Update-UiSelection {
     $script:Ui.Selection.Text=('選択 '+$count+' 件 / 最大50件')
 }
 function Show-UiInventory($Inventory) {
-    $script:Ui.Inventory=$Inventory;$script:Ui.Grid.Enabled=(-not $script:Ui.Busy);$script:Ui.Grid.Rows.Clear();$script:Ui.Eligibility=@{}
+    $script:Ui.Inventory=$Inventory;$script:Ui.Assessments=@{};$script:Ui.Evidences=@{};$script:Ui.Grid.Enabled=(-not $script:Ui.Busy);$script:Ui.Grid.Rows.Clear();$script:Ui.Eligibility=@{}
     foreach($r in @($Inventory.Records)){
         $id=[string]$r.Id;$reason='';$allowed=$false
         try {$null=New-SafeUninstallPlan -Inventory $Inventory -SelectedIds @($id);$allowed=$true}catch{$reason=$_.Exception.Message}
         $script:Ui.Eligibility[$id]=$allowed
         $protected=[bool]$r.Protection.Protected
         $status=if($protected){'保護・要確認'}elseif($allowed){'MSI候補・実体は再確認'}else{'Windows設定で個別確認'}
-        $purpose=Get-UiValue $r 'PurposeSummary' ([string]$r.Category)
-        $index=$script:Ui.Grid.Rows.Add($false,(Get-UiText $r.DisplayName),(Get-UiText $r.DisplayVersion),(Get-UiText $r.Publisher),$purpose,$status)
+        $purpose=Get-UiValue $r 'PurposeSummary' ([string]$r.Category);$a=$null
+        try{$a=Get-AppAssessment -Record $r;$purpose=$a.Summary}catch{}
+        $script:Ui.Assessments[$id]=$a
+        $index=$script:Ui.Grid.Rows.Add($false,(Get-UiText $r.DisplayName),(Get-UiText $r.DisplayVersion),(Get-UiText $r.Publisher),$purpose,(Get-UiAssessmentConfidence $a),$status)
         $row=$script:Ui.Grid.Rows[$index];$row.Tag=$r;$row.Cells['Select'].ReadOnly=(-not $allowed)
         if(-not $allowed){$row.DefaultCellStyle.ForeColor=[Drawing.Color]::FromArgb(110,117,126);$row.Cells['Select'].Style.BackColor=[Drawing.Color]::FromArgb(234,237,241)}
         $row.Cells['Status'].ToolTipText=$reason
     }
     $script:Ui.Selection.Text='選択 0 件 / 最大50件';$script:Ui.Details.Text='行を選択すると、用途の推定根拠・保護理由・確認できないことを表示します。'
+    $script:Ui.Inspect.Enabled=(@($Inventory.Records).Count -gt 0);$script:Ui.FileEvidence.Enabled=(@($Inventory.Records).Count -gt 0)
     $script:Ui.SelectEligible.Enabled=($Inventory.Complete -and -not $script:Ui.Busy)
     Set-UiStatus ('登録 '+@($Inventory.Records).Count+' 件。用途は推定です。通信・無断インストール・不要性は判定していません。'+$(if(-not $Inventory.Complete){' 一覧取得が不完全のため一括処理は無効です。'}else{''}))
     Reset-UiPlan
 }
 function Set-UiBusy([bool]$Busy){
     $script:Ui.Busy=$Busy
-    foreach($c in @($script:Ui.Refresh,$script:Ui.Appx,$script:Ui.Search,$script:Ui.SelectEligible,$script:Ui.Clear,$script:Ui.Settings,$script:Ui.Network,$script:Ui.Grid)){$c.Enabled=(-not $Busy)}
+    foreach($c in @($script:Ui.Refresh,$script:Ui.Appx,$script:Ui.Search,$script:Ui.SelectEligible,$script:Ui.Clear,$script:Ui.Settings,$script:Ui.Network,$script:Ui.Inspect,$script:Ui.FileEvidence,$script:Ui.Grid)){$c.Enabled=(-not $Busy)}
     $script:Ui.Review.Enabled=$false;$script:Ui.Run.Enabled=$false;$script:Ui.Cancel.Enabled=$Busy
 }
 function Start-UiBatch {
@@ -58,7 +102,7 @@ function Start-UiBatch {
     if($dialog.ShowDialog($script:Ui.Form) -ne [Windows.Forms.DialogResult]::OK){$dialog.Dispose();return}
     $log=$dialog.FileName;$dialog.Dispose()
     if(Test-Path -LiteralPath $log){[Windows.Forms.MessageBox]::Show('既存ログは上書きしません。新しいファイル名を選んでください。','保存先',[Windows.Forms.MessageBoxButtons]::OK,[Windows.Forms.MessageBoxIcon]::Warning)|Out-Null;return}
-    $script:Ui.Shared=[hashtable]::Synchronized(@{CancelRequested=$false})
+    $script:Ui.WorkerKind='Uninstall';$script:Ui.Shared=[hashtable]::Synchronized(@{CancelRequested=$false})
     $ps=[PowerShell]::Create();$rs=[RunspaceFactory]::CreateRunspace();$rs.ApartmentState='STA';$rs.ThreadOptions='ReuseThread';$rs.Open();$ps.Runspace=$rs
     $worker={param($ModulePath,$Plan,$LogPath,$Shared)
         $ErrorActionPreference='Stop'
@@ -80,6 +124,14 @@ function Start-UiBatch {
 function Complete-UiBatch {
     if($null -eq $script:Ui.Async -or -not $script:Ui.Async.IsCompleted){return}
     $script:Ui.Timer.Stop()
+    if($script:Ui.WorkerKind -eq 'Evidence'){
+        $ev=$null;$record=$script:Ui.EvidenceRecord
+        try{$results=@($script:Ui.Worker.EndInvoke($script:Ui.Async));if(-not $script:Ui.Worker.HadErrors -and $results.Count -eq 1 -and -not $script:Ui.Shared.CancelRequested){$ev=$results[0]}else{Set-UiStatus '読取結果を破棄したか、取得できませんでした。ファイルを変更せず停止しました。'}}
+        catch{Set-UiStatus '読取できませんでした。実行ファイルや設定は変更していません。'}
+        finally{$script:Ui.Worker.Dispose();$script:Ui.Runspace.Dispose();$script:Ui.Async=$null;Set-UiBusy $false;Update-UiSelection}
+        if($null -ne $ev){Set-UiStatus 'ローカル根拠を追加しました。署名の信頼・安全性・必要性は未確認です。';Show-UiAssessment $record $ev}
+        return
+    }
     try{
         $result=@($script:Ui.Worker.EndInvoke($script:Ui.Async))
         if($script:Ui.Worker.HadErrors -or $result.Count -eq 0){Set-UiStatus '処理は完了していません。ログを確認し、一覧を再取得してください。'}
@@ -102,11 +154,11 @@ function New-AppManagerWindow {
     function MakeButton([string]$text,[int]$width){$b=New-Object Windows.Forms.Button;$b.Text=$text;$b.Size=New-Object Drawing.Size($width,36);$b.FlatStyle='Flat';$b.BackColor=[Drawing.Color]::White;$tools.Controls.Add($b);return $b}
     $refresh=MakeButton '一覧を読み取る' 140;$appx=New-Object Windows.Forms.CheckBox;$appx.Text='Storeアプリも表示';$appx.Width=185;$appx.Height=36;$tools.Controls.Add($appx)
     $search=New-Object Windows.Forms.TextBox;$search.Width=230;$search.Margin=New-Object Windows.Forms.Padding(12,7,8,3);$tools.Controls.Add($search)
-    $settings=MakeButton 'Windowsの設定で確認' 190;$network=MakeButton '現在のTCPを観測' 170
+    $settings=MakeButton 'Windowsの設定で確認' 190;$network=MakeButton '現在のTCPを観測' 170;$inspect=MakeButton '判別の根拠を見る' 170;$fileEvidence=MakeButton '実行ファイルを照合' 180
     $notice=New-Object Windows.Forms.Label;$notice.Dock='Fill';$notice.Text='検索: 名前・発行元   |   OS / ドライバ / 共有部品 / セキュリティ / 不明は保護。通信や不正の監視・判定ツールではありません。';$notice.ForeColor=[Drawing.Color]::FromArgb(80,90,105);$layout.Controls.Add($notice,0,2)
     $g=New-Object Windows.Forms.DataGridView;$g.Dock='Fill';$g.AllowUserToAddRows=$false;$g.AllowUserToDeleteRows=$false;$g.AllowUserToResizeRows=$false;$g.RowHeadersVisible=$false;$g.SelectionMode='FullRowSelect';$g.MultiSelect=$false;$g.BackgroundColor=[Drawing.Color]::White;$g.BorderStyle='None';$g.AutoSizeColumnsMode='Fill';$g.RowTemplate.Height=36;$g.ClipboardCopyMode='Disable';$g.EnableHeadersVisualStyles=$false;$g.ColumnHeadersDefaultCellStyle.BackColor=[Drawing.Color]::FromArgb(229,235,243);$g.ColumnHeadersHeight=38
     $check=New-Object Windows.Forms.DataGridViewCheckBoxColumn;$check.Name='Select';$check.HeaderText='選択';$check.FillWeight=28;$null=$g.Columns.Add($check)
-    foreach($col in @(@('Name','アプリ',150),@('Version','バージョン',65),@('Publisher','発行元（申告）',110),@('Purpose','用途（推定）',110),@('Status','処理の扱い',130))){$c=New-Object Windows.Forms.DataGridViewTextBoxColumn;$c.Name=$col[0];$c.HeaderText=$col[1];$c.FillWeight=$col[2];$c.ReadOnly=$true;$null=$g.Columns.Add($c)}
+    foreach($col in @(@('Name','アプリ',150),@('Version','バージョン',65),@('Publisher','発行元（申告）',110),@('Purpose','用途（推定）',130),@('Confidence','推定の確かさ',80),@('Status','処理の扱い',130))){$c=New-Object Windows.Forms.DataGridViewTextBoxColumn;$c.Name=$col[0];$c.HeaderText=$col[1];$c.FillWeight=$col[2];$c.ReadOnly=$true;$null=$g.Columns.Add($c)}
     $layout.Controls.Add($g,0,3)
     $details=New-Object Windows.Forms.TextBox;$details.Dock='Fill';$details.Multiline=$true;$details.ReadOnly=$true;$details.ScrollBars='Vertical';$details.BackColor=[Drawing.Color]::White;$details.BorderStyle='FixedSingle';$details.Text='「一覧を読み取る」で登録情報だけを読み取ります。削除・設定変更・外部送信は行いません。';$details.Margin=New-Object Windows.Forms.Padding(0,12,0,8);$layout.Controls.Add($details,0,4)
     $actions=New-Object Windows.Forms.FlowLayoutPanel;$actions.Dock='Fill';$layout.Controls.Add($actions,0,5)
@@ -115,18 +167,21 @@ function New-AppManagerWindow {
     $selection=New-Object Windows.Forms.Label;$selection.Text='選択 0 件';$selection.Width=170;$selection.Height=36;$selection.TextAlign='MiddleLeft';$actions.Controls.Add($selection)
     $status=New-Object Windows.Forms.Label;$status.Dock='Fill';$status.ForeColor=[Drawing.Color]::FromArgb(55,75,100);$status.Text='未取得。選択は初期状態ではすべてOFFです。';$layout.Controls.Add($status,0,6)
     $timer=New-Object Windows.Forms.Timer;$timer.Interval=400
-    $script:Ui=@{Form=$f;Grid=$g;Details=$details;Status=$status;Refresh=$refresh;Appx=$appx;Search=$search;Settings=$settings;Network=$network;SelectEligible=$select;Clear=$clear;Review=$review;Run=$run;Cancel=$cancel;Selection=$selection;Timer=$timer;Demo=[bool]$Demo;Busy=$false;Inventory=$null;Plan=$null;Eligibility=@{};Async=$null;Worker=$null;Runspace=$null;Shared=$null;LogPath=''}
-    $select.Enabled=$false;$review.Enabled=$false;$run.Enabled=$false;$cancel.Enabled=$false
-    $refresh.add_Click({Reset-UiPlan;try{if($script:Ui.Demo){Show-UiInventory (Get-DemoAppInventory)}else{Show-UiInventory (Get-AppInventory -IncludeAppx:$script:Ui.Appx.Checked)}}catch{$script:Ui.Inventory=$null;$script:Ui.Grid.Rows.Clear();$script:Ui.SelectEligible.Enabled=$false;$script:Ui.Review.Enabled=$false;Set-UiStatus '一覧を取得できません。権限と環境を確認してください。'}})
+    $script:Ui=@{Form=$f;Grid=$g;Details=$details;Status=$status;Refresh=$refresh;Appx=$appx;Search=$search;Settings=$settings;Network=$network;Inspect=$inspect;FileEvidence=$fileEvidence;Assessments=@{};Evidences=@{};WorkerKind='Uninstall';EvidenceRecord=$null;SelectEligible=$select;Clear=$clear;Review=$review;Run=$run;Cancel=$cancel;Selection=$selection;Timer=$timer;Demo=[bool]$Demo;Busy=$false;Inventory=$null;Plan=$null;Eligibility=@{};Async=$null;Worker=$null;Runspace=$null;Shared=$null;LogPath=''}
+    $inspect.Enabled=$false;$fileEvidence.Enabled=$false;$select.Enabled=$false;$review.Enabled=$false;$run.Enabled=$false;$cancel.Enabled=$false
+    $refresh.add_Click({Reset-UiPlan;try{if($script:Ui.Demo){Show-UiInventory (Get-DemoAppInventory)}else{Show-UiInventory (Get-AppInventory -IncludeAppx:$script:Ui.Appx.Checked)}}catch{$script:Ui.Inventory=$null;$script:Ui.Assessments=@{};$script:Ui.Evidences=@{};$script:Ui.EvidenceRecord=$null;$script:Ui.Details.Clear();$script:Ui.Grid.Rows.Clear();$script:Ui.Inspect.Enabled=$false;$script:Ui.FileEvidence.Enabled=$false;$script:Ui.SelectEligible.Enabled=$false;$script:Ui.Review.Enabled=$false;Set-UiStatus '一覧を取得できません。権限と環境を確認してください。'}})
     $appx.add_CheckedChanged({Reset-UiPlan;Set-UiStatus '表示範囲を変更しました。「一覧を読み取る」で反映してください。'})
     $g.add_CurrentCellDirtyStateChanged({if($script:Ui.Grid.IsCurrentCellDirty){$null=$script:Ui.Grid.CommitEdit([Windows.Forms.DataGridViewDataErrorContexts]::Commit)}})
     $g.add_CellValueChanged({Update-UiSelection})
     $g.add_SelectionChanged({if($script:Ui.Grid.SelectedRows.Count -gt 0){$r=$script:Ui.Grid.SelectedRows[0].Tag;if($null -ne $r){$script:Ui.Details.Text=(Get-UiText $r.DisplayName)+"`r`n用途はローカル規則による推定。発行元文字列も未検証です。`r`n用途: "+(Get-UiText (Get-UiValue $r PurposeSummary))+"`r`n推定根拠: "+(Get-UiText (Get-UiValue $r ClassificationBasis))+"`r`n用途の公式出典: "+(@(Get-UiValue $r.Evidence PurposeSourceUrls @())-join "; ")+"`r`n登録上のインストール日: "+(Get-UiText (Get-UiValue $r.Evidence InstallDateDeclared))+"（インストール日時や実行者の証明ではありません）`r`n保護理由: "+(@($r.Protection.Reasons)-join ', ')+"`r`n登録があることは、実ファイルの存在・使用頻度・不要性の証明ではありません。`r`n通信: 未計測。無断インストールの実行者・経緯は判定できません。`r`nMSI以外、保護対象、不明な用途は一括処理できません。"}}})
+    $g.add_SelectionChanged({$r=Get-UiSelectedRecord;if($null -ne $r -and $script:Ui.Assessments.ContainsKey([string]$r.Id) -and $null -ne $script:Ui.Assessments[[string]$r.Id]){$script:Ui.Details.Text=Format-AppAssessmentText -Record $r -Assessment $script:Ui.Assessments[[string]$r.Id]}})
+    $inspect.add_Click({$r=Get-UiSelectedRecord;if($null -ne $r){Show-UiAssessment $r $script:Ui.Evidences[[string]$r.Id]}})
+    $fileEvidence.add_Click({Start-UiFileEvidence})
     $search.add_TextChanged({Reset-UiPlan;$q=$script:Ui.Search.Text;$script:Ui.Grid.CurrentCell=$null;foreach($row in $script:Ui.Grid.Rows){$row.Visible=([string]::IsNullOrEmpty($q) -or (($row.Tag.DisplayName+' '+$row.Tag.Publisher).IndexOf($q,[StringComparison]::OrdinalIgnoreCase) -ge 0));if(-not $row.Visible){$row.Cells['Select'].Value=$false}};Update-UiSelection})
     $select.add_Click({$n=0;foreach($row in $script:Ui.Grid.Rows){$yes=$row.Visible -and $script:Ui.Eligibility[[string]$row.Tag.Id] -and $n -lt 50;$row.Cells['Select'].Value=$yes;if($yes){$n++}};Update-UiSelection})
     $clear.add_Click({foreach($row in $script:Ui.Grid.Rows){$row.Cells['Select'].Value=$false};Update-UiSelection})
     $review.add_Click({try{$ids=@($script:Ui.Grid.Rows|Where-Object{[bool]$_.Cells['Select'].Value}|ForEach-Object{[string]$_.Tag.Id});$script:Ui.Plan=New-SafeUninstallPlan -Inventory $script:Ui.Inventory -SelectedIds $ids;$script:Ui.Details.Text="実行前の確認（削除はまだ行いません）`r`n"+(@($script:Ui.Plan.Items|ForEach-Object{(Get-UiText $_.DisplayName)+'  '+(Get-UiText $_.DisplayVersion)})-join "`r`n")+"`r`n`r`nアプリの設定・データを失う場合があります。必要なバックアップを先に確保してください。`r`n実行ボタンの後、最新登録情報を再照合して別の確認ダイアログを表示します。";$script:Ui.Run.Enabled=(-not $script:Ui.Demo);if($script:Ui.Demo){Set-UiStatus 'デモは合成データです。実アンインストールは無効です。'}}catch{$script:Ui.Plan=$null;$script:Ui.Run.Enabled=$false;Set-UiStatus '選択対象に保護・非対応・変更・重複があります。一覧を再取得して個別に確認してください。'}})
-    $run.add_Click({Start-UiBatch});$cancel.add_Click({if($null -ne $script:Ui.Shared){$script:Ui.Shared.CancelRequested=$true;Set-UiStatus '未開始の処理を中止します。実行中のアンインストーラーは画面側で安全に完了・取消してください。'}})
+    $run.add_Click({Start-UiBatch});$cancel.add_Click({if($null -ne $script:Ui.Shared){$script:Ui.Shared.CancelRequested=$true;if($script:Ui.WorkerKind -eq 'Evidence'){Set-UiStatus '読み取り完了後に結果を破棄します。ファイルは変更しません。'}else{Set-UiStatus '未開始の処理を中止します。実行中のアンインストーラーは画面側で安全に完了・取消してください。'}}})
     $settings.add_Click({if(-not $script:Ui.Demo){Start-Process 'ms-settings:appsfeatures'}})
     $network.add_Click({
         if($script:Ui.Demo){$snapshot=Get-DemoNetworkSnapshot}else{
