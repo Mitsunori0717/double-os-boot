@@ -76,3 +76,7 @@ ZIP を展開して使う場合はルートの `setup-all.cmd` を実行して�
 - Edge Box の稼働中に、そのディスクを Windows からオンラインに戻さない (同時アクセスによる破損防止)
 - Edge Box を仮想環境で動かすことはメーカーのサポート範囲外です。ディスクは無改造のため、
   問題があればネイティブ起動の運用に戻せます
+
+## ストレージ保全・復元準備
+
+[storage-recovery/](storage-recovery/README.md) に、読み取り専用の構成収集、事前安全判定、既存イメージの複製・SHA-256読み戻し検査、復元計画を追加しています。Linux Liveの全領域RAW取得、検証付きVHDX変換、新規隔離Hyper-V VM構築は [一連の復旧手順](storage-recovery/RECOVERY-PIPELINE.md) を参照してください。既存物理ディスクへの復元書込は行いません。別PCでの起動・認証・復元は実機検証が必要です。
