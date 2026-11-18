@@ -61,3 +61,10 @@ v2 VMは新規VMのみの新local protector/vTPM、全VHDX先行検証と稼働c
 開発中は実物理SSDへの読書き、既存VMの変更、ホストセキュリティ設定の変更を行っていません。CLI/ドキュメントは実運用の最終確認を省略させません。以前の未対応記述は旧版の試験記録であり、新版の対応範囲はRECOVERY-COMPLETION.mdと各v2手順を参照してください。
 
 大容量復元も追加検証済み: 512/4KnのGPTを最小1セクタおよび追加64セクタへ適応し、partition内容不変更、両header/array CRC、末尾backup移設、ゼロtail、全target期待SHAと読戻しを検証。MBRはGPT痕跡/hybrid/extended/dynamic/未知を拒否。これは合成ディスクbytesの検証であり実媒体試験ではありません。
+
+
+## Linux通常ファイルによるクロス環境検証
+
+実装commit 7aeaac71d652f63c7318e7a3c271bac920746d3bを別Linux環境へcloneしてSHA一致を確認。Python 3.12.14で同じ108 testsを実行し、106成功・2skip・失敗0でした。skipは未導入のQEMUとWindows専用sharing試験です。Linux kernel read leaseは通常の一時ファイルで実機能を検証しました。全テストを読んで物理デバイス入口がmockまたは拒否であることを確認してから実行し、実/dev/block・VMを操作していません。
+
+大容量GPT/MBR経路を含む独立read-only安全レビューも合格。指摘された入力画像の排他、複数ディスクの静止期間、MBR上のGPT痕跡の拒否を修正して再検証しました。
