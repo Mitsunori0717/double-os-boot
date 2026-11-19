@@ -220,29 +220,23 @@ fix-black-screen.cmd をダブルクリック   ※管理者にしないこと
 両方を実行すると「どんな理由でも勝手に再起動・シャットダウン・スリープしない」状態になる。
 PC を止めるときは『全部シャットダウン』を使う。
 
-### Windows Update の自動更新・自動再起動を止める (12-windows-update.ps1)
+### Windows Update とホストの自動再起動を抑止する
 
 ```powershell
-.\12-windows-update.ps1            # 止める (見張り役も登録)
-.\12-windows-update.ps1 -Status    # 今の状態
-.\12-windows-update.ps1 -UpdateNow # 更新を当てたいとき (一時解除して更新画面を開く)
-.\12-windows-update.ps1 -Restore   # 既定に戻す
+.\12-windows-update.ps1            # 手順12を適用
+.\12-windows-update.ps1 -Status    # 未適用・競合・再起動待ちを確認
+.\12-windows-update.ps1 -UpdateNow # Microsoft Update カタログを開く
+.\12-windows-update.ps1 -UpdateNow -PackagePath "C:\Updates\update.msu"
+.\12-windows-update.ps1 -Restore   # バージョン固定・先送りだけ解除
 ```
 
-更新の途中で勝手に再起動されると収集が止まるため、5 段で止める。
-Windows は設定を自分で修復するので、ポリシーだけでは足りない:
+手順12は Windows Update の自動更新を無効にし、更新サービスと、検出した更新オーケストレーターの再起動タスクを停止・無効化します。SYSTEM の維持タスクが Windows 起動時と毎日 12:00 に再確認します。権限で拒否された設定、組織の更新期限、既に保留中の再起動はログで確認してください。
 
-| 段 | 内容 |
-|---|---|
-| 1 | ポリシー: 自動更新をしない / 使用中は再起動しない / 今の版に固定 |
-| 2 | サービス: wuauserv・UsoSvc・WaaSMedicSvc (修復役) を停止して無効化 |
-| 3 | 予約タスク: 更新の巡回・再起動を仕掛けるタスクを無効化 |
-| 4 | 見張り役: 毎日 12:00 と PC 起動時に 1〜3 を掛け直す |
-| 5 | 先送り: 品質更新 30 日・大型アップデート 365 日 |
+維持タスクは `Program Files\EdgeBox-WindowsUpdate-Lock` の版別フォルダーから動作します。パッケージ更新後は手順12を再実行して、管理者が保護された配置先と維持タスクを更新してください。定期処理が一般サービス・予約タスクを再修復するのは、手順12で変更・確認済みの対象が以前と同じ設定に戻った場合です。新たに見つかった対象や確認できない設定はログに記録します。
 
-> 止めているのは**自動**更新。更新をずっと当てない運用は安全ではないため、
-> 月に一度など Edge Box を止めてよい日を決めて `-UpdateNow` で当てる。
-> 更新サービスを止めるため、Microsoft Store の更新も止まる。
+組織が設定した更新期限に達すると、Windows はアクティブ時間や自動更新設定に優先して再起動を実施する場合があります。手順12が期限を報告したときは、管理元の GPO・MDM で期限を解除して再確認してください。[Microsoft の更新期限の説明](https://learn.microsoft.com/en-us/windows/deployment/update/wufb-compliancedeadlines)
+
+手動更新には対象の Windows 11 に対応する単一の `.msu` を指定します。保護を確認してから `Add-WindowsPackage -NoRestart -PreventPending` で適用します。終了コード `3010` は手動再起動待ちです。[Microsoft の Add-WindowsPackage リファレンス](https://learn.microsoft.com/en-us/powershell/module/dism/add-windowspackage)
 
 ### BIOS の Fast Boot について
 

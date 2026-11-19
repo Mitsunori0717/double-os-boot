@@ -1,6 +1,6 @@
 # 構成B: Windows + Edge Box の同時起動
 
-Linux 側が **Edge Box** (メーカー製の専用機システム。原型は FANUC の FsBP で、署名検証付きの
+Linux 側が **Edge Box** (メーカー製の専用機システム。署名検証付きの
 改造不可イメージ) である構成です。Edge Box は土台 (ホスト) 役にできないため、
 主構成 (`baremetal/`) とは役割を反転し、**Windows を土台にして Edge Box を Hyper-V で同時起動**します。
 
@@ -163,7 +163,7 @@ CPU の分割は独立フォルダ **[../windows-cpu-partition/](../windows-cpu-
 | **Edge Box 再起動** | 正常シャットダウン → CPU グループに固定 → 起動 → 電源 ON と同じ画面表示。強制電源断はしない |
 | **Edge Box 画面** | 左画面にコンソールを全画面で表示 (止まっていれば固定してから起動)。自動では閉じない |
 | **Edge Box設定** | 全設定を 1 画面で: [画面表示] [自動サインイン] [起動と見た目] |
-| **全部シャットダウン** | Edge Box を正常停止してから Windows をシャットダウン |
+| **全部シャットダウン** | Edge Box だけ終了、Windows をシャットダウン、Windows を再起動、から選択 |
 | **自動サインイン設定** | サインイン画面の省略の設定/解除 |
 | **Edge Box 単独起動** | Edge Box を安全停止 → 再起動して Edge Box をネイティブ単独起動 (切り分け用。次回は自動で Windows に戻る) |
 | **CPU割り当て** / **Edge Box 監視** | windows-cpu-partition の設定コンソール / リアルタイム監視 |
@@ -268,6 +268,10 @@ CPU は完全分離で Edge Box 専用のコアの上で直接動いています
 
 この処理は Windows のサインイン後に表示します。BIOS・Windows 起動ロゴ・サインイン前の画面を覆うものではありません。右画面は覆いません。再起動後の実際の表示開始時間は PC の起動状態・モニター認識に依存します。
 
-「全部シャットダウン」は FSBP に正常終了を要求し、停止を検出したら追加の 10 秒待ちを入れずに Windows の通常の終了へ進みます。`shutdown-log.txt` に要求時刻・VM 停止までの秒数・ホスト終了要求を記録します。最大待ち時間は要求を送った時点から既定 180 秒です。停止確認できなければ Windows の終了を中止します。
+「全部シャットダウン」を実行すると、「Edge Box を終了しています」のウィンドウに経過秒数と停止後の動作が表示されます。ウィンドウを閉じても正常終了は続きます。Windows の終了または再起動を選んだ場合は、同じ VM とほかの VM の停止を再確認してから、選んだ操作を Windows に要求します。Edge Box だけ終了する場合は停止確認後に完了を表示します。
 
-VM の強制終了は物理機の電源断に相当し、未保存データを失う可能性があります（[Microsoft の Stop-VM の説明](https://learn.microsoft.com/en-us/powershell/module/hyper-v/stop-vm?view=windowsserver2025-ps)）。FSBP 内部のデータ保存・サービス停止自体は省略しません。
+`shutdown-log.txt` に正常終了の要求時刻、VM 停止までの秒数、Windows の終了要求までの合計秒数を記録します。ゲストの正常終了は要求時点から既定 180 秒待ちます。停止を確認できない場合は、理由を表示して Windows の終了を中止します。
+
+次の手動起動後、管理者の PowerShell から `powershell -NoProfile -ExecutionPolicy Bypass -File .\windows-host\shutdown-diagnostics.ps1` を実行すると、直近の終了時間を確認できます。Windows の System イベントで終了要求からカーネル終了、次回起動までを表示します。Diagnostics-Performance が記録したサービス終了やカーネルなどの所要時間と遅延サービス名、Edge Box の停止ログに残った計測値は、それぞれの記録時刻とともに表示します。既定の調査範囲は過去 90 日、各項目は最大 5 件です。
+
+VM の強制終了は物理機の電源断に相当し、未保存データを失う可能性があります（[Microsoft の Stop-VM の説明](https://learn.microsoft.com/en-us/powershell/module/hyper-v/stop-vm?view=windowsserver2025-ps)）。Edge Box 内部のデータ保存・サービス停止自体は省略しません。

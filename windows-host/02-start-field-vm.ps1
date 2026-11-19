@@ -63,7 +63,7 @@ if ($Status) {
 
 if ($Stop) {
     Import-Module (Join-Path $PSScriptRoot 'vm-shutdown.psm1') -Force -ErrorAction Stop
-    Wait-EdgeBoxShutdown -VMName $VMName -ExpectedVmId ([string]$vm.Id)
+    Wait-EdgeBoxShutdown -VMName $VMName -ExpectedVmId ([string]$vm.Id) -ManualStop -NextAction '停止を確認すると終了します。Windows は引き続き使えます。'
     exit 0
 }
 

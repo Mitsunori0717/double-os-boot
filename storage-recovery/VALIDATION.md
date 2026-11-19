@@ -31,7 +31,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File storage-recovery\tests\run-a
 
 - 実SSDの全量取得、実Live環境でのkernel read-only/排他、NTFS3書込・USB抜去・停電
 - Windows版QEMUの実変換（ロック自体はWindows上で試験済み）
-- 実Hyper-Vの新規VM作成/起動、ゲストOS起動、FSBP画面/機能/認証
+- 実Hyper-Vの新規VM作成/起動、ゲストOS起動、Edge Box 画面/機能/認証
 - 別PCのUEFI/デバイス互換、TPM/暗号化鍵/メーカーのライセンス移行
 - 不良セクタがある故障媒体の救出、複数ディスク/NIC、RAID/LVM、4Kn変換
 

@@ -361,13 +361,9 @@ function Get-CpuName {
     try { return ((Get-CimInstance Win32_Processor | Select-Object -First 1).Name.Trim()) } catch { return "" }
 }
 function Save-Snapshot($Cores) {
-    # CPU 名を一緒に保存する。別 PC からコピーされたファイルを使わないための照合用
     try {
-        $obj = [pscustomobject]@{
-            Cpu   = (Get-CpuName)
-            Cores = @($Cores | ForEach-Object { [pscustomobject]@{ Eff = $_.Eff; Lps = @($_.Lps) } })
-        }
-        $obj | ConvertTo-Json -Depth 4 | Set-Content -Path $SnapshotFile -Encoding UTF8
+        Import-Module (Join-Path $PSScriptRoot 'cpu-tool.psm1') -ErrorAction Stop
+        Save-EdgeBoxCpuSnapshot -Path $SnapshotFile -CpuName (Get-CpuName) -Cores $Cores
     } catch { }
 }
 
@@ -1375,11 +1371,22 @@ $script:btnApply.Add_Click({
     # full の第 1 段階 (設定書き込み済み・未反映) なら再起動を案内する
     $pending = $script:Bcd -and ($script:Bcd.RootProc -gt 0) -and ($script:VisibleLps -ne $script:Bcd.RootProc)
     if ($mode -eq "full" -and $pending) {
+        if (-not $script:Vm -or -not $script:Vm.Id -or $script:Vm.Name -ne $script:VmNameSel) {
+            Show-Info "設定を書き込みました。対象の Edge Box を確認できないため、自動再起動を保留します。" "Warning"
+            return
+        }
+        $restartVMName = [string]$script:Vm.Name
+        $restartVMId = [string]$script:Vm.Id
         $r2 = Show-Ask ("設定を書き込みました。`n`n" +
             "PC を再起動すると、Edge Box を割り当てたコアに固定してから起動します (以後、起動のたびに自動)。`n" +
             "再起動後の各コアの動きは『Edge Box 監視』で確認できます。`n`n" +
-            "今すぐ再起動しますか?") "CPU コア割り当て"
-        if ($r2 -eq [System.Windows.Forms.DialogResult]::Yes) { Restart-Computer -Force }
+            "『$restartVMName』を正常終了し、全 VM の停止を確認してから PC を再起動しますか?") "CPU コア割り当て"
+        if ($r2 -eq [System.Windows.Forms.DialogResult]::Yes) {
+            try {
+                Import-Module (Join-Path (Split-Path $PSScriptRoot -Parent) 'windows-host\vm-shutdown.psm1') -ErrorAction Stop
+                Invoke-EdgeBoxHostRestart -VMName $restartVMName -ExpectedVmId $restartVMId
+            } catch { Show-Info ("PC の再起動を保留しました。`n" + $_.Exception.Message) "Warning" }
+        }
         return
     }
     if ($script:VmMissing) {

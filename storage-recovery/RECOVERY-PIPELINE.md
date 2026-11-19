@@ -6,7 +6,7 @@
 2. **RAWをVHDXへ変換**: [VHDX-CONVERSION.md](VHDX-CONVERSION.md)。新規通常ファイルだけに出力し、QEMUの形式検査・仮想容量・論理内容比較を行います。
 3. **別Windows PCに新規隔離VMを作成**: この手順。保管VHDXを直接起動せず、検証した稼働用コピーを作り、ネットワーク未接続で登録します。
 
-コードと合成ファイル試験はありますが、実SSD取得・Hyper-V実起動・FSBP機能/ライセンス・異機種互換は未検証です。どんなPCでも復旧できる保証ではありません。ソースOS/FSBPを正常終了する保守時間、Live起動媒体、管理者権限、対応SSDが必要です。これらの停止・起動・設定変更を開発試験では実行していません。
+コードと合成ファイル試験はありますが、実SSD取得・Hyper-V実起動・ Edge Box 機能/ライセンス・異機種互換は未検証です。どんなPCでも復旧できる保証ではありません。ソースOS/Edge Box を正常終了する保守時間、Live起動媒体、管理者権限、対応SSDが必要です。これらの停止・起動・設定変更を開発試験では実行していません。
 
 ## v1 経路の対応条件（v2 の拡張は後述）
 
@@ -15,7 +15,7 @@
 - 既存VM IDを新規IDにすることを明示承認する方式です。元VM ID保持が必須ならこの経路を使わず、正規Importとライセンス移行を検討してください。
 - v1 はvTPM必須/不明を拒否。v2 は後述の新規vTPMを明示設定する経路のみ対応。暗号化・機器固有鍵の依存が解決していない場合も進めません。鍵そのものはログやGitに入れません。
 - VM世代とSecure Boot設定は元構成から取り、未知の場合は停止します。エラー時に勝手にSecure BootをOffへ変えません。
-- v1 のMACは明示的に新規または保持を選びます。v2は新規MACのみです。保持してもFSBP認証が通る保証はありません。NICは常にスイッチ未接続、MAC spoofingは有効にしません。
+- v1 のMACは明示的に新規または保持を選びます。v2は新規MACのみです。保持しても Edge Box 認証が通る保証はありません。NICは常にスイッチ未接続、MAC spoofingは有効にしません。
 
 ## 容量の考え方
 
@@ -33,7 +33,7 @@ JSON出力を元ホストの台帳として別媒体へ保存します。VM世�
 
 ## 2. 正常停止・オフライン取得・VHDX変換
 
-[全領域取得](OFFLINE-IMAGER.md)の条件と対象識別を確認し、承認済み保守時間に元FSBPとホストを正常終了します。Live環境でRAWとmanifestを取得します。Windows側OfflineだけではVMが書込み中かもしれないため、Windows稼働中にこの物理取得を実行しません。
+[全領域取得](OFFLINE-IMAGER.md)の条件と対象識別を確認し、承認済み保守時間に元 Edge Box とホストを正常終了します。Live環境でRAWとmanifestを取得します。Windows側OfflineだけではVMが書込み中かもしれないため、Windows稼働中にこの物理取得を実行しません。
 
 別PCの変換例（値は実環境に置き換える）：
 
@@ -86,7 +86,7 @@ $profile | ConvertTo-Json -Depth 12 | Set-Content 'D:\RecoveryArchive\new-recove
 
 ## 完了判定
 
-`StartRequestedUnverified`やHyper-Vの`Running`は、OS起動・FSBP復旧成功ではありません。`BootTested`/`RestoreTested`/`LicenseValidated`はfalseのままです。コンソールでOS、FSBP画面、ライセンス、保存設定/データを確認し、必要機能の試験を行ってください。
+`StartRequestedUnverified`やHyper-Vの`Running`は、OS起動・ Edge Box 復旧成功ではありません。`BootTested`/`RestoreTested`/`LicenseValidated`はfalseのままです。コンソールでOS、Edge Box 画面、ライセンス、保存設定/データを確認し、必要機能の試験を行ってください。
 
 工場ネットワークへの接続は別の確認工程です。元VM/元機器とMAC/IPを重複させず、工作機械へ意図しない通信をしない構成を確認するまで、ネットワーク隔離を解除しません。本ツールは隔離解除を実装していません。
 

@@ -229,7 +229,7 @@ function New-RestorePlan {
     if((Get-RecoveryProperty $TargetDisk Size) -lt $image.Size) { $reasons.Add('TARGET_TOO_SMALL') }
     if((Get-RecoveryProperty $SourceFingerprint Size) -ne $image.Size) { $reasons.Add('SOURCE_IMAGE_SIZE_MISMATCH') }
     if((Get-RecoveryProperty $TargetDisk LogicalSectorSize) -ne (Get-RecoveryProperty $SourceFingerprint LogicalSectorSize)) { $reasons.Add('SECTOR_SIZE_MISMATCH') }
-    [pscustomobject]@{Allowed=($reasons.Count -eq 0);Reasons=$reasons.ToArray();State='PlanOnly';PhysicalWriteEnabled=$false;RestoreTested=$false;TargetDisk=$TargetDisk;Image=$image;Warnings=@('Target VM attachment and destination hosting disk must be checked again before any future writer is implemented.','Manifest hash is not a signature. Keep a separately trusted copy.','FSBP licensing, TPM/encryption keys, guest consistency and other-PC bootability are not verified.')}
+    [pscustomobject]@{Allowed=($reasons.Count -eq 0);Reasons=$reasons.ToArray();State='PlanOnly';PhysicalWriteEnabled=$false;RestoreTested=$false;TargetDisk=$TargetDisk;Image=$image;Warnings=@('Target VM attachment and destination hosting disk must be checked again before any future writer is implemented.','Manifest hash is not a signature. Keep a separately trusted copy.','Edge Box licensing, TPM/encryption keys, guest consistency and other-PC bootability are not verified.')}
 }
 function Test-RecoveryMediaHash {
     [CmdletBinding()]param([Parameter(Mandatory)][string]$IsoPath,[Parameter(Mandatory)][string]$ExpectedSha256)

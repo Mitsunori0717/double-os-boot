@@ -221,7 +221,7 @@ try {
     $result=Run-Recovery -Create -Start
     Assert-True ((Calls) -join ',' -eq 'New,Set,Start') 'start only after new VM setup'
     Assert-True ($result.ObservedVMState -eq 'Running' -and $result.State -eq 'StartRequestedUnverified') 'running recorded separately from boot verification'
-    Assert-True (-not $result.BootTested -and -not $result.RestoreTested -and -not $result.LicenseValidated) 'running does not imply boot, FSBP or license verification'
+    Assert-True (-not $result.BootTested -and -not $result.RestoreTested -and -not $result.LicenseValidated) 'running does not imply boot, Edge Box or license verification'
     Assert-True ((Get-FileHash -LiteralPath $vhd).Hash.ToLowerInvariant() -eq $hash) 'start flow leaves archive unchanged'
     $vmRoot=Join-Path $temp 'preserve-mac'
     Reset-Fixture

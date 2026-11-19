@@ -100,12 +100,12 @@ if ($Setup) {
 # ============================================================ 実行
 
 if (-not (Test-Admin)) {
-    Show-Msg "管理者権限が必要です。デスクトップの『Edge Box 再起動』『Edge Box 画面』アイコンから実行してください (自動で管理者になります)。" "EdgeBox" "Warning"
+    Show-Msg "管理者権限が必要です。デスクトップの『Edge Box 再起動』『Edge Box 画面』アイコンから実行してください (自動で管理者になります)。" "Edge Box" "Warning"
     exit 1
 }
 $vm = Get-VM -Name $VMName -ErrorAction SilentlyContinue
-if (-not $vm) { Show-Msg "登録 '$VMName' が見つかりません。" "EdgeBox" "Warning"; exit 1 }
-if (-not (Test-Path $Script03)) { Show-Msg "03-field-display-kiosk.ps1 が見つかりません。配布 ZIP 全体を新しいフォルダーへ展開し直してください。" "EdgeBox" "Warning"; exit 1 }
+if (-not $vm) { Show-Msg "登録 '$VMName' が見つかりません。" "Edge Box" "Warning"; exit 1 }
+if (-not (Test-Path $Script03)) { Show-Msg "03-field-display-kiosk.ps1 が見つかりません。配布 ZIP 全体を新しいフォルダーへ展開し直してください。" "Edge Box" "Warning"; exit 1 }
 
 # --- 『Edge Box 画面』: 左画面にコンソールを表示するだけ ---
 if ($ShowOnly) {
@@ -131,7 +131,7 @@ if (-not $NoConfirm) {
 }
 Import-Module (Join-Path $PSScriptRoot 'vm-shutdown.psm1') -ErrorAction Stop
 try {
-    Wait-EdgeBoxShutdown -VMName $VMName -ExpectedVmId $vm.Id -TimeoutSec 180
+    Wait-EdgeBoxShutdown -VMName $VMName -ExpectedVmId $vm.Id -TimeoutSec 180 -NextAction '停止を確認すると Edge Box を起動し直します。'
     $current = Get-VM -Id $vm.Id -ErrorAction Stop
     if ($current.Name -ne $VMName -or $current.State -ne 'Off') { throw '停止した VM の登録情報または状態が変わりました。' }
 } catch {

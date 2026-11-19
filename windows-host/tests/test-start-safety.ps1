@@ -168,3 +168,36 @@ $body=$body.Substring(1,$body.Length-2).Replace('$PSScriptRoot',"'C:\fixture'")
     if($script:StartCalls -ne 1){throw 'successful CPU preparation must lead to exactly one start'}
     Write-Output 'PASS production start waits for CPU preparation and starts selected VM exactly once; mocks only'
 } $body
+
+# Exercise the resolution dialog's confirmed restart path without Windows UI or a VM.
+$kioskAst=[Management.Automation.Language.Parser]::ParseFile((Join-Path $hostDirectory '03-field-display-kiosk.ps1'),[ref]$null,[ref]$null)
+& {
+    foreach ($name in @('Restart-KioskVMForResolution','Start-PreparedKioskVM')) {
+        $definition=$kioskAst.Find({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name},$false)
+        . ([scriptblock]::Create($definition.Extent.Text))
+    }
+    $VMName='Custom VM'
+    $selected=[pscustomobject]@{Name=$VMName;Id='selected';State='Running'}
+    $calls=[Collections.Generic.List[string]]::new()
+    function Wait-EdgeBoxShutdown($VMName,$ExpectedVmId) {
+        if ($VMName -ne $selected.Name -or $ExpectedVmId -ne $selected.Id) { throw 'wrong shutdown target' }
+        $calls.Add('stop')
+        if ($scenario -eq 'timeout') { throw 'timeout' }
+    }
+    function Get-VM($Id) {
+        if ($Id -ne $selected.Id) { throw 'wrong query target' }
+        $idAfter = if ($scenario -eq 'replacement') { 'replacement' } else { $Id }
+        [pscustomobject]@{Name=$VMName;Id=$idAfter;State='Off'}
+    }
+    function Set-VMVideo($VM) { if ($VM.Id -ne $selected.Id) { throw 'wrong video target' }; $calls.Add('video') }
+    function Invoke-EdgeBoxCpuPreparation { $calls.Add('cpu'); if ($scenario -eq 'unbound') { throw 'unbound' }; return $true }
+    function Log {}
+    function Start-VM($VM) { if ($VM.Id -ne $selected.Id) { throw 'wrong start target' }; $calls.Add('start') }
+    foreach ($scenario in @('timeout','replacement','unbound','normal')) {
+        $calls.Clear(); $failure=$false
+        try { Restart-KioskVMForResolution $selected 1920 1080 } catch { $failure=$true }
+        $expected = switch ($scenario) { 'normal' {'stop,video,cpu,start'} 'unbound' {'stop,video,cpu'} default {'stop'} }
+        if (($calls -join ',') -ne $expected -or $failure -ne ($scenario -ne 'normal')) { throw "Unexpected kiosk restart sequence ($scenario): $calls" }
+    }
+    Write-Output 'PASS resolution changes wait for the same VM to stop and confirm CPU preparation before restart'
+}

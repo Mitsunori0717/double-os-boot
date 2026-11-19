@@ -260,15 +260,16 @@ if (-not $NoConfirm) {
 }
 
 # --- Edge Box の停止 (必要なときだけ。強制電源断はしない) ---
-$wasRunning = ([string](Get-VM -Name $VMName).State -ne "Off")
+$current=Get-VM -Id $vm.Id -ErrorAction Stop
+if ($current.Name -ne $VMName) { throw '選択した Edge Box の登録名が変わりました。' }
+$wasRunning = ([string]$current.State -ne "Off")
 if ($needStop -and $wasRunning) {
     Line "Edge Box にシャットダウン要求を送ります..." "White"
-    Stop-VM -Name $VMName -ErrorAction Stop
-    $deadline = (Get-Date).AddSeconds(180)
-    while ((Get-VM -Name $VMName).State -ne "Off") {
-        if ((Get-Date) -gt $deadline) { Write-Error "Edge Box が 180 秒以内に停止しませんでした。中止します (何も変更していません)。"; exit 1 }
-        Start-Sleep -Seconds 3
-    }
+    Import-Module (Join-Path $PSScriptRoot 'vm-shutdown.psm1') -ErrorAction Stop
+    $nextAction=if ($NoRestart) {'停止を確認すると入出力設定を反映します。'} else {'停止を確認すると入出力設定を反映し、Edge Box を起動します。'}
+    Wait-EdgeBoxShutdown -VMName $VMName -ExpectedVmId ([string]$vm.Id) -ManualStop:$NoRestart -NextAction $nextAction
+    $current=Get-VM -Id $vm.Id -ErrorAction Stop
+    if ($current.Name -ne $VMName -or $current.State -ne 'Off') { throw '入出力設定の変更前に Edge Box の停止を確認できません。' }
     Line "Edge Box が停止しました。" "Green"
 }
 

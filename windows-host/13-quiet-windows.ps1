@@ -17,6 +17,7 @@
       - 休止状態そのものを無効にする (高速スタートアップも一緒に無効になる)
       - 電源ボタン/スリープボタンを押しても何もしないようにする (4 秒以上の長押しによる強制電源断は残る)
     元のプランと休止の設定は quiet-windows-backup.json に控え、-Disable で戻します。
+    Windows のシステム障害時の自動再起動は禁止します。この禁止は -Disable 時も有効です。
 
     再起動そのもの (Windows Update による自動再起動) は 12-windows-update.ps1 が止めます。
     両方を実行すると「再起動も通知も出ず、スリープもしない」状態になります。
@@ -44,6 +45,8 @@ function Test-Admin {
         ).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 }
 if (-not (Test-Admin)) { Write-Error "管理者権限で実行してください (管理者の PowerShell)。"; exit 1 }
+Import-Module (Join-Path $PSScriptRoot 'host-restart-policy.psm1') -ErrorAction Stop
+if (-not $Status) { Set-EdgeBoxCrashRestartPolicy }
 
 # ユーザーごとの設定 (値 = 止めるときの値 / Default = 戻すときの値。$null なら値ごと削除)
 $UserItems = @(
@@ -222,6 +225,7 @@ if ($Status) {
         }
     }
     Write-Host "[この PC 全体]" -ForegroundColor White
+    Write-Host ("  システム障害時の自動再起動: " + $(if (Test-EdgeBoxCrashRestartBlocked) { '禁止' } else { '禁止されていません' }))
     foreach ($it in $MachineItems) {
         $v = Get-Item2 $it.Key $it
         $off = ($null -ne $v -and $v -eq $it.Off)
