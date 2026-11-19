@@ -1,6 +1,6 @@
 {
   "Name": "Edge Box Setup and Recovery",
-  "Version": "2026.11.19.1",
+  "Version": "2026.11.19.2",
   "BaseRepository": "https://github.com/Mitsunori0717/double-os-boot",
   "BaseCommit": "dcc9718ee6ea66675da0b5e3bf9c6142dd0995e1",
   "SuppliedArchiveFilesMatched": 55,

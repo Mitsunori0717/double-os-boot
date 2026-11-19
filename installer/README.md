@@ -30,7 +30,7 @@ ZIP と EXE の中のセットアップ一式は同じです。
 端末固有の `setup/settings.json`、`windows-host/field-disk.identity.json`、旧形式の `field-disk.conf`、表示・CPU設定やログは配布対象外のため、再配置でも保持します。UAC の拒否・起動失敗は終了コード `1`、セットアップの結果は元の終了コード（正常 `0`、要再起動 `3010` など）を返します。配置途中のI/O障害では一部のソースが更新済みになる可能性があるため、原因を解消して同じ配布物で再実行してください。
 
 導入条件・番号一覧・再実行・ログについては [../setup/README.md](../setup/README.md)。
-FSBP が入った Edge Box の物理ディスクが別途必要です。FSBP 自体の導入やメーカー固有のアプリ設定は自動化しません。
+Edge Box のシステムを導入済みの物理ディスクが別途必要です。Edge Box 自体の導入やメーカー固有のアプリ設定は自動化しません。
 
 配置先を変える場合は、`install.ps1` と `package-safety.psm1` がある場所から `install.ps1 -PayloadPath "D:\配布\EdgeBox-Setup.zip" -InstallDir "D:\EdgeBox"` を実行できます。
 

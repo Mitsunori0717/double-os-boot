@@ -1,6 +1,6 @@
 # Edge Box セットアップ・ストレージ復旧
 
-Windows 上の Edge Box 環境を構築するセットアップと、全領域バックアップから物理ディスクまたは隔離 Hyper-V VM に復旧するツールです。バージョンは `2026.11.19.1`。元ソースのコミットと実機検証の状態は [release.json](release.json) に記録しています。
+Windows 上の Edge Box 環境を構築するセットアップと、全領域バックアップから物理ディスクまたは隔離 Hyper-V VM に復旧するツールです。バージョンは `2026.11.19.2`。元ソースのコミットと実機検証の状態は [release.json](release.json) に記録しています。
 
 ## 最初に開くもの
 
@@ -17,7 +17,7 @@ Windows 上の Edge Box 環境を構築するセットアップと、全領域�
 
 ## 必要な環境
 
-- セットアップ・VM 復旧: Windows PowerShell 5.1、Hyper-V を利用できる Windows、実行時の管理者権限。セットアップでは Windows 11 Pro / Enterprise / Education、FSBP 導入済みの物理ディスクを前提とします。
+- セットアップ・VM 復旧: Windows PowerShell 5.1、Hyper-V を利用できる Windows、実行時の管理者権限。セットアップでは Windows 11 Pro / Enterprise / Education、Edge Box 導入済みの物理ディスクを前提とします。
 - RAW 取得・物理復元: 専用の非永続 Linux Live、Python 3.10 以上、root、対象の独立した basic ディスク。取得元は kernel read-only が必要です。
 - RAW → VHDX: Windows または Linux、Python 3.10 以上、別途入手した信頼できる `qemu-img`。Python の追加パッケージは不要です。
 - CPU 完全分離: 対応する CPU 構成と Hyper-V CPU groups。必要な Microsoft 製ツールは実セットアップ時に署名を確認して取得します。利用できない機種で成功扱いにはしません。
@@ -33,15 +33,15 @@ Windows 上の Edge Box 環境を構築するセットアップと、全領域�
 `package-files.txt` が同梱ファイルの明示リストです。必須実装の不足、既存出力、シンボリックリンク・再解析ポイントは拒否します。
 
 ```powershell
-python -B tools/package.py build --output '..\EdgeBox-Recovery-2026.11.19.1-source.zip'
-python -B tools/package.py verify '..\EdgeBox-Recovery-2026.11.19.1-source.zip'
+python -B tools/package.py build --output '..\EdgeBox-Recovery-2026.11.19.2-source.zip'
+python -B tools/package.py verify '..\EdgeBox-Recovery-2026.11.19.2-source.zip'
 ```
 
 ZIP 内の `package-manifest.json` には全同梱ファイルのサイズと SHA-256 が入ります。これは破損・取り違えの検出用で、電子署名ではありません。実行用 EXE の作成は [installer/README.md](installer/README.md) を参照してください。
 
 ## 検証範囲
 
-[今回の検証記録](VALIDATION.md) と [実機受入手順](docs/HARDWARE-ACCEPTANCE.md) を参照してください。実 SSD への書戻し、Hyper-V ゲスト起動、FSBP 機能・認証の試験は未実施です。予備媒体での受入結果を確認してから運用へ進めます。
+[今回の検証記録](VALIDATION.md) と [実機受入手順](docs/HARDWARE-ACCEPTANCE.md) を参照してください。実 SSD への書戻し、Hyper-V ゲスト起動、Edge Box 機能・認証の試験は未実施です。予備媒体での受入結果を確認してから運用へ進めます。
 
 ## リポジトリにある独立ツール
 

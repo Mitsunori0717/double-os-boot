@@ -8,7 +8,7 @@
     ファイルを 1 つずつ取得する方式へ自動で切り替えます。
 
       方式 zip   : ZIP をまとめて取得 (速い。既定でまずこちらを試す)
-      方式 files : GitHub API で一覧を取り、raw.githubusercontent.com から個別取得
+      方式 files : 同梱の一覧（取得できない場合は GitHub API）から個別取得
                    (ZIP が遮断されている環境でも通ることが多い)
 
     端末ごとの設定ファイル (display-config.json / field-disk.conf /
@@ -65,7 +65,8 @@ if ($Ref -match '^[0-9a-fA-F]{40}$') {
 } else {
     $ZipUrl = "https://github.com/$Repo/archive/refs/heads/$Ref.zip"
 }
-$tmpRoot   = Join-Path $env:TEMP ("dob-update-" + [Guid]::NewGuid().ToString("N").Substring(0, 8))
+$tempBase = [IO.Path]::GetFullPath([IO.Path]::GetTempPath())
+$tmpRoot = Join-Path $tempBase ("dob-update-" + [Guid]::NewGuid().ToString("N"))
 $script:skippedDocs = @()   # 個別取得で取れなかった説明書 (.md) の一覧
 
 # ============================================================
@@ -117,6 +118,27 @@ function Get-SourceViaZip {
 # ============================================================
 #  取得方式 2: ファイルを 1 つずつ取得 (ZIP が遮断されている環境向け)
 # ============================================================
+function Resolve-UpdateFile([string]$Base, [string]$Relative) {
+    # GitHub paths always use forward slashes. Reject Windows aliases before
+    # combining segments, and avoid following a link into another installation.
+    $destination=[IO.Path]::GetFullPath($Base)
+    foreach ($part in $Relative.Split('/')) {
+        if (-not $part -or $part -in @('.','..','.git') -or $part -match '[\x00-\x1f<>:"\\|?*]|[. ]$' -or
+            $part -match '^(?:CON|PRN|AUX|NUL|COM[1-9¹²³]|LPT[1-9¹²³])(?:\.|$)') {
+            throw "更新一覧の相対パスが不正です: $Relative"
+        }
+        $destination=[IO.Path]::Combine($destination,$part)
+        $item=$null
+        try { $item=Get-Item -LiteralPath $destination -Force -ErrorAction Stop }
+        catch [System.Management.Automation.ItemNotFoundException] {}
+        if ($item -and ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw "更新先に再解析ポイントがあります: $Relative" }
+    }
+    $destination
+}
+function ConvertTo-UpdateUrlPath([string]$Path) {
+    ($Path.Split('/') | ForEach-Object { [uri]::EscapeDataString($_) }) -join '/'
+}
+
 # 同梱のファイル一覧 (filelist.txt) から取得する。api.github.com が
 # 遮断されている環境でも、raw.githubusercontent.com だけで完結する
 function Get-EntriesFromFileList {
@@ -128,7 +150,7 @@ function Get-EntriesFromFileList {
         if (-not $rel -or $rel.StartsWith("#")) { continue }
         $out += [pscustomobject]@{
             Rel = $rel
-            Url = "https://raw.githubusercontent.com/$Repo/$Ref/$rel"
+            Url = "https://raw.githubusercontent.com/$Repo/$Ref/$(ConvertTo-UpdateUrlPath $rel)"
         }
     }
     return $out
@@ -137,14 +159,21 @@ function Get-EntriesFromFileList {
 function Get-RepoEntries([string]$Path) {
     # 末尾に / を付けると GitHub API が 400 を返すため、パス無しのときは付けない
     $api = "https://api.github.com/repos/$Repo/contents"
-    if ($Path) { $api += "/$Path" }
+    if ($Path) { $api += "/" + (ConvertTo-UpdateUrlPath $Path) }
     $api += "?ref=$BranchEnc"
-    $items = @(Invoke-RestMethod -Uri $api -UseBasicParsing -Headers $UA)
+    # Windows PowerShell 5.1 returns a JSON array as one pipeline object.
+    $items = Invoke-RestMethod -Uri $api -UseBasicParsing -Headers $UA
     $out = @()
     foreach ($i in $items) {
+        $expected=if ($Path) { "$Path/$($i.name)" } else { [string]$i.name }
+        if (-not $i.name -or $i.name -match '[/\\]' -or $i.path -cne $expected) { throw 'GitHub API の一覧に不正な階層があります。' }
+        $null=Resolve-UpdateFile $tmpRoot $i.path
         if ($i.type -eq "dir") { $out += Get-RepoEntries $i.path }
         elseif ($i.type -eq "file" -and $i.download_url) {
-            $out += [pscustomobject]@{ Rel = $i.path; Url = $i.download_url }
+            $url=[uri]$i.download_url
+            if (-not $url.IsAbsoluteUri -or $url.Scheme -ne 'https' -or -not $url.IsDefaultPort -or $url.Host -ne 'raw.githubusercontent.com' -or
+                -not $url.AbsolutePath.StartsWith("/$Repo/",[StringComparison]::OrdinalIgnoreCase)) { throw 'GitHub のファイル取得先を確認できません。' }
+            $out += [pscustomobject]@{ Rel = $i.path; Url = $url.AbsoluteUri }
         }
     }
     return $out
@@ -163,10 +192,15 @@ function Get-SourceViaFiles {
     }
     if ($entries.Count -eq 0) { $entries = @(Get-RepoEntries "") }
     if ($entries.Count -eq 0) { throw "ファイル一覧を取得できませんでした。" }
+    $paths=[Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+    foreach ($e in $entries) {
+        $dst=Resolve-UpdateFile $root $e.Rel
+        if (-not $paths.Add($dst)) { throw "更新一覧のパスが重複しています: $($e.Rel)" }
+    }
     Write-Host "  $($entries.Count) 件をダウンロードしています..."
     $n = 0; $failed = @()
     foreach ($e in $entries) {
-        $dst = Join-Path $root ($e.Rel -replace '/', '\')
+        $dst = Resolve-UpdateFile $root $e.Rel
         $dir = Split-Path $dst -Parent
         if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
         # 一時的な失敗 (混雑・throttle) に備えて数回試す
@@ -184,7 +218,7 @@ function Get-SourceViaFiles {
         } else {
             # それでも駄目なら飛ばす (プロキシが特定のパスだけ弾く環境があるため)
             $failed += $e.Rel
-            Remove-Item $dst -Force -ErrorAction SilentlyContinue
+            Remove-Item -LiteralPath $dst -Force -ErrorAction SilentlyContinue
         }
         if ((($n + $failed.Count) % 10) -eq 0) { Write-Host "    $($n + $failed.Count) / $($entries.Count)" }
     }
@@ -246,12 +280,13 @@ try {
 
     # --- 変更されるファイルを調べる ---
     $changed = @(); $added = @()
-    foreach ($f in @(Get-ChildItem -Path $srcRoot -Recurse -File)) {
-        $rel = $f.FullName.Substring($srcRoot.Length).TrimStart("\")
-        $dst = Join-Path $PSScriptRoot $rel
-        if (-not (Test-Path $dst)) {
+    foreach ($f in @(Get-ChildItem -LiteralPath $srcRoot -Recurse -File -Force)) {
+        $rel = $f.FullName.Substring($srcRoot.Length).TrimStart("\").Replace('\','/')
+        $dst = Resolve-UpdateFile $PSScriptRoot $rel
+        if (Test-Path -LiteralPath $dst -PathType Container) { throw "更新先のファイル名が既存のフォルダと重複します: $rel" }
+        if (-not (Test-Path -LiteralPath $dst)) {
             $added += $rel
-        } elseif ((Get-FileHash $f.FullName).Hash -ne (Get-FileHash $dst).Hash) {
+        } elseif ((Get-FileHash -LiteralPath $f.FullName).Hash -ne (Get-FileHash -LiteralPath $dst).Hash) {
             $changed += $rel
         }
     }
@@ -280,13 +315,13 @@ try {
 
     Write-Host ""
     Write-Host "更新しています..." -ForegroundColor Cyan
-    foreach ($item in @(Get-ChildItem -Path $srcRoot)) {
-        Copy-Item -Path $item.FullName -Destination $PSScriptRoot -Recurse -Force
+    foreach ($rel in @($changed + $added)) {
+        $src=Resolve-UpdateFile $srcRoot $rel
+        $dst=Resolve-UpdateFile $PSScriptRoot $rel
+        $null=[IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($dst))
+        Copy-Item -LiteralPath $src -Destination $dst -Force
+        Unblock-File -LiteralPath $dst -ErrorAction SilentlyContinue
     }
-
-    # ダウンロード由来のブロックを外す (これをしないと実行ポリシーに弾かれる)
-    Get-ChildItem -Path $PSScriptRoot -Recurse -File -ErrorAction SilentlyContinue |
-        Unblock-File -ErrorAction SilentlyContinue
 
     Write-Host ""
     if ($script:skippedDocs -and $script:skippedDocs.Count -gt 0) {
@@ -297,5 +332,8 @@ try {
     }
     Write-Host "  端末ごとの設定ファイルはそのまま残しています。"
 } finally {
-    Remove-Item -Path $tmpRoot -Recurse -Force -ErrorAction SilentlyContinue
+    if ([IO.Path]::GetDirectoryName([IO.Path]::GetFullPath($tmpRoot)) -eq $tempBase.TrimEnd('\') -and
+        [IO.Path]::GetFileName($tmpRoot) -match '^dob-update-[0-9a-f]{32}$') {
+        Remove-Item -LiteralPath $tmpRoot -Recurse -Force -ErrorAction SilentlyContinue
+    }
 }

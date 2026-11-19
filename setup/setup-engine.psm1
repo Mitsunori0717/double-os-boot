@@ -27,7 +27,7 @@ function Get-SetupRequiredFiles([string]$Step='All') {
         '02'=@()
         '05'=@('windows-host\01-create-field-vm.ps1','windows-host\vm-create-safety.psm1')
         '06'=@('windows-host\06-auto-logon.ps1')
-        '09'=@('windows-host\03-field-display-kiosk.ps1','windows-host\build-startup-cover.ps1','windows-host\startup-cover.cs','windows-host\cpu-boot.psm1')
+        '09'=@('windows-host\03-field-display-kiosk.ps1','windows-host\build-startup-cover.ps1','windows-host\startup-cover.cs','windows-host\cpu-boot.psm1','windows-host\vm-shutdown.psm1')
         '10'=@('windows-cpu-partition\cpu-partition.ps1','windows-cpu-partition\cpu-tool.psm1','setup\cpu-topology.cs')
         '11'=@('windows-host\00-field-launcher.ps1','windows-host\01-create-field-vm.ps1','windows-host\02-start-field-vm.ps1','windows-host\03-field-display-kiosk.ps1','windows-host\build-startup-cover.ps1','windows-host\startup-cover.cs','windows-host\08-settings-console.ps1','windows-host\05-shutdown-all.ps1','windows-host\vm-shutdown.psm1','windows-host\10-restart-edgebox.ps1','windows-host\11-io-passthrough.ps1','windows-cpu-partition\cpu-console.ps1','windows-cpu-partition\cpu-monitor.ps1','windows-cpu-partition\cpu-partition.ps1','windows-cpu-partition\cpu-apps.ps1','windows-cpu-partition\cpu-ui-theme.ps1')
         '12'=@('windows-host\12-windows-update.ps1')
@@ -54,7 +54,7 @@ function Get-SetupTask([string]$Name) {
     # 一覧取得の権限エラーを「タスクなし」と誤判定しない。
     @(Get-ScheduledTask -ErrorAction Stop | Where-Object { $_.TaskName -eq $Name -and $_.TaskPath -eq '\' }) | Select-Object -First 1
 }
-function Test-SetupTask([string]$Name, [string]$Script, [string]$Argument = '', [switch]$Logon) {
+function Test-SetupTask([string]$Name, [string]$Script, [string]$Argument = '', [switch]$Logon, [switch]$Boot) {
     $t = Get-SetupTask $Name
     if (-not $t -or -not $t.Settings.Enabled -or [string]$t.Principal.RunLevel -notin @('Highest','1')) { return $false }
     $scriptPath=Join-Path $script:Root $Script
@@ -68,6 +68,11 @@ function Test-SetupTask([string]$Name, [string]$Script, [string]$Argument = '', 
         (-not $Argument -or [string]$_.Arguments -match ('(?i)(?:^|\s)'+[regex]::Escape($Argument)+'(?=\s|$)'))
     })
     if (-not $a.Count) { return $false }
+    if ($Boot) {
+        $enabledBoot = @($t.Triggers | Where-Object { $_.CimClass.CimClassName -eq 'MSFT_TaskBootTrigger' -and $_.Enabled })
+        if (-not $enabledBoot.Count -or $t.Principal.UserId -notin @('SYSTEM','NT AUTHORITY\SYSTEM','S-1-5-18') -or
+            @($t.Actions).Count -ne 1 -or $a[0].Arguments -match '(?i)(?:^|\s)-PrepareOnly(?:\s|$)') { return $false }
+    }
     if ($Logon) {
         $sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
         $tr = @($t.Triggers | Where-Object { $_.CimClass.CimClassName -eq 'MSFT_TaskLogonTrigger' -and $_.Enabled })
@@ -143,29 +148,30 @@ function Get-SetupScheduler {
     if ($ev.TimeCreated -lt $boot.AddSeconds(-5)) { throw '今回の起動の Hyper-V イベントを確認できません。' }
     switch ([int]$ev.Properties[0].Value) { 1 {'classic'} 2 {'classic'} 3 {'core'} 4 {'root'} default {'unknown'} }
 }
-function Get-SetupCpuGroupOutput([string]$Exe,[string]$VMName) {
-    Import-Module (Join-Path $script:Root 'windows-cpu-partition\cpu-tool.psm1') -ErrorAction Stop
+function Get-SetupCpuGroupOutput([string]$Exe, [string[]]$Arguments) {
     Assert-EdgeBoxCpuTool $Exe
-    $output=& $Exe GetVmGroup ("/VmName:"+$VMName) 2>&1 | Out-String
+    $output=& $Exe @Arguments 2>&1 | Out-String
     [pscustomobject]@{Output=$output;ExitCode=$LASTEXITCODE}
-}
-function Get-SetupVmGroupId([string]$Output,[guid]$VMId) {
-    $groups=@(foreach ($line in ($Output -split '\r?\n')) {
-        $ids=@([regex]::Matches($line,'[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}') | ForEach-Object { $_.Value.ToLowerInvariant() })
-        if ($ids.Count -ge 2 -and $ids[-2] -eq $VMId.ToString('D')) { $ids[-1] }
-    })
-    if ($groups.Count -eq 1) { return $groups[0] }
-    return ''
 }
 function Get-SetupCpuState {
     $cfg = Get-SetupCpuConfig
     if (-not $cfg -or $cfg.Mode -ne 'full') { return (New-SetupState NeedsWork '完全分離が未設定です。既存の割り当てがあれば引き継ぎます。') }
     $vm = Get-SetupVM
     if (-not $vm -or $cfg.VMName -ne $vm.Name) { return (New-SetupState NeedsWork 'CPU 計画の VM と実際の対象が一致していません。') }
-    $bootTask = Test-SetupTask 'CpuPartition-Boot' 'windows-cpu-partition\cpu-partition.ps1' '-BootApply'
+    if ($cfg.VMId -and [guid]$cfg.VMId -ne [guid]$vm.Id) { throw 'CPU 計画と選択した VM の ID が異なります。対象を確認してください。' }
+    if (-not $cfg.VMId -or $cfg.ManageVmStart -ne $true -or [string]$vm.AutomaticStartAction -ne 'Nothing') {
+        return (New-SetupState NeedsWork 'CPU 固定後に起動するよう、対象 VM と自動起動設定を登録します。')
+    }
+    $hostLps = @($cfg.HostLps | Where-Object { $null -ne $_ } | ForEach-Object { [int]$_ } | Sort-Object)
+    $guestLps = @($cfg.GuestLps | Where-Object { $null -ne $_ } | ForEach-Object { [int]$_ } | Sort-Object)
+    if (-not $hostLps.Count -or -not $guestLps.Count -or ($hostLps -join ',') -ne ((0..($hostLps.Count-1)) -join ',') -or
+        $guestLps[0] -lt $hostLps.Count -or @($guestLps | Select-Object -Unique).Count -ne $guestLps.Count) {
+        throw 'CPU 計画の Windows・Edge Box 用の論理 CPU 番号を確認してください。'
+    }
+    $bootTask = Test-SetupTask 'CpuPartition-Boot' 'windows-cpu-partition\cpu-partition.ps1' '-BootApply' -Boot
     $bcd = Get-SetupBcd
     $expected = if ($cfg.Scheduler) { [string]$cfg.Scheduler } else { 'core' }
-    if ($bcd.RootProc -ne @($cfg.HostLps).Count -or $bcd.Scheduler -ne $expected -or -not $bootTask) {
+    if ($bcd.RootProc -ne $hostLps.Count -or $bcd.Scheduler -ne $expected -or -not $bootTask) {
         return (New-SetupState NeedsWork 'BCD または CPU 起動タスクが計画と一致していません。')
     }
     $sched = Get-SetupScheduler
@@ -185,13 +191,22 @@ function Get-SetupCpuState {
     $fresh = $st -and $st.At -and ([datetime]$st.At -ge $boot.AddSeconds(-5)) -and $st.MinrootOk -and $st.Bound
     $exe = Join-Path $script:Root 'windows-cpu-partition\tools\CpuGroups.exe'
     if (-not (Test-Path -LiteralPath $exe)) { return (New-SetupState NeedsWork 'CpuGroups.exe がありません。') }
-    $groupResult=Get-SetupCpuGroupOutput $exe $vm.Name
-    $group=Get-SetupVmGroupId $groupResult.Output ([guid]$vm.Id)
-    if ($groupResult.ExitCode -ne 0 -or $group -ne 'b0edb0ed-c01e-4a11-8000-0000000000e1' -or -not $fresh) {
-        return (New-SetupState NeedsWork 'CPU 固定の現在の成立を確認できません。cpu-full-status.json と CPU グループを再確認します。')
+    Import-Module (Join-Path $script:Root 'windows-cpu-partition\cpu-tool.psm1') -ErrorAction Stop
+    $groupId='b0edb0ed-c01e-4a11-8000-0000000000e1'
+    $membership=Get-SetupCpuGroupOutput $exe @('GetVmGroup',('/VmName:'+$vm.Name))
+    if ($membership.ExitCode -ne 0) { throw 'CPU グループへの所属を照会できません。' }
+    $group=Resolve-EdgeBoxVmGroupId $membership.Output ([guid]$vm.Id)
+    if ($group -ne $groupId -or -not $fresh) {
+        return (New-SetupState NeedsWork '今回の起動で対象 VM の CPU グループへの固定を確認できません。')
     }
-    if ($cfg.ManageVmStart -and [string]$vm.AutomaticStartAction -ne 'Nothing') { return (New-SetupState NeedsWork 'CPU 固定前に VM が起動する設定です。起動順を修復します。') }
-    New-SetupState Done '今回の起動で Windows の CPU 制限と Edge Box の CPU グループ所属を確認しました。'
+    $groups=Get-SetupCpuGroupOutput $exe @('GetGroups')
+    if ($groups.ExitCode -ne 0) { throw 'CPU グループの論理 CPU 番号を照会できません。' }
+    $affinity=Resolve-EdgeBoxCpuGroup $groups.Output ([guid]$groupId)
+    if (-not $affinity.Exists -or ($affinity.Lps -join ',') -ne ($guestLps -join ',') -or
+        [int](Get-VMProcessor -VM $vm -ErrorAction Stop).Count -ne $guestLps.Count) {
+        return (New-SetupState NeedsWork 'CPU グループの論理 CPU 番号または VM のプロセッサ数が計画と異なります。')
+    }
+    New-SetupState Done 'Windows の CPU 制限、対象 VM に固定した論理 CPU 番号、起動順を確認しました。'
 }
 function Get-SetupStepState([string]$Id) {
     try {
@@ -241,8 +256,9 @@ function Get-SetupStepState([string]$Id) {
                 $t=Get-SetupTask 'EdgeBox-Display-Kiosk-Splash'
                 $cover=& (Join-Path $script:Root 'windows-host\build-startup-cover.ps1') -PathOnly
                 $fast=$t -and $t.Settings.Enabled -and @($t.Triggers | Where-Object { $_.CimClass.CimClassName -eq 'MSFT_TaskLogonTrigger' -and $_.Enabled -and (-not $_.Delay -or $_.Delay -eq 'PT0S') }).Count -gt 0 -and @($t.Actions | Where-Object { $_.Execute -eq $cover }).Count -gt 0 -and (Test-Path -LiteralPath $cover)
-                $start = $vm -and ([string]$vm.AutomaticStartAction -eq 'Start' -or ($cfg -and $cfg.Mode -eq 'full' -and $cfg.ManageVmStart -and [string]$vm.AutomaticStartAction -eq 'Nothing' -and (Test-SetupTask 'CpuPartition-Boot' 'windows-cpu-partition\cpu-partition.ps1' '-BootApply')))
-                if ($main -and $fast -and $start) { return (New-SetupState Done '遅延なしの専用起動中画面、自動表示、VM の起動経路を確認しました。') }
+                $cpuOwnsStart = $vm -and $cfg -and $cfg.Mode -eq 'full' -and $cfg.VMName -eq $vm.Name
+                if ($main -and $fast -and $cpuOwnsStart) { return (New-SetupState Done '自動表示を確認しました。完全分離時の VM 起動経路は手順 10 で確認します。') }
+                if ($main -and $fast -and $vm -and [string]$vm.AutomaticStartAction -eq 'Start') { return (New-SetupState Done '自動表示と VM の自動起動を確認しました。') }
                 return (New-SetupState NeedsWork '自動表示タスク・専用起動中画面・VM 起動経路を修復します。')
             }
             '10' { return (Get-SetupCpuState) }
@@ -470,21 +486,13 @@ function Invoke-SetupStep([string]$Id) {
         '09' {
             $vm=Get-SetupVM
             Invoke-SetupChild 'windows-host\03-field-display-kiosk.ps1' @('-VMName',$vm.Name,'-Install')
-            $cfg=Get-SetupCpuConfig
-            if ($cfg -and $cfg.Mode -eq 'full' -and $cfg.ManageVmStart) { Set-VM -Name $vm.Name -AutomaticStartAction Nothing -ErrorAction Stop }
         }
         '10' {
             $vm=Get-SetupVM; $cfg=Get-SetupCpuConfig
             $plan=Get-SetupCpuPlan $cfg
             $args=@('-Apply','-Mode','full','-VMName',$vm.Name,'-NoConfirm','-AutoGetTools','-HostLps',($plan.HostLps -join ','),'-GuestLps',($plan.GuestLps -join ','))
+            if ($cfg -and $cfg.Mode -eq 'full' -and $cfg.Scheduler) { $args+=@('-Scheduler',[string]$cfg.Scheduler) }
             Invoke-SetupChild 'windows-cpu-partition\cpu-partition.ps1' $args
-            $cfg=Get-SetupCpuConfig
-            # 設定済み BCD を引き継いだ場合も CPU 起動タスクに起動を委譲する。
-            if ($cfg -and $cfg.Mode -eq 'full' -and -not $cfg.ManageVmStart) {
-                $cfg | Add-Member NoteProperty ManageVmStart $true -Force
-                $cfg | ConvertTo-Json -Depth 6 | Set-Content (Join-Path $script:Root 'windows-cpu-partition\cpu-partition.json') -Encoding UTF8
-            }
-            Set-VM -Name $vm.Name -AutomaticStartAction Nothing -ErrorAction Stop
         }
         '11' {
             $vm=Get-SetupVM; $name=if($vm){$vm.Name}else{'EdgeBox'}
@@ -498,19 +506,44 @@ function Invoke-SetupStep([string]$Id) {
         '13' { Invoke-SetupChild 'windows-host\13-quiet-windows.ps1' }
     }
 }
-function Get-SetupCpuPlan($Config) {
-    if ($Config -and @($Config.HostLps).Count -and @($Config.GuestLps).Count) { return $Config }
-    if ($script:Settings.HostLps -and $script:Settings.GuestLps) { return [pscustomobject]@{HostLps=$script:Settings.HostLps;GuestLps=$script:Settings.GuestLps} }
-    if ((Get-SetupBcd).RootProc -gt 0) { throw 'CPU 制限中で保存済み計画がないため、全コアを確実に把握できません。「CPU割り当て」で計画を指定してください。' }
-    # API から物理コアと SMT の境界を取得。推測で SMT を分断しない。
+function Get-SetupCpuTopology {
+    # minroot の解除が次回起動用に予約されている場合も、実際に見える LP を Hyper-V 全体と照合する。
+    $visible=[Environment]::ProcessorCount
+    if ((Get-EdgeBoxHypervisorLpCount $visible) -ne $visible) { return }
     if (-not ('EdgeBoxSetupTopology' -as [type])) { Add-Type -Path (Join-Path $PSScriptRoot 'cpu-topology.cs') }
     $cores=@([EdgeBoxSetupTopology]::GetCores())
+    $lps=@($cores | ForEach-Object { $_.Lps } | Sort-Object)
+    if ($visible -gt 64 -or $lps.Count -ne $visible -or (Compare-Object $lps @(0..($visible-1)))) {
+        throw '全コアと論理 CPU 番号の対応を確認できません。'
+    }
+    $cores | Select-Object @{Name='Eff';Expression={$_.Efficiency}},Lps
+}
+function Get-SetupCpuPlan($Config) {
+    $plan=$null
+    if ($Config -and $null -ne $Config.HostLps -and @($Config.HostLps).Count -and $null -ne $Config.GuestLps -and @($Config.GuestLps).Count) {
+        $plan=$Config
+    } elseif ($script:Settings.HostLps -and $script:Settings.GuestLps) {
+        $plan=[pscustomobject]@{HostLps=$script:Settings.HostLps;GuestLps=$script:Settings.GuestLps}
+    }
+    Import-Module (Join-Path $script:Root 'windows-cpu-partition\cpu-tool.psm1') -ErrorAction Stop
+    try { $cores=@(Get-SetupCpuTopology) }
+    catch {
+        if (-not $plan) { throw }
+        Write-SetupLog ('CPU の全コア構成を保存できません。指定済みの計画を使用します。' + $_.Exception.Message)
+        return $plan
+    }
+    if ($cores.Count) {
+        $cpuName=(Get-CimInstance Win32_Processor -ErrorAction Stop | Select-Object -First 1).Name
+        $snapshot=Join-Path $script:Root 'windows-cpu-partition\cpu-topology.json'
+        Save-EdgeBoxCpuSnapshot -Path $snapshot -CpuName $cpuName -Cores $cores
+    }
+    if ($plan) { return $plan }
+    if (-not $cores.Count -or (Get-SetupBcd).RootProc -gt 0) { throw 'CPU 制限中で保存済み計画がないため、全コアを確実に把握できません。「CPU割り当て」で計画を指定してください。' }
     $all=@($cores | ForEach-Object { $_.Lps } | Sort-Object)
-    if (-not $all.Count -or $all.Count -gt 64 -or [Environment]::ProcessorCount -ne $all.Count) { throw 'CPU 構成を確実に取得できません。「CPU割り当て」で計画を保存してください。' }
-    $eff=@($cores | Select-Object -ExpandProperty Efficiency -Unique)
+    $eff=@($cores | Select-Object -ExpandProperty Eff -Unique)
     if ($eff.Count -gt 1) {
         $low=($eff | Measure-Object -Minimum).Minimum
-        $guest=@($cores | Where-Object Efficiency -eq $low | Sort-Object { $_.Lps[0] } -Descending | Select-Object -First 8)
+        $guest=@($cores | Where-Object Eff -eq $low | Sort-Object { $_.Lps[0] } -Descending | Select-Object -First 8)
     } else { $guest=@($cores | Sort-Object { $_.Lps[0] } -Descending | Select-Object -First ([int][Math]::Floor($cores.Count/2))) }
     $g=@($guest | ForEach-Object { $_.Lps } | Sort-Object)
     $h=@($all | Where-Object { $_ -notin $g })
@@ -546,6 +579,13 @@ function Register-SetupResume([string]$Step, [switch]$RestartIfNeeded) {
     $trigger.Delay='PT20S'
     $settings=New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Hours 2) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
     Register-ScheduledTask -TaskName $script:TaskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force -ErrorAction Stop | Out-Null
+}
+function Restart-SetupHost([bool]$HyperVFirstBoot) {
+    if ($script:SettingsLoadError) { throw $script:SettingsLoadError }
+    Import-Module (Join-Path $script:Root 'windows-host\vm-shutdown.psm1') -ErrorAction Stop
+    $target=@{}
+    if ($script:Settings.VMId) { $target=@{VMName=$script:Settings.VMName;ExpectedVmId=$script:Settings.VMId} }
+    Invoke-EdgeBoxHostRestart @target -HyperVFirstBoot:$HyperVFirstBoot
 }
 function Invoke-EdgeBoxSetup {
     [CmdletBinding()]
@@ -633,12 +673,17 @@ function Invoke-EdgeBoxSetup {
                 Write-SetupLog ('再開タスクを登録できません: '+$_.Exception.Message+'。再起動後に setup-all.cmd を再実行してください。')
                 return 1
             }
-            @{BootId=$boot;Pending=@($pending | ForEach-Object Number);AutoReboots=($count+[int][bool]$RestartIfNeeded)} | ConvertTo-Json | Set-Content -LiteralPath $statePath -Encoding UTF8
+            $resumeState=@{BootId=$boot;Pending=@($pending | ForEach-Object Number);AutoReboots=($count+[int][bool]$RestartIfNeeded)}
+            $resumeState | ConvertTo-Json | Set-Content -LiteralPath $statePath -Encoding UTF8
             Write-SetupLog '再起動後、このユーザーのサインイン時に管理者タスクで再判定します。パスワードが未設定なら最初のサインインは手動です。'
             if ($RestartIfNeeded) {
-                Write-SetupLog 'Windows に通常の再起動を要求します（アプリ・VM の強制終了はしません）。'
-                try { Restart-Computer -ErrorAction Stop }
-                catch { Write-SetupLog ('自動再起動できませんでした: '+$_.Exception.Message+'。作業を保存して通常の再起動を行ってください。再開タスクは登録済みです。') }
+                Write-SetupLog '対象の Edge Box を正常終了し、VM の停止を確認して Windows を再起動します。'
+                try { Restart-SetupHost ('02' -in $resumeState.Pending) }
+                catch {
+                    Write-SetupLog ('自動再起動を保留しました: '+$_.Exception.Message+'。VM の状態を確認して setup-all.cmd を再実行してください。')
+                    $resumeState.AutoReboots=$count
+                    $resumeState | ConvertTo-Json | Set-Content -LiteralPath $statePath -Encoding UTF8
+                }
             }
             return 3010
         }

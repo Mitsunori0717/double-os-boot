@@ -150,7 +150,7 @@ function Invoke-IsolatedVmRecovery {
         $sourceStream=[IO.File]::Open($source,[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::Read)
         if($sourceStream.Length -ne $m.Size -or (Get-RVHash $sourceStream) -cne $m.Sha256){throw 'VHDX_ARCHIVE_HASH_MISMATCH'}
         $sourceStream.Position=0
-        $plan=[pscustomobject]@{State='PlanOnly';VMName=$VMName;VMRoot=$root;Source=$source;WorkingCopy=$working;IdentityPolicy='NewVmId';Network='Disconnected';Generation=$Profile.Generation;PhysicalWrites=$false;BootTested=$false;RestoreTested=$false;LicenseValidated=$false;Warnings=@('A new VM ID is allocated; original VM ID preservation is unsupported.','MAC preservation does not guarantee FSBP activation.','The archive remains untouched; only a fresh working copy is attached.')}
+        $plan=[pscustomobject]@{State='PlanOnly';VMName=$VMName;VMRoot=$root;Source=$source;WorkingCopy=$working;IdentityPolicy='NewVmId';Network='Disconnected';Generation=$Profile.Generation;PhysicalWrites=$false;BootTested=$false;RestoreTested=$false;LicenseValidated=$false;Warnings=@('A new VM ID is allocated; original VM ID preservation is unsupported.','MAC preservation does not guarantee Edge Box activation.','The archive remains untouched; only a fresh working copy is attached.')}
         if(-not $Create){return $plan}
         if(-not $PSCmdlet.ShouldProcess($root,"Create NEW isolated VM '$VMName' and working VHDX copy; optional start=$StartIsolated")){return $plan}
         New-Item -ItemType Directory -Path $root -ErrorAction Stop|Out-Null
@@ -189,7 +189,7 @@ function Invoke-IsolatedVmRecovery {
         if($StartIsolated){$stage='StartingVM';Start-RecoveryVM $created;$state=Get-RecoveryVmIsolation $created;if(-not $state.Isolated){throw 'VM_ISOLATION_LOST'}}
         $result=[pscustomobject]@{State=$(if($StartIsolated){'StartRequestedUnverified'}else{'VMCreatedOff'});VMId=[string]$created.Id;VMName=$VMName;ObservedVMState=$state.State;VMRoot=$root;WorkingCopy=$working;Network='Disconnected';SourceSha256=$m.Sha256;NewVmId=$true;BootTested=$false;RestoreTested=$false;LicenseValidated=$false}
         $result|ConvertTo-Json -Depth 8|Set-Content -LiteralPath (Join-Path $root 'recovery-result.json') -Encoding UTF8 -ErrorAction Stop
-        Write-RVEvent $log 'completed-unverified-guest' 'VM lifecycle only; OS boot, FSBP and licensing remain unverified.'
+        Write-RVEvent $log 'completed-unverified-guest' 'VM lifecycle only; OS boot, Edge Box and licensing remain unverified.'
         return $result
     }catch{
         if($log){try{Write-RecoveryFailure $root $stage $created @($working) $offset $_}catch{}}

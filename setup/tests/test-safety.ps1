@@ -1,4 +1,4 @@
-#requires -Version 5.1
+﻿#requires -Version 5.1
 # Real safety predicates with mocked operating-system reads. No host/VM changes.
 $ErrorActionPreference='Stop'
 $project=Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
@@ -9,6 +9,8 @@ try {
     foreach ($name in @('setup-engine.psm1','setup-all.ps1','run-child.ps1')) {
         Copy-Item -LiteralPath (Join-Path $project ('setup\'+$name)) -Destination (Join-Path $temp ('setup\'+$name))
     }
+    $cpuDir=New-Item -ItemType Directory -Path (Join-Path $temp 'windows-cpu-partition')
+    Copy-Item -LiteralPath (Join-Path $project 'windows-cpu-partition\cpu-tool.psm1') -Destination $cpuDir.FullName
     $module=Import-Module (Join-Path $temp 'setup\setup-engine.psm1') -PassThru -Force
     & $module {
         param($ProjectRoot)
@@ -118,6 +120,16 @@ try {
         Assert (-not (Test-SetupTask 'fixture' $taskScript $expectedVm)) 'matching arguments with the wrong executable must not pass'
         $script:MockTask.Actions[0].Execute=Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
         Assert (Test-SetupTask 'fixture' $taskScript $expectedVm) 'full Windows PowerShell executable paths remain supported'
+        $script:MockTask.Principal | Add-Member NoteProperty UserId 'S-1-5-18'
+        $bootTrigger=[pscustomobject]@{Enabled=$true;CimClass=[pscustomobject]@{CimClassName='MSFT_TaskBootTrigger'}}
+        $script:MockTask | Add-Member NoteProperty Triggers @($bootTrigger)
+        $script:MockTask.Actions[0].Arguments='-NoProfile -File "'+$taskPath+'" -BootApply -Quiet'
+        Assert (Test-SetupTask 'fixture' $taskScript '-BootApply' -Boot) 'SYSTEM boot task runs at startup'
+        $bootTrigger.Enabled=$false
+        Assert (-not (Test-SetupTask 'fixture' $taskScript '-BootApply' -Boot)) 'a disabled boot trigger cannot take ownership of VM startup'
+        $bootTrigger.Enabled=$true
+        $script:MockTask.Actions[0].Arguments+=' -PrepareOnly'
+        Assert (-not (Test-SetupTask 'fixture' $taskScript '-BootApply' -Boot)) 'a preparation-only task cannot start the VM'
         $script:Root=$savedRoot
         function New-ScheduledTaskAction { param($Execute,$Argument) [pscustomobject]@{Execute=$Execute;Arguments=$Argument} }
         foreach ($relative in @('windows-host\05-shutdown-all.ps1','windows-host\08-settings-console.ps1')) {
@@ -133,7 +145,7 @@ try {
         Write-Host 'PASS: custom VM shortcut registration, old task repair and exact executable/script validation'
 
         $shutdownAst=[Management.Automation.Language.Parser]::ParseFile((Join-Path $ProjectRoot 'windows-host\05-shutdown-all.ps1'),[ref]$null,[ref]$null)
-        foreach ($helperName in @('Assert-ShutdownTargetOff','Invoke-ConfirmedWindowsShutdown')) {
+        foreach ($helperName in @('Assert-ShutdownTargetOff','Invoke-ConfirmedWindowsShutdown','Test-ShutdownConsoleTarget')) {
             $helper=@($shutdownAst.FindAll({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $helperName},$true))
             Assert ($helper.Count -eq 1) 'shutdown guards must be uniquely identifiable'
             . ([scriptblock]::Create($helper[0].Extent.Text))
@@ -157,15 +169,81 @@ try {
             Assert ($script:ShutdownCalls -eq 0) 'unconfirmed guest stop must never reach shutdown.exe'
         }
         $script:MockVm=[pscustomobject]@{Id='original-vm';Name=$VMName;State='Off'}
+        $target=$script:MockVm
+        $other=[pscustomobject]@{Id='other';Name='Unrelated';State='Running'}
+        $script:MockVm=@($target,$other)
+        Assert-Throws { Invoke-ConfirmedWindowsShutdown 'original-vm' } 'a running unrelated VM must block Windows shutdown'
+        Assert ($script:ShutdownCalls -eq 0) 'host shutdown must leave unrelated VMs running'
+        $script:MockVm=$target
+        $consoleVm=[pscustomobject]@{Name='Selected Box';Id='11111111-1111-1111-1111-111111111111'}
+        Assert (Test-ShutdownConsoleTarget 'vmconnect.exe localhost "Selected Box"' $consoleVm) 'local console for a custom VM must match'
+        Assert (Test-ShutdownConsoleTarget 'vmconnect.exe . -G {11111111-1111-1111-1111-111111111111} -C 1' $consoleVm) 'local manager console with target ID must match'
+        foreach ($line in @('vmconnect.exe other-host "Selected Box"', 'vmconnect.exe localhost "Selected Box 2"', 'vmconnect.exe localhost "Other"', 'vmconnect.exe localhost Selected Box')) {
+            Assert (-not (Test-ShutdownConsoleTarget $line $consoleVm)) 'unrelated or ambiguous VMConnect windows must remain open'
+        }
         $script:ShutdownExit=23
         Assert-Throws { Invoke-ConfirmedWindowsShutdown 'original-vm' } 'host shutdown command failure must remain a failure'
         Write-Host 'PASS: actual host-shutdown guard under mocks, including guest restart and identity replacement'
+
+        & {
+            function Get-EdgeBoxHypervisorLpCount { [Environment]::ProcessorCount + 8 }
+            Assert (@(Get-SetupCpuTopology).Count -eq 0) 'restricted running host topology is incomplete even with a pending BCD reset'
+        }
+        & {
+            $SnapshotFile=Join-Path $script:Root 'windows-cpu-partition\cpu-topology.json'
+            $gui=[Management.Automation.Language.Parser]::ParseFile((Join-Path $ProjectRoot 'windows-cpu-partition\cpu-console.ps1'),[ref]$null,[ref]$null)
+            foreach ($definition in $gui.FindAll({param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -in @('Read-Snapshot','Set-CoreLabels','New-Core','Get-CpuName','Get-LpCount')},$false)) {
+                . ([scriptblock]::Create($definition.Extent.Text))
+            }
+            $fullCores=@(
+                foreach ($i in 0..3) { [pscustomobject]@{Eff=1;Lps=@((2*$i),(2*$i+1))} }
+                foreach ($i in 8..15) { [pscustomobject]@{Eff=0;Lps=@($i)} }
+            )
+            function Get-SetupCpuTopology { $fullCores }
+            function Get-CimInstance { [pscustomobject]@{Name='  Fixture CPU  '} }
+            function Get-SetupBcd { [pscustomobject]@{RootProc=0} }
+            function Get-SetupVM { [pscustomobject]@{Name='FixtureVM'} }
+            function Get-SetupCpuConfig { $requestedConfig }
+            function Invoke-SetupChild($relativePath,$arguments) {
+                Assert ($relativePath -eq 'windows-cpu-partition\cpu-partition.ps1') 'exercise the real step 10 entry without changing the host'
+                $snap=Read-Snapshot
+                Assert ((Get-LpCount $snap) -eq 16 -and $snap.Count -eq 12) 'CPU GUI reads all cores before the child can apply minroot'
+                Assert ($snap[0].Kind -eq 'P' -and ($snap[0].Lps -join ',') -eq '0,1' -and $snap[-1].Kind -eq 'E') 'GUI retains physical SMT and efficiency class'
+                $index=[array]::IndexOf($arguments,'-GuestLps')
+                Assert ($index -ge 0 -and $arguments[$index+1] -eq $expectedGuest) 'step 10 preserves the selected guest assignment'
+            }
+            foreach ($mode in @('auto','settings','saved')) {
+                [IO.File]::Delete($SnapshotFile)
+                $requestedConfig=$null
+                $script:Settings=@{}
+                $expectedGuest=(8..15) -join ','
+                if ($mode -eq 'settings') {
+                    $script:Settings=@{HostLps=@(0..5);GuestLps=@(6..15)}
+                    $expectedGuest=(6..15) -join ','
+                } elseif ($mode -eq 'saved') {
+                    $requestedConfig=[pscustomobject]@{Mode='full';HostLps=@(0..3);GuestLps=@(4..15);Scheduler='core'}
+                    $expectedGuest=(4..15) -join ','
+                }
+                Invoke-SetupStep '10'
+            }
+            $before=(Get-FileHash -LiteralPath $SnapshotFile).Hash
+            $fullCores=@()
+            Invoke-SetupStep '10'
+            Assert ((Get-FileHash -LiteralPath $SnapshotFile).Hash -eq $before) 'reapplying with a restricted view preserves the full GUI snapshot'
+            $requestedConfig=$null
+            Assert-Throws { Invoke-SetupStep '10' } 'an automatic plan cannot use only the host partition'
+        }
+        Write-Host 'PASS: setup without prior GUI captures full P/E and SMT topology for automatic and explicit CPU plans'
 
         $script:MockVm=[pscustomobject]@{Id='33333333-3333-3333-3333-333333333333';Name='CpuVm';State='Off';AutomaticStartAction='Nothing'}
         $script:CpuBoot=[datetime]::UtcNow.AddHours(-1)
         $script:CpuResult=[pscustomobject]@{ExitCode=0;Output=''}
         function Get-SetupVM {$script:MockVm}
-        function Get-SetupCpuConfig { [pscustomobject]@{Mode='full';VMName='CpuVm';HostLps=@(0..([Environment]::ProcessorCount-1));Scheduler='core';ManageVmStart=$true} }
+        $guestStart=[Environment]::ProcessorCount
+        $script:CpuConfig=[pscustomobject]@{Mode='full';VMName='CpuVm';VMId=$script:MockVm.Id;HostLps=@(0..($guestStart-1));GuestLps=@($guestStart,($guestStart+1));Scheduler='core';ManageVmStart=$true}
+        $script:VcpuCount=2
+        function Get-VMProcessor { [pscustomobject]@{Count=$script:VcpuCount} }
+        function Get-SetupCpuConfig { $script:CpuConfig }
         function Get-SetupBcd { [pscustomobject]@{RootProc=[Environment]::ProcessorCount;Scheduler='core'} }
         function Test-SetupTask {$true}
         function Get-SetupScheduler {'core'}
@@ -175,13 +253,20 @@ try {
             else { [pscustomobject]@{LastBootUpTime=$script:CpuBoot} }
         }
         function Read-SetupJson { [pscustomobject]@{At=[datetime]::UtcNow;MinrootOk=$true;Bound=$true} }
-        function Get-SetupCpuGroupOutput {$script:CpuResult}
+        function Get-SetupCpuGroupOutput([string]$Exe,[string[]]$Arguments) {
+            switch ($Arguments[0]) {
+                'GetVmGroup' { Assert ($Arguments[1] -eq '/VmName:CpuVm') 'query the selected VM'; $script:CpuResult }
+                'GetGroups' { $script:Groups }
+                default { throw 'Unexpected CpuGroups invocation' }
+            }
+        }
         function Test-Path {
             param($LiteralPath,$PathType)
             if ($LiteralPath -eq (Join-Path $script:Root 'windows-cpu-partition\tools\CpuGroups.exe')) {return $true}
             Microsoft.PowerShell.Management\Test-Path @PSBoundParameters
         }
         $vmId=$script:MockVm.Id;$groupId='b0edb0ed-c01e-4a11-8000-0000000000e1';$otherVm='44444444-4444-4444-4444-444444444444'
+        $script:Groups=[pscustomobject]@{ExitCode=0;Output="CpuGroupId CpuCap LpIndexes`n$groupId 65536 $($guestStart+1),$guestStart"}
         $script:CpuResult.Output="VmName VmId CpuGroupId`r`nCpuVm $vmId $groupId"
         Assert ((Get-SetupCpuState).State -eq 'Done') 'the target VM and expected CPU group on one unambiguous row may pass'
         foreach ($badOutput in @("OtherVm $otherVm $groupId", "$vmId`n$groupId", "group $groupId", "CpuVm $vmId $groupId`nCpuVm $vmId $groupId", "CpuVm $vmId 00000000-0000-0000-0000-000000000000")) {
@@ -189,8 +274,26 @@ try {
             Assert ((Get-SetupCpuState).State -eq 'NeedsWork') 'unrelated, split, duplicate or unbound group evidence must not report CPU separation complete'
         }
         $script:CpuResult.Output="CpuVm $vmId $groupId";$script:CpuResult.ExitCode=23
-        Assert ((Get-SetupCpuState).State -eq 'NeedsWork') 'tool failure must not be overridden by matching output'
-        Write-Host 'PASS: real CPU completion predicate binds one output row to the selected VM ID'
+        Assert-Throws { Get-SetupCpuState } 'tool failure must stop automatic repair despite matching output'
+        $script:CpuResult.ExitCode=0
+        $script:Groups.ExitCode=1
+        Assert-Throws { Get-SetupCpuState } 'failed affinity query must not approve or mutate a plan'
+        $script:Groups.ExitCode=0
+        $validAffinity=$script:Groups.Output
+        $script:Groups.Output="CpuGroupId CpuCap LpIndexes`n$groupId 65536 0,1"
+        Assert ((Get-SetupCpuState).State -eq 'NeedsWork') 'matching group ID with wrong LP membership must require repair'
+        $script:Groups.Output=$validAffinity
+        $script:VcpuCount=3
+        Assert ((Get-SetupCpuState).State -eq 'NeedsWork') 'vCPU count must agree with guest LPs'
+        $script:VcpuCount=2
+        $script:CpuConfig.ManageVmStart=$false
+        Assert ((Get-SetupCpuState).State -eq 'NeedsWork') 'legacy unmanaged boot order must require repair'
+        $script:CpuConfig.ManageVmStart=$true
+        $script:MockVm.AutomaticStartAction='Start'
+        Assert ((Get-SetupCpuState).State -eq 'NeedsWork') 'direct Hyper-V start must not race the boot task'
+        $script:CpuConfig.VMId=$otherVm
+        Assert-Throws { Get-SetupCpuState } 'a replaced VM cannot inherit CPU-plan identity'
+        Write-Host 'PASS: target identity, group membership, live LP set, vCPU count and boot ownership'
 
         # Test the actual missing-file predicate before any OS or setup operation.
         $script:Applied=0

@@ -83,6 +83,7 @@ function Set-Status([string]$m) {
 }
 
 Import-Module (Join-Path $PSScriptRoot 'cpu-boot.psm1') -ErrorAction Stop
+Import-Module (Join-Path $PSScriptRoot 'vm-shutdown.psm1') -ErrorAction Stop
 # URL の先に 1 回だけ接続を試す (TCP が開くか)
 function Test-UrlOnce([string]$u) {
     try {
@@ -1314,13 +1315,32 @@ function Resolve-ResolutionText([string]$text) {
     return $null
 }
 
+# 起動前処理の間に変更された VM へ操作が及ばないよう、同じ ID を再取得する。
+function Start-PreparedKioskVM($SelectedVM) {
+    if (Invoke-EdgeBoxCpuPreparation -VMName $VMName) { Log 'Edge Box の CPU 固定を確認しました。' }
+    $current = Get-VM -Id $SelectedVM.Id -ErrorAction Stop
+    if ($current.Id -ne $SelectedVM.Id -or $current.Name -ne $VMName) { throw '起動準備中に対象 VM が変わりました。' }
+    if ($current.State -eq 'Running') { return }
+    if ($current.State -ne 'Off') { throw "Edge Box の状態は $($current.State) です。起動を保留します。" }
+    Start-VM -VM $current -ErrorAction Stop
+}
+function Restart-KioskVMForResolution($SelectedVM,[int]$Width,[int]$Height) {
+    Wait-EdgeBoxShutdown -VMName $VMName -ExpectedVmId $SelectedVM.Id -NextAction '停止を確認したら解像度を変更し、Edge Box を起動し直します。'
+    $current = Get-VM -Id $SelectedVM.Id -ErrorAction Stop
+    if ($current.Id -ne $SelectedVM.Id -or $current.Name -ne $VMName -or $current.State -ne 'Off') {
+        throw '対象の Edge Box の停止を確認できません。解像度の変更を保留します。'
+    }
+    Set-VMVideo -VM $current -ResolutionType Single -HorizontalResolution $Width -VerticalResolution $Height -ErrorAction Stop
+    Start-PreparedKioskVM $current
+}
+
 # 解像度を Edge Box に適用する。実行中なら再起動が要るので、その扱いを $OnRunning で決める
 #   "ask" = 確認ダイアログ / "skip" = 何もしない
 function Set-ConsoleResolution([int]$w, [int]$h, [string]$OnRunning = "skip") {
     $vm = Get-VM -Name $VMName -ErrorAction SilentlyContinue
     if (-not $vm) { return "登録 '$VMName' が見つからないため、解像度は反映していません。" }
     if ($vm.State -eq "Off") {
-        Set-VMVideo -VMName $VMName -ResolutionType Single -HorizontalResolution $w -VerticalResolution $h
+        Set-VMVideo -VM $vm -ResolutionType Single -HorizontalResolution $w -VerticalResolution $h -ErrorAction Stop
         return "コンソールの解像度を ${w}x${h} にしました。"
     }
     if ($OnRunning -ne "ask") {
@@ -1337,17 +1357,7 @@ function Set-ConsoleResolution([int]$w, [int]$h, [string]$OnRunning = "skip") {
     if ($r -ne [System.Windows.Forms.DialogResult]::Yes) {
         return "設定だけ保存しました。次に Edge Box を起動したときに ${w}x${h} で表示されます。"
     }
-    Stop-VM -Name $VMName            # ACPI シャットダウン要求 (強制電源断ではない)
-    $wsw = [System.Diagnostics.Stopwatch]::StartNew()
-    while ($wsw.Elapsed.TotalSeconds -lt 180) {
-        if ((Get-VM -Name $VMName).State -eq "Off") { break }
-        Start-Sleep -Seconds 3
-    }
-    if ((Get-VM -Name $VMName).State -ne "Off") {
-        return "Edge Box が3分以内に停止しませんでした。解像度は変更していません (強制終了はしていません)。"
-    }
-    Set-VMVideo -VMName $VMName -ResolutionType Single -HorizontalResolution $w -VerticalResolution $h
-    Start-VM -Name $VMName
+    Restart-KioskVMForResolution $vm $w $h
     return "解像度を ${w}x${h} にして Edge Box を起動し直しました。"
 }
 
@@ -1362,10 +1372,10 @@ function Set-SavedConsoleResolution {
         if (-not $txt.Trim()) { $txt = "auto" }
         $res = Resolve-ResolutionText $txt
         if (-not $res -or [int]$res.W -le 0 -or [int]$res.H -le 0) { return "" }
-        $cur = Get-VMVideo -VMName $VMName -ErrorAction SilentlyContinue
+        $cur = Get-VMVideo -VM $vmR -ErrorAction SilentlyContinue
         if ($cur -and [string]$cur.ResolutionType -eq "Single" -and
             [int]$cur.HorizontalResolution -eq [int]$res.W -and [int]$cur.VerticalResolution -eq [int]$res.H) { return "" }
-        Set-VMVideo -VMName $VMName -ResolutionType Single -HorizontalResolution $res.W -VerticalResolution $res.H -ErrorAction Stop
+        Set-VMVideo -VM $vmR -ResolutionType Single -HorizontalResolution $res.W -VerticalResolution $res.H -ErrorAction Stop
         return ("コンソールの解像度を {0}x{1} にしました (設定: {2})。" -f $res.W, $res.H, $txt)
     } catch { return ("コンソールの解像度を反映できませんでした: " + $_.Exception.Message) }
 }
@@ -1665,9 +1675,8 @@ if ($Install) {
         $cpuCfg = $null
         $cpuFile = Join-Path (Split-Path $PSScriptRoot -Parent) 'windows-cpu-partition\cpu-partition.json'
         if (Test-Path $cpuFile) { $cpuCfg = Get-Content $cpuFile -Raw -Encoding UTF8 | ConvertFrom-Json }
-        if ($cpuCfg -and $cpuCfg.Mode -eq 'full' -and $cpuCfg.ManageVmStart -and $cpuCfg.VMName -eq $VMName) {
-            Set-VM -Name $VMName -AutomaticStartAction Nothing -ErrorAction Stop
-            Write-Host 'CPU 固定後に起動する既存の CPU 起動タスクを使います。'
+        if ($cpuCfg -and $cpuCfg.Mode -eq 'full' -and $cpuCfg.VMName -eq $VMName) {
+            Write-Host '完全分離時の自動起動は CPU 設定で管理します。手順 10 で起動順を確認できます。'
         } elseif ($vmAuto.AutomaticStartAction -ne "Start") {
             try {
                 Set-VM -Name $VMName -AutomaticStartAction Start -AutomaticStartDelay 30
@@ -1826,15 +1835,7 @@ if ($vm -and $vm.State -eq "Off") {
     $s11 = Join-Path $PSScriptRoot "11-io-passthrough.ps1"
     if (Test-Path $s11) { try { $r11 = & $s11 -VMName $VMName -ApplyPending -Quiet; if ($r11) { Log ([string]$r11) } } catch { } }
     # CPU コア分割ツール (full モード) があれば、Edge Box を CPU グループに固定してから起動する
-    if (Invoke-EdgeBoxCpuPreparation -VMName $VMName) { Log "CPU コア分割 (full): Edge Box を CPU グループに固定する処理を先に行いました。" }
-    $vm = Get-VM -Id $vm.Id -ErrorAction Stop
-    if ($vm.Name -ne $VMName) { throw '起動準備中に対象 VM の登録名が変わりました。' }
-    if ($vm.State -eq "Running") {
-        Log "Edge Box は起動済みです。"
-    } else {
-        Log "Edge Box が起動していないため、ここで起動します。"
-        try { Start-VM -VM $vm -ErrorAction Stop } catch { Log "Edge Box を起動できませんでした: $($_.Exception.Message)"; throw }
-    }
+    Start-PreparedKioskVM $vm
 }
 $sw = [System.Diagnostics.Stopwatch]::StartNew()
 while ($sw.Elapsed.TotalSeconds -lt $TimeoutSec) {

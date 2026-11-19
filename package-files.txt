@@ -1,4 +1,4 @@
-# Edge Box 2026.11.19.1 source distribution; explicit allowlist.
+# Edge Box 2026.11.19.2 source distribution; explicit allowlist.
 .gitignore
 CHANGELOG.md
 README.md

@@ -25,7 +25,7 @@ Windows・Edge Box の全領域バックアップ、物理 SSD への書戻し�
 
 `partial → copied / written → verified` を区別します。短い I/O、flush 失敗、読み戻し不一致は成功になりません。`verified` は保存・変換・書戻しデータの一致であり、OS 起動やアプリ・ライセンス復旧の証明ではありません。Hyper-V が `Running` でも `BootTested` / `RestoreTested` / `LicenseValidated` は false のままです。
 
-実 SSD 取得・書戻し、Live の実ブロックデバイス排他、Hyper-V ゲスト起動、FSBP・Windows の実動作・認証試験は未実施です。[今回の非破壊検証](../VALIDATION.md) と [実機受入手順](../docs/HARDWARE-ACCEPTANCE.md) を参照してください。
+実 SSD 取得・書戻し、Live の実ブロックデバイス排他、Hyper-V ゲスト起動、Edge Box・Windows の実動作・認証試験は未実施です。[今回の非破壊検証](../VALIDATION.md) と [実機受入手順](../docs/HARDWARE-ACCEPTANCE.md) を参照してください。
 
 RAW、VHDX、稼働コピーを同時に保存する場合は元媒体合計容量の約 3 倍に加え、形式情報・空き予約・失敗時の partial を見積もります。暗号化キーと TPM 内部の秘密、NAS や別媒体だけにあるデータは単一 RAW から復元できません。
 

@@ -186,12 +186,10 @@ function ConvertTo-LpArray([string]$Spec, [int]$Max) {
             throw "CPU 番号の書式が不正です: '$p' (例: 0-3,8,10-11)"
         }
         if ($b -lt $a) { throw "範囲が逆順です: '$p'" }
+        if ($b -ge $Max) { throw "論理 CPU $b は存在しません (この PC にあるのは 0〜$($Max - 1))" }
         for ($i = $a; $i -le $b; $i++) { [void]$list.Add($i) }
     }
     $arr = @($list | Sort-Object -Unique)
-    foreach ($i in $arr) {
-        if ($i -ge $Max) { throw "論理 CPU $i は存在しません (この PC にあるのは 0〜$($Max - 1))" }
-    }
     return ,$arr
 }
 
@@ -276,11 +274,40 @@ function Invoke-BcdDeleteValue([string]$Name) {
 # --- 保存済み設定 ---
 function Get-SavedConfig {
     if (-not (Test-Path $ConfigFile)) { return $null }
-    try { return (Get-Content $ConfigFile -Raw -Encoding UTF8 | ConvertFrom-Json) } catch { return $null }
+    return (Get-Content -LiteralPath $ConfigFile -Raw -Encoding UTF8 -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop)
 }
 
 function Save-Config($Obj) {
-    $Obj | ConvertTo-Json -Depth 4 | Set-Content -Path $ConfigFile -Encoding UTF8
+    Write-EdgeBoxCpuJson $ConfigFile $Obj
+}
+
+function Assert-FullPlanTarget($Config, $VM) {
+    if ($Config -and $Config.Mode -eq 'full' -and
+        ($Config.VMName -ne $VMName -or ($Config.VMId -and [string]$Config.VMId -ne [string]$VM.Id))) {
+        throw '既存の CPU 計画の対象 VM と一致しません。対象を変更する前に既存の分割を解除してください。'
+    }
+}
+
+function Save-FullPlan($Plan, $VM, $Config, [bool]$PendingReboot) {
+    Assert-FullPlanTarget $Config $VM
+    $auto = $null
+    if ($VM) {
+        $VM = Get-FullPlanVM $VM
+        $auto = $Config.VmAutoStart
+        if (-not $auto) { $auto = @{ Action = [string]$VM.AutomaticStartAction; Delay = [int]$VM.AutomaticStartDelay } }
+    }
+    Save-Config ([pscustomobject]@{
+        Mode = 'full'; VMName = $VMName; VMId = [string]$VM.Id
+        HostLps = $Plan.HostLps; GuestLps = $Plan.GuestLps; Scheduler = $Scheduler
+        NoPriorityBoost = $false; VmAutoStart = $auto; ManageVmStart = [bool]$VM
+        PendingReboot = $PendingReboot; GroupBound = $false; PendingVM = (-not $VM)
+        LastVmStartBootId = $(if ($VM -and [string]$Config.VMId -eq [string]$VM.Id) { $Config.LastVmStartBootId })
+        ManualStopBootId = $(if ($VM -and [string]$Config.VMId -eq [string]$VM.Id) { $Config.ManualStopBootId })
+        UpdatedAt = (Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
+    })
+    if ($VM -and [string]$VM.AutomaticStartAction -ne 'Nothing') {
+        Set-VM -VM $VM -AutomaticStartAction Nothing -ErrorAction Stop
+    }
 }
 
 # --- メモリ ---
@@ -399,13 +426,9 @@ function Get-VmGroupId([string]$Exe, [string]$Name, [string]$ExpectedVmId = '') 
     if (-not $r.Ok) { return "" }
     try { $vmid = [guid](Get-VM -Name $Name -ErrorAction Stop).Id } catch { return "" }
     if ($ExpectedVmId -and $vmid.ToString() -ne $ExpectedVmId) { return "" }
-    $groups = @(foreach ($line in ($r.Output -split '\r?\n')) {
-        $ids = @(Get-GuidsInText $line)
-        if ($ids.Count -ge 2 -and $ids[-2] -eq $vmid.ToString()) { $ids[-1] }
-    })
-    if ($groups.Count -ne 1) { return "" }
-    if ($groups[0] -eq $NullGroupId) { return "none" }
-    return $groups[0]
+    $group = Resolve-EdgeBoxVmGroupId $r.Output $vmid
+    if ($group -eq $NullGroupId) { return "none" }
+    return $group
 }
 
 # Microsoft の表形式: CpuGroupId CpuCap LpIndexes (LP はカンマ区切り)。
@@ -414,22 +437,10 @@ function Get-FullGroupState([string]$Exe) {
     $r = Invoke-CpuGroups $Exe @('GetGroups', "/GroupId:$GroupId")
     # 未作成の ID を指定したときのエラーは、全件一覧で不存在を確認する。
     if (-not $r.Ok) { $r = Invoke-CpuGroups $Exe @('GetGroups') }
-    if (-not $r.Ok -or $r.Output -notmatch '(?m)^\s*CpuGroupId\s+CpuCap\s+LpIndexes\s*$') {
+    if (-not $r.Ok) {
         throw 'CPU グループの LP 一覧を確認できません。管理者権限と CpuGroups.exe GetGroups の結果を確認してください。'
     }
-    $rows = @()
-    foreach ($line in ($r.Output -split '\r?\n')) {
-        if ($line -notmatch [regex]::Escape($GroupId)) { continue }
-        if ($line -notmatch ('^\s*' + [regex]::Escape($GroupId) + '\s+(\d+)\s+(\d+(?:\s*,\s*\d+)*)\s*$')) {
-            throw 'CPU グループの LpIndexes を解析できません。CpuGroups.exe GetGroups の結果を確認してください。'
-        }
-        $lps = @($Matches[2] -split ',' | ForEach-Object { [int]$_.Trim() })
-        if (@($lps | Sort-Object -Unique).Count -ne $lps.Count) { throw 'CPU グループの LpIndexes が重複しています。' }
-        $rows += [pscustomobject]@{ Exists = $true; Lps = @($lps | Sort-Object) }
-    }
-    if ($rows.Count -gt 1) { throw '同一 ID の CPU グループが複数報告されています。' }
-    if ($rows.Count -eq 1) { return $rows[0] }
-    return [pscustomobject]@{ Exists = $false; Lps = @() }
+    Resolve-EdgeBoxCpuGroup $r.Output $GroupId
 }
 
 function Get-FullPlanVM($ExpectedVM, [switch]$RequireOff) {
@@ -442,6 +453,20 @@ function Get-FullPlanVM($ExpectedVM, [switch]$RequireOff) {
         throw 'CPU グループの変更には Edge Box の正常停止が必要です。停止後に再適用してください。'
     }
     return $found[0]
+}
+
+function Start-AfterMemoryChange($ExpectedVM) {
+    $VM = Get-FullPlanVM $ExpectedVM -RequireOff
+    $config = Get-SavedConfig
+    if ($config -and $config.Mode -eq 'full' -and $config.VMName -eq $VM.Name) {
+        $PrepareOnly = $true
+        if ($config.Scheduler) { $Scheduler = $config.Scheduler }
+        if (-not (Invoke-FullStage2 $config.HostLps $config.GuestLps $false)) {
+            throw 'CPU の完全分離を確認できないため Edge Box の起動を保留しました。'
+        }
+        $VM = Get-FullPlanVM $VM -RequireOff
+    }
+    Start-VM -VM $VM -ErrorAction Stop
 }
 
 # --- CPU グループを作り直して Edge Box を固定する (何度呼んでも同じ結果になる) ---
@@ -565,6 +590,12 @@ function Get-FullStatusText {
 # 状態を記録して、自動起動を任されていれば Edge Box を起動する。起動タスクからも手動 -Apply からも呼ぶ。
 # 何度呼んでも同じ結果になる。戻り値: 完全分割が成立したか
 function Invoke-FullStage2([int[]]$HostArr, [int[]]$GuestArr, [bool]$Interactive) {
+    if ($HostArr.Count -lt 2 -or $GuestArr.Count -lt 1 -or
+        (Compare-Object $HostArr @(0..($HostArr.Count-1))) -or
+        @($GuestArr | Where-Object { $_ -lt $HostArr.Count }).Count -or
+        @($GuestArr | Sort-Object -Unique).Count -ne $GuestArr.Count) {
+        throw 'CPU 計画の Windows と Edge Box の論理 CPU 番号を確認してください。'
+    }
     $hostText = ConvertTo-LpRangeText $HostArr
     $guestText = ConvertTo-LpRangeText $GuestArr
     $wantRootProc = $HostArr.Count
@@ -581,6 +612,10 @@ function Invoke-FullStage2([int[]]$HostArr, [int[]]$GuestArr, [bool]$Interactive
     if ($vm2.Name -ne $VMName -or -not $vm2.Id -or
         ($cfg2 -and $cfg2.VMId -and $cfg2.VMName -eq $VMName -and [string]$cfg2.VMId -ne [string]$vm2.Id)) {
         throw 'CPU 計画の VM ID と一致しません。対象 VM を確認してください。'
+    }
+    if ($cfg2.PendingVM) {
+        Save-FullPlan ([pscustomobject]@{HostLps=$HostArr;GuestLps=$GuestArr}) $vm2 $cfg2 $false
+        $cfg2 = Get-SavedConfig
     }
     $topo2 = Get-CpuTopology
     $schedNow2 = Get-HvSchedulerType
@@ -628,17 +663,23 @@ function Invoke-FullStage2([int[]]$HostArr, [int[]]$GuestArr, [bool]$Interactive
     }
 
     # vCPU 数と Edge Box 用コア数を合わせる (停止中のみ変更可能)
-    if ($vm2 -and [string]$vm2.State -eq "Off") {
-        try {
-            $vcpu2 = [int](Get-VMProcessor -VM $vm2).Count
-            if ($vcpu2 -ne $GuestArr.Count) {
-                Set-VMProcessor -VM $vm2 -Count $GuestArr.Count
-                Write-PinLog "Full: プロセッサ数を $vcpu2 → $($GuestArr.Count) に合わせました"
-            }
-        } catch { }
-    }
-
-    $bind = Invoke-FullBind $exe2 $GuestArr $vm2
+    $canReserve = $false
+    try {
+        $vm2 = Get-FullPlanVM $vm2
+        if ($cfg2.ManageVmStart -and [string]$vm2.AutomaticStartAction -ne 'Nothing') {
+            throw 'CPU 固定前に VM が自動起動する設定です。完全分離の計画を再適用してください。'
+        }
+        $vcpu2 = [int](Get-VMProcessor -VM $vm2 -ErrorAction Stop).Count
+        if ($vcpu2 -ne $GuestArr.Count -and [string]$vm2.State -eq 'Off') {
+            Set-VMProcessor -VM $vm2 -Count $GuestArr.Count -ErrorAction Stop
+            $vcpu2 = [int](Get-VMProcessor -VM $vm2 -ErrorAction Stop).Count
+        }
+        if ($vcpu2 -ne $GuestArr.Count) {
+            throw "Edge Box の vCPU 数 ($vcpu2) が計画 ($($GuestArr.Count)) と一致しません。正常停止後に再適用してください。"
+        }
+        $canReserve = $true
+        $bind = Invoke-FullBind $exe2 $GuestArr $vm2
+    } catch { $bind = [pscustomobject]@{ Bound = $false; Message = $_.Exception.Message } }
     Write-PinLog "Full: $($bind.Message)"
     if ($bind.Bound) {
         Say "  $($bind.Message)" "Green"
@@ -648,13 +689,14 @@ function Invoke-FullStage2([int[]]$HostArr, [int[]]$GuestArr, [bool]$Interactive
             Write-Host "  (CPU グループは Windows Server の機能で、クライアント版では動かない環境もあります)" -ForegroundColor Yellow
         }
         # 準分割の仕上げ: 処理能力予約 (停止中のみ設定可能)
-        if (-not $NoReserve -and $vm2 -and [string]$vm2.State -eq "Off") {
+        if ($canReserve -and -not $NoReserve -and [string]$vm2.State -eq "Off") {
             try { Set-VMProcessor -VM $vm2 -Reserve 100; Say "  代わりに処理能力予約 (Reserve 100%) を設定しました" "Yellow" } catch { }
         }
     }
 
     if ($cfg2 -and $cfg2.VMName -eq $VMName) {
         $cfg2 | Add-Member -NotePropertyName VMId -NotePropertyValue ([string]$vm2.Id) -Force
+        $cfg2 | Add-Member -NotePropertyName PendingVM -NotePropertyValue $false -Force
         $cfg2 | Add-Member -NotePropertyName GroupBound -NotePropertyValue ([bool]$bind.Bound) -Force
         $cfg2 | Add-Member -NotePropertyName PendingReboot -NotePropertyValue $false -Force
         Save-Config $cfg2
@@ -667,10 +709,20 @@ function Invoke-FullStage2([int[]]$HostArr, [int[]]$GuestArr, [bool]$Interactive
         $s11 = Join-Path (Split-Path $PSScriptRoot -Parent) "windows-host\11-io-passthrough.ps1"
         if (Test-Path $s11) { try { $r11 = & $s11 -VMName $VMName -ApplyPending -Quiet; if ($r11) { Write-PinLog ([string]$r11) } } catch { } }
     }
-    # 起動直前にも同一 VM の所属と実際の LP を確認する。未確認のまま起動しない。
-    if (-not $PrepareOnly -and $vm2 -and [string]$vm2.State -eq "Off" -and $cfg2 -and $cfg2.VMName -eq $VMName -and $cfg2.ManageVmStart) {
-        $vm2 = Get-FullPlanVM $vm2 -RequireOff
-        $finalBind = Invoke-FullBind $exe2 $GuestArr $vm2
+    if ($PrepareOnly -or -not $cfg2.ManageVmStart -or $cfg2.VMName -ne $VMName) { return $true }
+    $bootId = Get-EdgeBoxCpuHostBootId
+    if ([string]$cfg2.LastVmStartBootId -eq $bootId -or [string]$cfg2.ManualStopBootId -eq $bootId) { return $true }
+
+    # この Windows 起動中に一度 Running を確認したら、以後の定期確認は手動停止を尊重する。
+    $vm2 = Get-FullPlanVM $vm2
+    if ([string]$vm2.State -eq 'Off') {
+        try {
+            $vm2 = Get-FullPlanVM $vm2 -RequireOff
+            $finalBind = Invoke-FullBind $exe2 $GuestArr $vm2
+            if ($finalBind.Bound -and [int](Get-VMProcessor -VM $vm2 -ErrorAction Stop).Count -ne $GuestArr.Count) {
+                throw '起動直前の vCPU 数が計画と一致しません。'
+            }
+        } catch { $finalBind = [pscustomobject]@{ Bound = $false; Message = $_.Exception.Message } }
         if (-not $finalBind.Bound) {
             $cfg2 | Add-Member -NotePropertyName GroupBound -NotePropertyValue $false -Force
             Save-Config $cfg2
@@ -678,8 +730,17 @@ function Invoke-FullStage2([int[]]$HostArr, [int[]]$GuestArr, [bool]$Interactive
             Write-PinLog "Full: 起動を中止しました: $($finalBind.Message)"
             return $false
         }
-        try { Start-VM -VM $vm2 -ErrorAction Stop; Write-PinLog "Full: Edge Box を起動しました" }
+        try {
+            Start-VM -VM $vm2 -ErrorAction Stop
+            $vm2 = Get-FullPlanVM $vm2
+            if ([string]$vm2.State -ne 'Running') { throw 'Edge Box の Running 状態を確認できません。次回の確認で再試行します。' }
+            Write-PinLog "Full: Edge Box を起動しました"
+        }
         catch { Write-PinLog "Full: Edge Box の起動に失敗: $($_.Exception.Message)"; throw }
+    }
+    if ([string]$vm2.State -eq 'Running') {
+        $cfg2 | Add-Member -NotePropertyName LastVmStartBootId -NotePropertyValue $bootId -Force
+        Save-Config $cfg2
     }
     return [bool]$bind.Bound
 }
@@ -689,6 +750,12 @@ function Invoke-FullStage2([int[]]$HostArr, [int[]]$GuestArr, [bool]$Interactive
 # 戻り値: @{ HostLps=[int[]]; GuestLps=[int[]] }
 function Resolve-Plan([object]$Topo, [string]$PlanMode) {
     $total = $Topo.Lps
+    if ($PlanMode -eq 'full' -and $bcd.RootProc -gt 0) {
+        $total = Get-EdgeBoxHypervisorLpCount $Topo.Lps
+        if ($total -gt $Topo.Lps -and ($HostCores -gt 0 -or $GuestCores -gt 0)) {
+            throw 'Windows の CPU 制限中は物理コア数を推定できません。-HostLps / -GuestLps で論理 CPU 番号を指定してください。'
+        }
+    }
 
     if ($HostLps -ne "") {
         $h = ConvertTo-LpArray $HostLps $total
@@ -983,6 +1050,13 @@ function Assert-LiteralVMName([string]$Name) {
 }
 Assert-LiteralVMName $VMName
 
+# 起動タスクと手動適用が同じグループ・計画を同時に書き換えないようにする。
+$fullMutex = $null
+try {
+if ($BootApply -or $Apply -or $MemoryGB -gt 0 -or $Undo) {
+    $fullMutex = Enter-EdgeBoxCpuPlanLock
+}
+
 # ============================================================ -MemoryGB (Edge Box のメモリ)
 #
 # メモリは Edge Box の停止中にしか変更できない (固定メモリ)。実行中に指定された場合は
@@ -1024,38 +1098,34 @@ if ($MemoryGB -gt 0) {
             if ($ans -ne "y") { exit 0 }
         }
         Write-Host "  Edge Box を停止しています (正常シャットダウン)..."
-        try { Stop-VM -Name $VMName -ErrorAction Stop } catch {
+        try {
+            Import-Module (Join-Path (Split-Path $PSScriptRoot -Parent) 'windows-host\vm-shutdown.psm1') -ErrorAction Stop
+            Wait-EdgeBoxShutdown -VMName $VMName -ExpectedVmId ([string]$mi.Vm.Id) -NextAction '停止を確認したらメモリ割り当てを変更し、Edge Box を起動し直します。'
+        } catch {
             Write-PinLog "Memory: 停止失敗 $($_.Exception.Message)"
             Write-Error ("Edge Box を停止できませんでした: $($_.Exception.Message)`n" +
                 "Edge Box の管理画面から先にシャットダウンし、停止後にもう一度 -MemoryGB $MemoryGB を実行してください。")
             exit 1
         }
-        $deadline = (Get-Date).AddSeconds(180)
-        while ((Get-VM -Name $VMName).State -ne "Off") {
-            if ((Get-Date) -gt $deadline) {
-                Write-Error "Edge Box が 180 秒以内に停止しませんでした。メモリは変更していません。"
-                exit 1
-            }
-            Start-Sleep -Seconds 3
-        }
         Write-Host "  停止しました。"
     }
 
     try {
-        Set-VMMemory -VMName $VMName -DynamicMemoryEnabled $false -StartupBytes ([int64]$MemoryGB * 1GB) -ErrorAction Stop
+        $memoryVM = Get-FullPlanVM $mi.Vm -RequireOff
+        Set-VMMemory -VM $memoryVM -DynamicMemoryEnabled $false -StartupBytes ([int64]$MemoryGB * 1GB) -ErrorAction Stop
         Write-PinLog "Memory: 登録 '$VMName' を $MemoryGB GB に変更"
         Write-Host "  メモリを $MemoryGB GB に設定しました。" -ForegroundColor Green
     } catch {
         Write-PinLog "Memory: 設定失敗 $($_.Exception.Message)"
-        if ($state -ne "Off") { try { Start-VM -Name $VMName } catch { } }   # 止めた Edge Box は必ず起動し直す
+        if ($state -ne "Off") { Start-AfterMemoryChange $mi.Vm }
         Write-Error "メモリを設定できませんでした: $($_.Exception.Message)"
         exit 1
     }
     if ($state -ne "Off") {
         Write-Host "  Edge Box を起動しています..."
         try {
-            Start-VM -Name $VMName -ErrorAction Stop
-            Write-Host "  起動しました。コア固定は自動タスクが数秒後に適用し直します。" -ForegroundColor Green
+            Start-AfterMemoryChange $mi.Vm
+            Write-Host "  Edge Box を起動しました。" -ForegroundColor Green
         } catch {
             Write-Error "Edge Box を起動できませんでした: $($_.Exception.Message)"
             exit 1
@@ -1763,6 +1833,7 @@ if ($HostCores -eq 0 -and $HostLps -eq "" -and $cfg -and $cfg.Mode -eq $Mode) {
     Say "保存済みの計画を使用します (Windows = $HostLps / Edge Box = $GuestLps)" "Cyan"
 }
 $plan = Resolve-Plan $topo $Mode
+if ($Mode -eq 'full') { Assert-FullPlanTarget $cfg $vm }
 $hostText  = ConvertTo-LpRangeText $plan.HostLps
 $guestText = ConvertTo-LpRangeText $plan.GuestLps
 
@@ -1781,8 +1852,8 @@ Write-Host "  Edge Box      : CPU $guestText ($($plan.GuestLps.Count) 論理)"
 
 # vCPU 数とEdge Box 用コア数の一致を確認 (1 論理 CPU = 1 プロセッサが理想形)
 $vcpu = 0
-if ($vm) { $vcpu = [int](Get-VMProcessor -VMName $VMName).Count }
-if ($vm -and $vcpu -ne $plan.GuestLps.Count) {
+if ($Mode -eq 'runtime' -and $vm) { $vcpu = [int](Get-VMProcessor -VM $vm).Count }
+if ($Mode -eq 'runtime' -and $vm -and $vcpu -ne $plan.GuestLps.Count) {
     if ($vm.State -eq "Off") {
         Write-Host "  プロセッサ数を $vcpu → $($plan.GuestLps.Count) に合わせます (1 コア = 1 プロセッサが理想のため)" -ForegroundColor Cyan
         Set-VMProcessor -VMName $VMName -Count $plan.GuestLps.Count
@@ -1898,31 +1969,13 @@ if (-not $bcdReady) {
     Invoke-Bcdedit @("/set", "hypervisorschedulertype", $Scheduler)
     Invoke-Bcdedit @("/set", "hypervisorrootproc", "$wantRootProc")
 
-    # Edge Box の自動起動は起動タスクに任せる (CPU グループに固定してから起動するため)。元の設定は控えて -Undo で戻す
-    $auto = $null
-    if ($vm) {
-        try {
-            $auto = @{ Action = [string]$vm.AutomaticStartAction; Delay = [int]$vm.AutomaticStartDelay }
-            Set-VM -Name $VMName -AutomaticStartAction Nothing
-            Write-Host "  Edge Box の自動起動は起動タスク '$BootTaskName' が行います (固定してから起動)" -ForegroundColor Green
-        } catch { $auto = $null }
-    }
-
-    Save-Config ([pscustomobject]@{
-        Mode = "full"; VMName = $VMName; VMId = [string]$vm.Id
-        HostLps = $plan.HostLps; GuestLps = $plan.GuestLps
-        Scheduler = $Scheduler; NoPriorityBoost = $false
-        VmAutoStart = $auto; ManageVmStart = [bool]$auto
-        PendingReboot = $true; GroupBound = $false
-        PendingVM = (-not $vm)
-        UpdatedAt = (Get-Date -Format "yyyy-MM-dd HH:mm:ss")
-    })
+    Register-BootTask
+    Save-FullPlan $plan $vm $cfg $true
     Write-PinLog "Apply(full) 第1段階: sched=$Scheduler rootproc=$wantRootProc"
 
     # runtime 用の自動タスク・常駐は外し、full 用の起動タスクを登録する
     try { Unregister-ScheduledTask -TaskName $PinTaskName -Confirm:$false -ErrorAction Stop } catch { }
     Stop-WatchTask
-    Register-BootTask
     Write-FullStatus @{ MinrootOk = $false; Bound = $false; Message = "再起動待ち (再起動後に起動タスクが CPU グループを作成します)"; HostLps = $hostText; GuestLps = $guestText }
     Write-Host "  起動タスク '$BootTaskName' を登録しました (再起動後、Edge Box の固定まで自動で完了します)" -ForegroundColor Green
 
@@ -1936,17 +1989,8 @@ if (-not $bcdReady) {
 Write-Host ""
 Write-Host "【第 2 段階】再起動後の反映確認と Edge Box のコア固定を行います。" -ForegroundColor Cyan
 Register-BootTask   # 旧版で登録されていない場合に備えて (再登録は無害)
+Save-FullPlan $plan $vm $cfg ([Environment]::ProcessorCount -ne $wantRootProc)
 $bound = Invoke-FullStage2 $plan.HostLps $plan.GuestLps $true
-$cfgF = Get-SavedConfig
-if (-not $cfgF -or $cfgF.Mode -ne "full") {
-    Save-Config ([pscustomobject]@{
-        Mode = "full"; VMName = $VMName; VMId = [string]$vm.Id
-        HostLps = $plan.HostLps; GuestLps = $plan.GuestLps
-        Scheduler = $Scheduler; GroupBound = $bound; NoPriorityBoost = $false
-        PendingVM = (-not $vm); PendingReboot = $false
-        UpdatedAt = (Get-Date -Format "yyyy-MM-dd HH:mm:ss")
-    })
-}
 Write-PinLog "Apply(full) 第2段階: groupBound=$bound"
 
 Write-Host ""
@@ -1963,3 +2007,7 @@ if ($bound) {
 }
 Write-Host ""
 Write-Host "確認: 『Edge Box 監視』の区画ごとの色 (Windows 用に緑・Edge Box 用に青が載らないこと)、または .\cpu-partition.ps1 -Verify" -ForegroundColor Cyan
+if (-not $bound -and $vm -and [Environment]::ProcessorCount -eq $wantRootProc) { exit 1 }
+} finally {
+    if ($fullMutex) { $fullMutex.ReleaseMutex(); $fullMutex.Dispose() }
+}

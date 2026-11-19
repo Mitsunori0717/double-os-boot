@@ -26,6 +26,7 @@ try {
         function Register-SetupResume { param($Step,[switch]$RestartIfNeeded) $script:Registered=$true; $script:RegisteredRestart=[bool]$RestartIfNeeded }
         function Unregister-ScheduledTask { $script:Removed=$true }
         function Restart-Computer { throw 'Tests must never restart the PC' }
+        function Restart-SetupHost([bool]$HyperVFirstBoot) { $script:FirstBoot=$HyperVFirstBoot; throw 'fixture: VM unavailable' }
         function Get-SetupBootId { 'boot-current' }
         function Write-SetupLog([string]$Message) { if ($script:RunDir) {Add-Content (Join-Path $script:RunDir 'summary.txt') $Message -Encoding UTF8} }
         function Reset-Fixture {
@@ -69,6 +70,12 @@ try {
         Assert ($rc -eq 3010 -and $script:Registered) 'pending reboot must register resumption and return 3010'
         Assert (-not $script:RegisteredRestart) 'manual restart preference must survive resumption'
         $state=Join-Path $script:FixtureSetupDir 'resume-state.json'
+        $rc=Invoke-EdgeBoxSetup -NoConfirm -RestartIfNeeded
+        Assert ($rc -eq 3010 -and $script:FirstBoot -and (Read-SetupJson $state).AutoReboots -eq 0) 'blocked first boot must preserve resume and the reboot budget'
+        $script:MockStates['02']='Done'; $script:MockStates['10']='RebootRequired'
+        $rc=Invoke-EdgeBoxSetup -NoConfirm -RestartIfNeeded
+        Assert ($rc -eq 3010 -and -not $script:FirstBoot -and (Read-SetupJson $state).AutoReboots -eq 0) 'CPU-only reboot must require the management API'
+        $script:MockStates['02']='RebootRequired'; $script:MockStates['10']='Done'
         @{BootId='boot-previous';Pending=@('02');AutoReboots=1}|ConvertTo-Json|Set-Content $state -Encoding UTF8
         $rc=Invoke-EdgeBoxSetup -Resume -NoConfirm
         Assert ($rc -eq 1 -and $script:Removed) 'unchanged settings after reboot must stop the restart loop'
@@ -134,18 +141,102 @@ try {
         function Stop-VM {param($VM,[switch]$AsJob,[switch]$Confirm,$ErrorAction) if(-not $AsJob -or $VM.Id -ne 'fixture-id'){throw 'unbound or synchronous stop'};$script:StopCalls++;[pscustomobject]@{State='Running'} }
         function Stop-Job {}
         function Remove-Job {}
-        Wait-EdgeBoxShutdown -VMName fixture -Log {}
+        $script:popupEvents=@()
+        function Start-EdgeBoxShutdownProgress([string]$NextAction) {
+            $script:popupEvents+=@($NextAction)
+            $signal=[pscustomobject]@{}
+            $signal | Add-Member ScriptMethod Set { $script:popupEvents+='closed'; return $true }
+            $signal | Add-Member ScriptMethod Dispose { $script:popupEvents+='disposed' }
+            $signal
+        }
+        $confirmed=Wait-EdgeBoxShutdown -VMName fixture -NextAction 'Windows will shut down' -PassThruId -Log {}
+        Assert ($confirmed -eq 'fixture-id') 'caller must retain the confirmed guest ID'
+        Assert (($script:popupEvents -join ',') -eq 'Windows will shut down,closed,disposed') 'nonmodal progress must close after positive confirmation'
         Assert ($script:StopCalls -eq 1) 'running VM receives normal async shutdown'
         $script:Scenario='off';$script:StopCalls=0
         Wait-EdgeBoxShutdown -VMName fixture -Log {}
         Assert ($script:StopCalls -eq 0) 'already off VM requires no stop'
         foreach($scenario in @('missing','saved','timeout')){
             $script:Scenario=$scenario;$script:Calls=0;$script:StopCalls=0;$failed=$false
-            try{Wait-EdgeBoxShutdown -VMName fixture -TimeoutSec 1 -Log {}}catch{$failed=$true}
+            $script:popupEvents=@()
+            try{Wait-EdgeBoxShutdown -VMName fixture -TimeoutSec 1 -NextAction 'fixture next step' -Log {}}catch{$failed=$true}
             Assert $failed ('unsafe state must block host shutdown: '+$scenario)
+            Assert (($script:popupEvents -join ',') -eq 'fixture next step,closed,disposed') 'failure and timeout must close the progress window'
         }
         Write-Host 'PASS: shutdown, already off, missing/saved VM, real timeout, no forced power-off'
     }
+    & $shutdown {
+        param($ProjectRoot)
+        function Assert($ok,[string]$why) { if (-not $ok) { throw "TEST FAILED: $why" } }
+        function Assert-Blocked([scriptblock]$Action,[string]$why) {
+            $blocked=$false
+            try { & $Action } catch { $blocked=$true }
+            Assert ($blocked -and $script:restartCount -eq 0) $why
+        }
+        $script:restartCount=0; $script:stopCount=0; $script:apiDown=$false
+        function Start-EdgeBoxShutdownProgress { return } # headless/hidden-UI startup failure must not affect VM safety
+        $script:guest=[pscustomobject]@{Name='Custom Box';Id='original';State='Running'}
+        $script:inventory=@($script:guest)
+        function Get-VM { if ($script:apiDown) { throw 'unavailable VM API' }; $script:inventory }
+        function Stop-VM { param($VM,[switch]$AsJob,[switch]$Confirm) $script:stopCount++; $VM.State='Off' }
+        function Restart-Computer { param([switch]$Force) $script:restartCount++; if ($Force) { throw 'forced restart' } }
+        Invoke-EdgeBoxHostRestart -VMName 'Custom Box' -ExpectedVmId original
+        Assert ($script:restartCount -eq 1 -and $script:stopCount -eq 1) 'selected running guest must stop normally before restarting'
+        $script:restartCount=0
+        Assert-Blocked { Invoke-EdgeBoxHostRestart -VMName 'Custom Box' -ExpectedVmId replacement } 'a changed VM identity blocks restart'
+        Assert-Blocked { Invoke-EdgeBoxHostRestart -VMName 'Custom Box' -BeforeRestart { $script:guest.State='Running' } } 'guest restarting before host restart blocks the host'
+        Assert-Blocked { Invoke-EdgeBoxHostRestart } 'an unrelated running VM cannot be implicitly stopped'
+        Assert ($script:stopCount -eq 1) 'an unrelated VM must receive no stop request'
+        $script:apiDown=$true; $script:hypervisor=$true; $script:workers=@()
+        function Get-CimInstance { param($ClassName,$Filter)
+            switch ($ClassName) {
+                'Win32_ComputerSystem' { [pscustomobject]@{HypervisorPresent=$script:hypervisor} }
+                'Win32_Process' { $script:workers }
+                'Win32_Service' {}
+                default { throw "unexpected class: $ClassName" }
+            }
+        }
+        function Get-WindowsOptionalFeature { [pscustomobject]@{State='EnablePending'} }
+        Assert-Blocked { Invoke-EdgeBoxHostRestart } 'an unavailable management API blocks normal reboot'
+        $script:workers=@('worker')
+        Assert-Blocked { Invoke-EdgeBoxHostRestart -HyperVFirstBoot } 'pending Hyper-V installation cannot hide a VM worker'
+        Assert-Blocked { Invoke-EdgeBoxHostRestart -VMName 'Custom Box' -HyperVFirstBoot } 'first boot cannot bypass a selected identity'
+        $script:workers=@()
+        Invoke-EdgeBoxHostRestart -HyperVFirstBoot
+        Assert ($script:restartCount -eq 1) 'initial enable-pending installation with no active service or worker can restart'
+
+        $nativePath=Join-Path $ProjectRoot 'windows-host\04-reboot-to-field-native.ps1'
+        $nativeAst=[Management.Automation.Language.Parser]::ParseFile($nativePath,[ref]$null,[ref]$null)
+        foreach ($name in @('Get-NativeBootSequence','Invoke-EdgeBoxNativeRestart')) {
+            $node=$nativeAst.Find({param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq $name},$true)
+            . ([scriptblock]::Create($node.Extent.Text))
+        }
+        $script:apiDown=$false; $script:guest.State='Off'; $script:restartCount=0
+        $entry='{aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa}'
+        $prior=@('{bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb}','{cccccccc-cccc-cccc-cccc-cccccccccccc}')
+        $script:queue=$prior; $script:bcdFail=$true; $script:guestStartsDuringBcd=$true
+        function bcdedit.exe {
+            $global:LASTEXITCODE=0
+            switch ($args[0]) {
+                '/enum' { if ($script:queue.Count) { 'bootsequence   '+($script:queue -join "`r`n               ") } }
+                '/deletevalue' { $script:queue=@() }
+                '/set' {
+                    if ($script:bcdFail) { $global:LASTEXITCODE=5; return }
+                    $script:queue=@($args | Select-Object -Skip 3)
+                    if ($script:guestStartsDuringBcd -and $script:queue[0] -eq $entry) { $script:guest.State='Running' }
+                }
+                default { throw 'unexpected BCD operation' }
+            }
+        }
+        Assert-Blocked { Invoke-EdgeBoxNativeRestart $entry 'Custom Box' original } 'failed firmware update blocks Windows restart'
+        $script:bcdFail=$false
+        Assert-Blocked { Invoke-EdgeBoxNativeRestart $entry 'Custom Box' original } 'a guest restarting during BCD setup blocks Windows restart'
+        Assert (($script:queue -join ',') -eq ($prior -join ',')) 'an aborted native boot must restore the full previous firmware sequence'
+        $script:guestStartsDuringBcd=$false
+        Invoke-EdgeBoxNativeRestart $entry 'Custom Box' original
+        Assert ($script:restartCount -eq 1 -and $script:queue.Count -eq 1 -and $script:queue[0] -eq $entry) 'native boot with a confirmed stopped VM must request exactly one restart'
+        Write-Host 'PASS: host restart, first Hyper-V boot, custom VM identity and native boot rollback with mocked OS calls'
+    } $project
     Remove-Module $shutdown
     Write-Host 'All tests passed.' -ForegroundColor Green
 } finally {

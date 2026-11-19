@@ -12,6 +12,7 @@
 
 .EXAMPLE
     .\04-reboot-to-field-native.ps1 -Setup   # 初回のみ: 起動エントリの選択とショートカット作成
+    .\04-reboot-to-field-native.ps1 -Setup -VMName "Field VM"   # 登録名が EdgeBox と異なる場合
     .\04-reboot-to-field-native.ps1          # 実行: Edge Box 単独起動へ切り替え
 
 .NOTES
@@ -19,26 +20,14 @@
 #>
 [CmdletBinding()]
 param(
-    [string]$VMName = "EdgeBox",
+    [ValidatePattern('^[^"\r\n]+$')][string]$VMName = "EdgeBox",
+    [string]$ExpectedVmId,
     [switch]$Setup,
     [switch]$NoConfirm
 )
 
 $ErrorActionPreference = "Stop"
 
-# -VMName を明示していない場合、既定名の Edge Box が無ければ、Edge Box のディスク
-# (物理ディスクのパススルー) を持つ Edge Box を探して使う。00-field-launcher.ps1 と
-# 同じ考え方で、登録名が「EdgeBox」でなくても (旧名称のままでも) そのまま動くようにする
-if (-not $PSBoundParameters.ContainsKey("VMName") -and
-    -not (Get-VM -Name $VMName -ErrorAction SilentlyContinue)) {
-    $foundVms = @()
-    foreach ($v in @(Get-VM -ErrorAction SilentlyContinue)) {
-        $pt = @(Get-VMHardDiskDrive -VMName $v.Name -ErrorAction SilentlyContinue |
-            Where-Object { $null -ne $_.DiskNumber })
-        if ($pt.Count -gt 0) { $foundVms += $v }
-    }
-    if ($foundVms.Count -eq 1) { $VMName = $foundVms[0].Name }
-}
 $ConfFile = Join-Path $PSScriptRoot "field-boot-entry.conf"
 
 $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
@@ -76,6 +65,11 @@ if (-not $Setup -and -not (Test-Path $ConfFile)) {
 }
 
 if ($Setup) {
+    $selected=@(Get-VM -ErrorAction Stop | Where-Object Name -eq $VMName)
+    if ($selected.Count -ne 1 -or -not $selected[0].Id -or ($ExpectedVmId -and [string]$selected[0].Id -ne $ExpectedVmId)) {
+        throw '対象の Edge Box を一意に確認できません。登録名を -VMName で指定してください。'
+    }
+    $ExpectedVmId=([guid]$selected[0].Id).ToString('D')
     if (Test-Path $ConfFile) {
         # すでに選択済みなら聞き直さない (アイコン・タスクの作り直しだけ行う)
         Write-Host "起動先は選択済みのため、そのまま使います: $((Get-Content $ConfFile -First 1).Trim())" -ForegroundColor Cyan
@@ -111,7 +105,7 @@ if ($Setup) {
     # --- UAC 確認なしで実行できるよう、管理者権限付きタスク + それを起動するアイコンを作成 ---
     $taskName = "EdgeBox-Native-Boot"
     $action = New-ScheduledTaskAction -Execute "powershell.exe" `
-        -Argument "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$PSCommandPath`""
+        -Argument "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$PSCommandPath`" -VMName `"$VMName`" -ExpectedVmId $ExpectedVmId"
     $ts = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -ExecutionTimeLimit (New-TimeSpan -Hours 1)
     Register-ScheduledTask -TaskName $taskName -Action $action -Settings $ts -RunLevel Highest -Force | Out-Null
 
@@ -130,7 +124,7 @@ if ($Setup) {
     if ($Setup) { exit 0 }
 }
 
-$guid = (Get-Content $ConfFile -First 1).Trim()
+$guid = ([guid]::Parse((Get-Content $ConfFile -First 1).Trim())).ToString('B')
 
 Write-Host "==============================================" -ForegroundColor Yellow
 Write-Host " Edge Box を単独起動します (Windows は終了)"
@@ -150,32 +144,42 @@ if (-not $NoConfirm) {
     if ($r -ne [System.Windows.Forms.DialogResult]::Yes) { exit 0 }
 }
 
-# --- Edge Box を安全に停止 (実行中なら) ---
-# コンソール画面 (vmconnect) を先に閉じる (停止後の自動再起動を防ぐ)
-Get-Process vmconnect -ErrorAction SilentlyContinue | ForEach-Object { [void]$_.CloseMainWindow() }
-Start-Sleep -Seconds 2
-Get-Process vmconnect -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-
-$vm = Get-VM -Name $VMName -ErrorAction SilentlyContinue
-if ($vm -and $vm.State -eq "Running") {
-    Write-Host "Edge Box をシャットダウンしています..."
-    Stop-VM -Name $VMName
-    $sw = [System.Diagnostics.Stopwatch]::StartNew()
-    while ($sw.Elapsed.TotalSeconds -lt 180) {
-        if ((Get-VM -Name $VMName).State -eq "Off") { break }
-        Start-Sleep -Seconds 3
-    }
-    if ((Get-VM -Name $VMName).State -ne "Off") {
-        [System.Windows.Forms.MessageBox]::Show(
-            "Edge Box が3分以内に停止しませんでした。`n単独起動を中止します。コンソール画面で状態を確認してから再実行してください。",
-            "Edge Box 単独起動",
-            [System.Windows.Forms.MessageBoxButtons]::OK,
-            [System.Windows.Forms.MessageBoxIcon]::Warning) | Out-Null
-        exit 1
+function Get-NativeBootSequence {
+    $output=(& bcdedit.exe /enum '{fwbootmgr}' /v | Out-String)
+    if ($LASTEXITCODE -ne 0) { throw 'UEFI の現在の起動順を確認できません。' }
+    if ($output -notmatch '(?im)^\s*bootsequence\b') { return }
+    $guidPattern='\{[0-9a-fA-F-]{36}\}'
+    $sequence=[regex]::Match($output,"(?im)^[ \t]*bootsequence[ \t]+($guidPattern(?:[ \t]*\r?\n[ \t]+$guidPattern)*)[ \t]*\r?$")
+    if (-not $sequence.Success) { throw 'UEFI の次回起動順を読み取れません。' }
+    foreach ($id in [regex]::Matches($sequence.Groups[1].Value,$guidPattern)) { ([guid]::Parse($id.Value)).ToString('B') }
+}
+function Invoke-EdgeBoxNativeRestart([string]$BootEntry,[string]$TargetName,[string]$TargetId) {
+    $change=@{Applied=$false;Previous=@()}
+    try {
+        Invoke-EdgeBoxHostRestart -VMName $TargetName -ExpectedVmId $TargetId -BeforeRestart {
+            $change.Previous=@(Get-NativeBootSequence)
+            if ($change.Previous.Count -eq 1 -and $change.Previous[0] -eq $BootEntry) { return }
+            & bcdedit.exe /set '{fwbootmgr}' bootsequence $BootEntry | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw 'UEFI の次回起動先を設定できません。' }
+            $change.Applied=$true
+        }
+    } catch {
+        $reason=$_.Exception.Message
+        if ($change.Applied) {
+            $current=@(Get-NativeBootSequence)
+            if ($current.Count -ne 1 -or $current[0] -ne $BootEntry) { throw "$reason 次回起動先が変更されています。UEFI 設定を確認してください。" }
+            if ($change.Previous.Count) {
+                $previous=$change.Previous
+                & bcdedit.exe /set '{fwbootmgr}' bootsequence @previous | Out-Null
+            } else { & bcdedit.exe /deletevalue '{fwbootmgr}' bootsequence | Out-Null }
+            if ($LASTEXITCODE -ne 0) { throw "$reason 次回起動先を元に戻せません。UEFI 設定を確認してください。" }
+        }
+        throw $reason
     }
 }
-
-# --- 次回のみの起動先を設定して再起動 ---
-bcdedit /set "{fwbootmgr}" bootsequence $guid | Out-Null
-Write-Host "次回起動先を Edge Box に設定しました。5秒後に再起動します..." -ForegroundColor Green
-shutdown /r /t 5 /c "Edge Box 単独起動のため再起動します"
+Import-Module (Join-Path $PSScriptRoot 'vm-shutdown.psm1') -ErrorAction Stop
+try { Invoke-EdgeBoxNativeRestart $guid $VMName $ExpectedVmId }
+catch {
+    [System.Windows.Forms.MessageBox]::Show($_.Exception.Message,'Edge Box 単独起動','OK','Warning') | Out-Null
+    exit 1
+}
