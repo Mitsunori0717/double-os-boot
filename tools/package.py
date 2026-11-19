@@ -48,7 +48,15 @@ REQUIRED_GROUPS = {
     'tests': ('test_package.py', 'test_qemu_integration.py'),
 }
 REQUIRED.update(f'{folder}/{name}' for folder, names in REQUIRED_GROUPS.items() for name in names)
-REQUIRED.add('start.cmd')
+REQUIRED.update(('start.cmd',
+                 'windows-cpu-partition/cpu-tool.psm1',
+                 'windows-host/cpu-boot.psm1',
+                 'windows-host/tests/test-cpu-preparation.ps1',
+                 'windows-host/tests/test-start-safety.ps1',
+                 'windows-host/field-start.cmd', 'windows-host/fix-black-screen.cmd',
+                 'windows-host/04-reboot-to-field-native.ps1','windows-host/07-boot-appearance.ps1',
+                 'windows-host/09-rename-to-edgebox.ps1','windows-host/99-fix-black-screen.ps1',
+                 'docs/FRESH-INSTALL.md','docs/HARDWARE-ACCEPTANCE.md','VALIDATION.md','CHANGELOG.md'))
 SOURCE_SUFFIXES = {'.md', '.ps1', '.psm1', '.cmd', '.py', '.cs', '.manifest', '.yml'}
 ASSETS = {
     'windows-cpu-partition/fonts/Michroma-Regular.ttf',

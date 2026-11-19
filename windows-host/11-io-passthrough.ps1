@@ -48,16 +48,8 @@ function Test-Admin {
 }
 if (-not (Test-Admin)) { Write-Error "管理者権限で実行してください (管理者の PowerShell)。"; exit 1 }
 
-# 登録名が EdgeBox でなくても、Edge Box のディスク (物理ディスク直結) を持つ登録を探す
-if (-not $PSBoundParameters.ContainsKey("VMName") -and
-    -not (Get-VM -Name $VMName -ErrorAction SilentlyContinue)) {
-    $foundVms = @()
-    foreach ($v in @(Get-VM -ErrorAction SilentlyContinue)) {
-        $pt = @(Get-VMHardDiskDrive -VMName $v.Name -ErrorAction SilentlyContinue |
-            Where-Object { $null -ne $_.DiskNumber })
-        if ($pt.Count -gt 0) { $foundVms += $v }
-    }
-    if ($foundVms.Count -eq 1) { $VMName = $foundVms[0].Name }
+if ([string]::IsNullOrWhiteSpace($VMName) -or [Management.Automation.WildcardPattern]::ContainsWildcardCharacters($VMName)) {
+    throw '対象 VM の正確な登録名を指定してください。'
 }
 $vm = Get-VM -Name $VMName -ErrorAction SilentlyContinue
 if (-not $vm) { Write-Error "登録 '$VMName' が見つかりません。"; exit 1 }
@@ -70,11 +62,14 @@ if ($ApplyPending) {
     if ([string]$vm.State -ne "Off") { exit 0 }    # 停止中にしか変えられない。次の機会まで持ち越す
     try {
         $pend = Get-Content $PendingFile -Raw -Encoding UTF8 | ConvertFrom-Json
+        if (-not $pend.VMId -or [string]$pend.VMId -ne [string]$vm.Id) {
+            throw '予約した対象の VM ID と一致しません。対象を確認して予約を作り直してください。'
+        }
         $done = @()
         if ($pend.FixMemory) {
             $b = [long]$pend.MemoryBytes
             if ($b -le 0) { $b = [long](Get-VMMemory -VMName $VMName).Startup }
-            Set-VMMemory -VMName $VMName -DynamicMemoryEnabled $false -StartupBytes $b
+            Set-VMMemory -VM $vm -DynamicMemoryEnabled $false -StartupBytes $b
             $done += ("メモリを固定 {0:N1} GB にしました" -f ($b / 1GB))
         }
         Remove-Item $PendingFile -Force -ErrorAction SilentlyContinue
@@ -239,7 +234,7 @@ if (-not $needMem -and -not $needSw -and -not $needPf -and -not $needNic) {
 if ($AtNextStop) {
     if ($needMem) {
         $bytes = if ($MemoryGB -gt 0) { [long]$MemoryGB * 1GB } else { [long]$mem.Startup }
-        @{ FixMemory = $true; MemoryBytes = $bytes; Created = (Get-Date).ToString("s") } |
+        @{ VMId = [string]$vm.Id; FixMemory = $true; MemoryBytes = $bytes; Created = (Get-Date).ToString("s") } |
             ConvertTo-Json | Set-Content -Path $PendingFile -Encoding UTF8
         Line ("予約しました: 次に Edge Box が止まったときに、メモリを固定 {0:N1} GB にします。" -f ($bytes / 1GB)) "Green"
         Line "  (『全部シャットダウン』『Edge Box 再起動』、電源 ON 直後の起動処理のどれでも反映されます)" "DarkGray"
@@ -338,20 +333,10 @@ if ($canSriov) {
 
 # --- 起動 (停止したときだけ。CPU 完全分離の起動処理と同じ順番で) ---
 if ($needStop -and $wasRunning -and -not $NoRestart) {
-    try {
-        $cpuDir = Join-Path (Split-Path $PSScriptRoot -Parent) "windows-cpu-partition"
-        $cfgF = Join-Path $cpuDir "cpu-partition.json"; $ps1 = Join-Path $cpuDir "cpu-partition.ps1"
-        if ((Test-Path $cfgF) -and (Test-Path $ps1)) {
-            $c = Get-Content $cfgF -Raw -Encoding UTF8 | ConvertFrom-Json
-            if ($c.Mode -eq "full") {
-                $p = Start-Process powershell.exe -WindowStyle Hidden -PassThru `
-                    -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$ps1`" -BootApply -Quiet"
-                if (-not $p.WaitForExit(240000)) { try { $p.Kill() } catch { } }
-            }
-        }
-    } catch { }
+    Import-Module (Join-Path $PSScriptRoot 'cpu-boot.psm1') -ErrorAction Stop
+    Invoke-EdgeBoxCpuPreparation -VMName $VMName | Out-Null
     Line "Edge Box を起動します..." "White"
-    Start-VM -Name $VMName -ErrorAction Stop
+    Start-VM -VM $vm -ErrorAction Stop
     $s03 = Join-Path $PSScriptRoot "03-field-display-kiosk.ps1"
     if (Test-Path $s03) {
         Start-Process powershell.exe -WindowStyle Hidden -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$s03`" -VMName `"$VMName`" -NoSplash"

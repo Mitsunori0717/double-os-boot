@@ -1,4 +1,4 @@
-# Edge Box 2026.11.18.1 source distribution; explicit allowlist.
+# Edge Box 2026.11.19.1 source distribution; explicit allowlist.
 .gitignore
 CHANGELOG.md
 README.md
@@ -117,3 +117,7 @@ windows-host/startup-cover.cs
 windows-host/tests/test-launcher-safety.ps1
 windows-host/vm-create-safety.psm1
 windows-host/vm-shutdown.psm1
+windows-cpu-partition/cpu-tool.psm1
+windows-host/cpu-boot.psm1
+windows-host/tests/test-cpu-preparation.ps1
+windows-host/tests/test-start-safety.ps1

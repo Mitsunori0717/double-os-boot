@@ -1,11 +1,11 @@
 ﻿#requires -Version 5.1
 # Read-only disk identity/use checks shared by setup, creation and the launcher.
-function Get-EdgeBoxCreateDisk {
+function Get-EdgeBoxHostDisk {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory=$true)][ValidateRange(0,2147483647)][int]$DiskNumber,
         [string]$ExpectedUniqueId='', [UInt64]$ExpectedSize=0,
-        [string]$ExpectedSerialNumber='', [string]$AllowedVmId=''
+        [string]$ExpectedSerialNumber=''
     )
     $disks=@(Get-Disk -ErrorAction Stop)
     $matching=@($disks | Where-Object Number -eq $DiskNumber)
@@ -28,6 +28,17 @@ function Get-EdgeBoxCreateDisk {
             if ($path -and [string]$path -notmatch '^\\\\\?\\Volume\{[^}]+\}\\$') { throw '対象ディスクにフォルダーのマウントがあります。' }
         }
     }
+    $disk
+}
+
+function Get-EdgeBoxCreateDisk {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory=$true)][ValidateRange(0,2147483647)][int]$DiskNumber,
+        [string]$ExpectedUniqueId='', [UInt64]$ExpectedSize=0,
+        [string]$ExpectedSerialNumber='', [string]$AllowedVmId=''
+    )
+    $disk=Get-EdgeBoxHostDisk -DiskNumber $DiskNumber -ExpectedUniqueId $ExpectedUniqueId -ExpectedSize $ExpectedSize -ExpectedSerialNumber $ExpectedSerialNumber
     foreach ($vm in @(Get-VM -ErrorAction Stop)) {
         $attached=@(Get-VMHardDiskDrive -VMName $vm.Name -ErrorAction Stop | Where-Object { $null -ne $_.DiskNumber -and $_.DiskNumber -eq $DiskNumber })
         if ($attached.Count -and (-not $AllowedVmId -or [string]$vm.Id -ne $AllowedVmId)) { throw "ディスク $DiskNumber は別 VM '$($vm.Name)' が使用しています。接続を自動で外しません。" }
@@ -88,4 +99,4 @@ function Undo-EdgeBoxVmCreation {
     }
     [pscustomobject]@{VmRemoved=$vmRemoved;DiskOnline=$diskOnline;SwitchRemoved=$switchRemoved}
 }
-Export-ModuleMember -Function Get-EdgeBoxCreateDisk,Undo-EdgeBoxVmCreation
+Export-ModuleMember -Function Get-EdgeBoxHostDisk,Get-EdgeBoxCreateDisk,Undo-EdgeBoxVmCreation

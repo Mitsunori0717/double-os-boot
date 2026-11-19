@@ -11,6 +11,7 @@
 [CmdletBinding()]
 param(
     [string]$VMName = "EdgeBox",
+    [string]$ExpectedVmId,
     [switch]$Stop,
     [switch]$Status,
     # ディスクが「別のプロセスが使用中」で起動できないときの自動修復
@@ -23,20 +24,6 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-
-# -VMName を明示していない場合、既定名の Edge Box が無ければ、Edge Box のディスク
-# (物理ディスクのパススルー) を持つ Edge Box を探して使う。00-field-launcher.ps1 と
-# 同じ考え方で、登録名が「EdgeBox」でなくても (旧名称のままでも) そのまま動くようにする
-if (-not $PSBoundParameters.ContainsKey("VMName") -and
-    -not (Get-VM -Name $VMName -ErrorAction SilentlyContinue)) {
-    $foundVms = @()
-    foreach ($v in @(Get-VM -ErrorAction SilentlyContinue)) {
-        $pt = @(Get-VMHardDiskDrive -VMName $v.Name -ErrorAction SilentlyContinue |
-            Where-Object { $null -ne $_.DiskNumber })
-        if ($pt.Count -gt 0) { $foundVms += $v }
-    }
-    if ($foundVms.Count -eq 1) { $VMName = $foundVms[0].Name }
-}
 
 function Test-Admin {
     ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
@@ -51,33 +38,23 @@ if (-not (Test-Admin)) {
     exit 1
 }
 
-# Windows のシステムディスク (C:)。ディスクをオフラインにする前の安全確認に使う
-$SysDisk = -1
-try { $SysDisk = [int](Get-Partition -DriveLetter C -ErrorAction Stop).DiskNumber } catch { $SysDisk = -1 }
-
+Import-Module (Join-Path $PSScriptRoot 'vm-create-safety.psm1') -Force -ErrorAction Stop
 
 # CPU コア分割ツール (別フォルダ windows-cpu-partition) が full モードなら、Edge Box を起動する前に
 # 起動タスクと同じ処理を呼び、CPU グループに固定してから起動する (固定は Edge Box 停止中に確実に効く)。
 # ツールが無ければ何もしない (互いに独立。あるときだけ順番を譲る)。戻り値: 呼んだか
 function Invoke-CpuPartitionBoot {
-    try {
-        $cpuDir = Join-Path (Split-Path $PSScriptRoot -Parent) "windows-cpu-partition"
-        $cfgF = Join-Path $cpuDir "cpu-partition.json"; $ps1 = Join-Path $cpuDir "cpu-partition.ps1"
-        if (-not (Test-Path $cfgF) -or -not (Test-Path $ps1)) { return $false }
-        $c = Get-Content $cfgF -Raw -Encoding UTF8 | ConvertFrom-Json
-        if ($c.Mode -ne "full") { return $false }
-        $p = Start-Process powershell.exe -WindowStyle Hidden -PassThru `
-            -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$ps1`" -BootApply -Quiet"
-        if (-not $p.WaitForExit(240000)) { try { $p.Kill() } catch { } }
-        return $true
-    } catch { return $false }
+    Import-Module (Join-Path $PSScriptRoot 'cpu-boot.psm1') -Force -ErrorAction Stop
+    Invoke-EdgeBoxCpuPreparation -VMName $VMName
 }
 
-$vm = Get-VM -Name $VMName -ErrorAction SilentlyContinue
-if (-not $vm) {
+$matches = @(Get-VM -ErrorAction Stop | Where-Object { $_.Name -eq $VMName })
+if ($matches.Count -ne 1) {
     Write-Error "登録 '$VMName' がありません。01-create-field-vm.ps1 で作成してください。"
     exit 1
 }
+$vm=$matches[0]
+if ($ExpectedVmId -and [string]$vm.Id -ne $ExpectedVmId) { throw 'SELECTED_VM_ID_CHANGED' }
 
 if ($Status) {
     $vm | Format-Table Name, State, CPUUsage, MemoryAssigned, Uptime
@@ -85,12 +62,8 @@ if ($Status) {
 }
 
 if ($Stop) {
-    if ($vm.State -eq "Running") {
-        Stop-VM -Name $VMName   # ACPI シャットダウン要求 (Edge Box 側が正常終了処理を行う)
-        Write-Host "シャットダウンを要求しました。"
-    } else {
-        Write-Host "Edge Box は起動していません ($($vm.State))。"
-    }
+    Import-Module (Join-Path $PSScriptRoot 'vm-shutdown.psm1') -Force -ErrorAction Stop
+    Wait-EdgeBoxShutdown -VMName $VMName -ExpectedVmId ([string]$vm.Id)
     exit 0
 }
 
@@ -99,68 +72,67 @@ if ($Stop) {
 #  (パススルー ディスクは「Windows からオフライン」かつ「1 つの Edge Box だけが接続」
 #   でないと開けず、Start-VM が 0x80070020 で失敗する)
 # ============================================================
-function Get-PassthroughDisks([string]$Name) {
-    @(Get-VMHardDiskDrive -VMName $Name -ErrorAction SilentlyContinue |
-        Where-Object { $null -ne $_.DiskNumber })
+function Get-PassthroughDisks($VM) {
+    @(Get-VMHardDiskDrive -VM $VM -ErrorAction Stop | Where-Object { $null -ne $_.DiskNumber })
 }
 
 function Test-DiskReady([switch]$Fix) {
-    $problems = @()
-    $mine = Get-PassthroughDisks $VMName
-    if ($mine.Count -eq 0) { return $problems }   # ファイル形式のディスク運用なら対象外
+    $current=Get-VM -Id $vm.Id -ErrorAction Stop
+    if([string]$current.Id -ne [string]$vm.Id){throw 'SELECTED_VM_IDENTITY_CHANGED'}
+    $mine=@(Get-PassthroughDisks $current)
+    if($mine.Count -eq 0){return @()} # VHD/VHDX-backed guests need no physical repair.
+    if($Fix -and [string]$current.State -ne 'Off'){throw 'REPAIR_REQUIRES_SELECTED_VM_OFF'}
+    $problems=@();$detach=@();$snapshots=@{};$blocked=$false
+    $diskNumbers=@($mine|Select-Object -ExpandProperty DiskNumber -Unique)
 
-    # 1) 同じディスクを二重に接続していないか (作成をやり直したときに起きやすい)
-    foreach ($g in ($mine | Group-Object DiskNumber)) {
-        if ($g.Count -le 1) { continue }
-        $problems += "ディスク $($g.Name) が $($g.Count) 回接続されています (二重接続)"
-        if ($Fix) {
-            foreach ($extra in @($g.Group | Select-Object -Skip 1)) {
-                Remove-VMHardDiskDrive -VMName $VMName `
-                    -ControllerType $extra.ControllerType `
-                    -ControllerNumber $extra.ControllerNumber `
-                    -ControllerLocation $extra.ControllerLocation
-                Write-Host "  余分な接続を外しました (ディスク $($g.Name))" -ForegroundColor Green
-            }
+    # Complete every read-only host/disk/owner check before changing any attachment.
+    foreach($number in $diskNumbers){
+        $disk=Get-EdgeBoxHostDisk -DiskNumber $number
+        $snapshots[[string]$number]=[pscustomobject]@{Number=$disk.Number;UniqueId=$disk.UniqueId;Size=$disk.Size;SerialNumber=$disk.SerialNumber}
+        if(-not $disk.IsOffline){$problems+=('ディスク '+$number+' が Windows でオンラインです')}
+    }
+    foreach($group in @($mine|Group-Object DiskNumber)){
+        if($group.Count -gt 1){
+            $problems+=('ディスク '+$group.Name+' が重複接続されています')
+            foreach($extra in @($group.Group|Select-Object -Skip 1)){$detach+=@{VMId=[string]$current.Id;Drive=$extra}}
         }
     }
-
-    $diskNums = @($mine | Select-Object -ExpandProperty DiskNumber -Unique)
-
-    # 2) 他の Edge Box が同じ物理ディスクを掴んでいないか (旧構成の Edge Box が残っている等)
-    foreach ($other in @(Get-VM | Where-Object { $_.Name -ne $VMName })) {
-        foreach ($d in (Get-PassthroughDisks $other.Name)) {
-            if ($diskNums -notcontains $d.DiskNumber) { continue }
-            if ($Fix -and $DetachOthers) {
-                if ($other.State -ne "Off") {
-                    $problems += "登録『$($other.Name)』が動作中のため接続を外せません (先に停止してください)"
-                    continue
-                }
-                Remove-VMHardDiskDrive -VMName $other.Name `
-                    -ControllerType $d.ControllerType `
-                    -ControllerNumber $d.ControllerNumber `
-                    -ControllerLocation $d.ControllerLocation
-                Write-Host "  登録『$($other.Name)』からディスク $($d.DiskNumber) の接続を外しました (Edge Box とデータは残ります)" -ForegroundColor Green
-            } else {
-                $problems += "登録『$($other.Name)』も同じディスク $($d.DiskNumber) を使っています (同時には使えません)"
-            }
+    foreach($other in @(Get-VM -ErrorAction Stop|Where-Object {[string]$_.Id -ne [string]$current.Id})){
+        foreach($drive in @(Get-PassthroughDisks $other)){
+            if($diskNumbers -notcontains $drive.DiskNumber){continue}
+            $problems+=('登録『'+$other.Name+'』もディスク '+$drive.DiskNumber+' を使用しています')
+            if($Fix -and $DetachOthers -and [string]$other.State -eq 'Off'){
+                $detach+=@{VMId=[string]$other.Id;Drive=$drive}
+            }else{$blocked=$true}
         }
     }
+    if(-not $Fix -or $blocked){return $problems}
+    foreach($item in $detach){
+        if([string]::IsNullOrWhiteSpace([string]$item.Drive.Id)){throw 'DISK_ATTACHMENT_ID_UNKNOWN'}
+    }
 
-    # 3) Windows 側でオンラインのままになっていないか
-    foreach ($n in $diskNums) {
-        $d = Get-Disk -Number $n -ErrorAction SilentlyContinue
-        if ($d -and -not $d.IsOffline) {
-            $problems += "ディスク $n が Windows でオンラインのままです"
-            if ($Fix) {
-                # 万一 Edge Box に誤ったディスクが接続されていても、Windows 自身の
-                # ディスクだけは絶対にオフラインにしない
-                if ($n -eq $SysDisk) {
-                    $problems += "ディスク $n は Windows のシステムディスクです。オフラインにしません (Edge Box の設定を見直してください)"
-                } else {
-                    Set-Disk -Number $n -IsOffline $true
-                    Write-Host "  ディスク $n をオフラインにしました" -ForegroundColor Green
-                }
-            }
+    foreach($item in $detach){
+        $owner=Get-VM -Id $item.VMId -ErrorAction Stop
+        if([string]$owner.Id -ne $item.VMId -or [string]$owner.State -ne 'Off'){throw 'DISK_OWNER_CHANGED_OR_RUNNING'}
+        $snapshot=$snapshots[[string]$item.Drive.DiskNumber]
+        $null=Get-EdgeBoxHostDisk -DiskNumber $snapshot.Number -ExpectedUniqueId $snapshot.UniqueId -ExpectedSize $snapshot.Size -ExpectedSerialNumber $snapshot.SerialNumber
+        $matches=@(Get-PassthroughDisks $owner|Where-Object {
+            [string]$_.Id -ceq [string]$item.Drive.Id -and $_.DiskNumber -eq $snapshot.Number
+        })
+        if($matches.Count -ne 1){throw 'DISK_ATTACHMENT_CHANGED'}
+        Remove-VMHardDiskDrive -VMHardDiskDrive $matches[0] -ErrorAction Stop
+        Write-Host ('  確認済みの重複・指定接続を外しました: '+$owner.Name+' / ディスク '+$snapshot.Number) -ForegroundColor Green
+    }
+    foreach($snapshot in $snapshots.Values){
+        $owner=Get-VM -Id $current.Id -ErrorAction Stop
+        if([string]$owner.Id -ne [string]$current.Id -or [string]$owner.State -ne 'Off'){throw 'SELECTED_VM_CHANGED_OR_RUNNING'}
+        # Full ownership guard is required after detach and immediately before offline.
+        $disk=Get-EdgeBoxCreateDisk -DiskNumber $snapshot.Number -ExpectedUniqueId $snapshot.UniqueId -ExpectedSize $snapshot.Size -ExpectedSerialNumber $snapshot.SerialNumber -AllowedVmId ([string]$current.Id)
+        if(-not $disk.IsOffline){
+            Set-Disk -Number $disk.Number -IsOffline $true -ErrorAction Stop
+            $disk=Get-EdgeBoxCreateDisk -DiskNumber $snapshot.Number -ExpectedUniqueId $snapshot.UniqueId -ExpectedSize $snapshot.Size -ExpectedSerialNumber $snapshot.SerialNumber -AllowedVmId ([string]$current.Id)
+            if(-not $disk.IsOffline){throw 'DISK_OFFLINE_NOT_CONFIRMED'}
+            Write-Host ('  ディスク '+$disk.Number+' をオフラインにしました') -ForegroundColor Green
         }
     }
     return $problems
@@ -179,25 +151,25 @@ function Show-DiskHelp($Problems) {
     Write-Host "  1. 自動で直せる分を直す : .\02-start-field-vm.ps1 -Repair"
     Write-Host "     他 Edge Box の接続も外す   : .\02-start-field-vm.ps1 -Repair -DetachOthers"
     Write-Host "                            (その Edge Box とディスクの中身は消えません)"
-    Write-Host "  2. WSL を切り離す       : wsl --unmount \\.\PHYSICALDRIVE0   (その後 wsl --shutdown)"
+    Write-Host "  2. WSL に接続している場合: 使用を終え、対象ディスクの ID と番号を照合してからそのディスクを切り離してください。"
     Write-Host "  3. 他 Edge Box が使っている場合: その Edge Box を停止し、Hyper-V マネージャーでディスク接続を外す"
     Write-Host "  4. それでも駄目なら PC を再起動すると、掴んでいたプロセスごと解放されます"
 }
 
 if ($Repair) {
     Write-Host "ディスクの取り合いを診断しています..." -ForegroundColor Cyan
-    $before = Test-DiskReady -Fix
+    $before = @(Test-DiskReady -Fix)
     if ($before.Count -eq 0) {
         Write-Host "自動で直せる問題は見つかりませんでした (接続は 1 つ・オフライン済み)。" -ForegroundColor Green
-        Show-DiskHelp @()
     } else {
         Write-Host "見つかった問題:" -ForegroundColor Yellow
         foreach ($p in $before) { Write-Host "  - $p" }
-        $after = Test-DiskReady
+        $after = @(Test-DiskReady)
         if ($after.Count -eq 0) {
             Write-Host "直しました。起動してみてください: .\02-start-field-vm.ps1" -ForegroundColor Green
         } else {
             Show-DiskHelp $after
+            exit 1
         }
     }
     exit 0
@@ -205,6 +177,9 @@ if ($Repair) {
 
 $wasOff = ($vm.State -ne "Running")
 if ($vm.State -ne "Running") {
+    if ([string]$vm.State -ne 'Off') { throw ('VM_NOT_OFF_OR_RUNNING: '+$vm.State) }
+    $diskProblems=@(Test-DiskReady)
+    if ($diskProblems.Count) { Show-DiskHelp $diskProblems; exit 1 }
     # 『設定』の [画面表示] で指定されたコンソール解像度 (既定: 左のモニターに合わせる) を、起動前に反映する。
     # 判定は表示処理 (03) と共通 (モニターの大きさは拡大率に関係なく実ピクセルで測る)
     $s03 = Join-Path $PSScriptRoot "03-field-display-kiosk.ps1"
@@ -228,7 +203,8 @@ if ($vm.State -ne "Running") {
     if (Test-Path $s11) { try { & $s11 -VMName $VMName -ApplyPending } catch { } }
     if (Invoke-CpuPartitionBoot) { Write-Host "  CPU コア分割 (full): CPU グループに固定してから起動します" -ForegroundColor Cyan }
     try {
-        Start-VM -Name $VMName -ErrorAction Stop
+        $null=Test-DiskReady | ForEach-Object { throw $_ }
+        Start-VM -VM $vm -ErrorAction Stop
     } catch {
         Write-Host ""
         Write-Host "起動に失敗しました: $($_.Exception.Message)" -ForegroundColor Red

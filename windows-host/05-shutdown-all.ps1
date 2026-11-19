@@ -23,20 +23,6 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-# -VMName を明示していない場合、既定名の Edge Box が無ければ、Edge Box のディスク
-# (物理ディスクのパススルー) を持つ Edge Box を探して使う。00-field-launcher.ps1 と
-# 同じ考え方で、登録名が「EdgeBox」でなくても (旧名称のままでも) そのまま動くようにする
-if (-not $PSBoundParameters.ContainsKey("VMName") -and
-    -not (Get-VM -Name $VMName -ErrorAction SilentlyContinue)) {
-    $foundVms = @()
-    foreach ($v in @(Get-VM -ErrorAction SilentlyContinue)) {
-        $pt = @(Get-VMHardDiskDrive -VMName $v.Name -ErrorAction SilentlyContinue |
-            Where-Object { $null -ne $_.DiskNumber })
-        if ($pt.Count -gt 0) { $foundVms += $v }
-    }
-    if ($foundVms.Count -eq 1) { $VMName = $foundVms[0].Name }
-}
-
 if ($Setup) {
     $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
         ).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
@@ -48,7 +34,7 @@ if ($Setup) {
     # UAC 確認なしで実行できるよう、管理者権限付きタスク + それを起動するアイコンを作成
     $taskName = "EdgeBox-Shutdown-All"
     $action = New-ScheduledTaskAction -Execute "powershell.exe" `
-        -Argument "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$PSCommandPath`""
+        -Argument "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$PSCommandPath`" -VMName `"$VMName`""
     $ts = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -ExecutionTimeLimit (New-TimeSpan -Hours 1)
     Register-ScheduledTask -TaskName $taskName -Action $action -Settings $ts -RunLevel Highest -Force | Out-Null
 
@@ -86,6 +72,20 @@ function Write-ShutdownLog([string]$Message) {
     Write-Host $Message
     try { Add-Content -LiteralPath $shutdownLog -Encoding UTF8 -Value ((Get-Date -Format 'yyyy-MM-dd HH:mm:ss')+' '+$Message) } catch { }
 }
+function Assert-ShutdownTargetOff([string]$ExpectedVmId) {
+    if ([string]::IsNullOrWhiteSpace($ExpectedVmId)) { throw '停止対象の Edge Box の ID を確認できません。' }
+    $matches=@(Get-VM -Id $ExpectedVmId -ErrorAction Stop)
+    if ($matches.Count -ne 1 -or [string]$matches[0].Id -ne $ExpectedVmId -or [string]$matches[0].Name -ne $VMName -or [string]$matches[0].State -ne 'Off') {
+        throw '選択した Edge Box の停止を再確認できません。Windows の終了を中止します。'
+    }
+}
+function Invoke-ConfirmedWindowsShutdown([string]$ExpectedVmId) {
+    Assert-ShutdownTargetOff $ExpectedVmId
+    Write-ShutdownLog 'Windows へ通常のシャットダウンを要求（追加の 10 秒待ちは省略）。'
+    # /t > 0 implicitly forces applications closed; use zero delay and no /f.
+    shutdown.exe /s /t 0 /c "Edge Box の終了を確認しました。Windows をシャットダウンします。"
+    if ($LASTEXITCODE -ne 0) { throw ('Windows の終了要求に失敗。終了コード: '+$LASTEXITCODE) }
+}
 Write-ShutdownLog '===== 終了開始 ====='
 function Close-ShutdownConsole {
 # 先にコンソール画面 (vmconnect) を閉じる。
@@ -94,7 +94,11 @@ Get-Process vmconnect -ErrorAction SilentlyContinue | ForEach-Object { [void]$_.
 Get-Process vmconnect -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
 }
 try {
-    Wait-EdgeBoxShutdown -VMName $VMName -TimeoutSec $TimeoutSec -Log {param($m) Write-ShutdownLog $m} -AfterRequest {Close-ShutdownConsole}
+    $selected=@(Get-VM -ErrorAction Stop | Where-Object { $_.Name -eq $VMName })
+    if ($selected.Count -ne 1 -or [string]::IsNullOrWhiteSpace([string]$selected[0].Id)) { throw '対象の Edge Box を一意に確認できません。' }
+    $shutdownVmId=[string]$selected[0].Id
+    Wait-EdgeBoxShutdown -VMName $VMName -ExpectedVmId $shutdownVmId -TimeoutSec $TimeoutSec -Log {param($m) Write-ShutdownLog $m} -AfterRequest {Close-ShutdownConsole}
+    Assert-ShutdownTargetOff $shutdownVmId
 } catch {
     Write-ShutdownLog ('失敗: '+$_.Exception.Message)
     [System.Windows.Forms.MessageBox]::Show($_.Exception.Message, '全部シャットダウン', 'OK', 'Warning') | Out-Null
@@ -128,10 +132,12 @@ try {
 
 if ($shutdownWindows) {
     Write-Host "Windows をシャットダウンします..."
-    # /t > 0 は Windows の強制終了を暗黙に有効化するため、待ち時間 0・/f なしで要求する。
-    Write-ShutdownLog 'Windows へ通常のシャットダウンを要求（追加の 10 秒待ちは省略）。'
-    shutdown.exe /s /t 0 /c "Edge Box の終了を確認しました。Windows をシャットダウンします。"
-    if ($LASTEXITCODE -ne 0) { Write-ShutdownLog ('Windows の終了要求に失敗。終了コード: '+$LASTEXITCODE); exit 1 }
+    try { Invoke-ConfirmedWindowsShutdown $shutdownVmId }
+    catch {
+        Write-ShutdownLog ('失敗: '+$_.Exception.Message)
+        [System.Windows.Forms.MessageBox]::Show($_.Exception.Message, '全部シャットダウン', 'OK', 'Warning') | Out-Null
+        exit 1
+    }
 } else {
     # 停止後しばらく見張り、何かに自動で再起動されたらもう一度止める (再発防止の保険)
     Write-Host "Edge Box の停止を確認しています (1分間)..."
@@ -139,12 +145,16 @@ if ($shutdownWindows) {
     $watch = [System.Diagnostics.Stopwatch]::StartNew()
     while ($watch.Elapsed.TotalSeconds -lt 60) {
         Start-Sleep -Seconds 5
-        if ((Get-VM -Name $VMName -ErrorAction SilentlyContinue).State -eq "Running") { $restarted = $true; break }
+        try {
+            $observed=@(Get-VM -Id $shutdownVmId -ErrorAction Stop)
+            if ($observed.Count -ne 1 -or [string]$observed[0].Id -ne $shutdownVmId -or [string]$observed[0].Name -ne $VMName) { throw '停止監視中に対象の Edge Box が変わりました。' }
+            if ([string]$observed[0].State -ne 'Off') { $restarted = $true; break }
+        } catch { Write-ShutdownLog ('停止監視に失敗: '+$_.Exception.Message); exit 1 }
     }
     if ($restarted) {
         Write-Warning "Edge Box が自動で再起動されたため、もう一度停止します..."
         Get-Process vmconnect -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-        try { Wait-EdgeBoxShutdown -VMName $VMName -TimeoutSec $TimeoutSec -Log {param($m) Write-ShutdownLog $m} }
+        try { Wait-EdgeBoxShutdown -VMName $VMName -ExpectedVmId $shutdownVmId -TimeoutSec $TimeoutSec -Log {param($m) Write-ShutdownLog $m} }
         catch { Write-ShutdownLog ('再停止に失敗: '+$_.Exception.Message); [System.Windows.Forms.MessageBox]::Show($_.Exception.Message,'全部シャットダウン') | Out-Null; exit 1 }
     }
     [System.Windows.Forms.MessageBox]::Show("Edge Box のみ終了しました。Windows はそのまま使えます。`n再開するには 02-start-field-vm.ps1 を実行してください。",

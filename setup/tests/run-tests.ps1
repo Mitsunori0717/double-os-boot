@@ -129,9 +129,9 @@ try {
             $state='Running'
             if($script:Scenario -eq 'off' -or ($script:Scenario -eq 'stops' -and $script:Calls -gt 1)){$state='Off'}
             if($script:Scenario -eq 'saved'){$state='Saved'}
-            [pscustomobject]@{State=$state}
+            [pscustomobject]@{Name='fixture';Id='fixture-id';State=$state}
         }
-        function Stop-VM {param($Name,[switch]$AsJob,[switch]$Confirm,$ErrorAction) if(-not $AsJob){throw 'synchronous stop'};$script:StopCalls++;[pscustomobject]@{State='Running'} }
+        function Stop-VM {param($VM,[switch]$AsJob,[switch]$Confirm,$ErrorAction) if(-not $AsJob -or $VM.Id -ne 'fixture-id'){throw 'unbound or synchronous stop'};$script:StopCalls++;[pscustomobject]@{State='Running'} }
         function Stop-Job {}
         function Remove-Job {}
         Wait-EdgeBoxShutdown -VMName fixture -Log {}

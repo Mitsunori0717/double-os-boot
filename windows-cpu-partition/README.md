@@ -63,7 +63,7 @@ Restart-Computer                                                          # 再�
   (`-Undo` + 再起動で完全に既定へ戻せます。専用用途の PC 向きの選択です)
 - CPU グループの操作には Microsoft 公式配布の `CpuGroups.exe` が必要です (適用時に自動取得。
   オフライン環境では別 PC でダウンロードして `tools\` に置いてください)。
-  クライアント版で動かない環境では **minroot + 処理能力予約までの「準分割」** で止まり、その旨を赤で表示します
+  full 計画で VM の所属グループと論理 CPU の割り当てを確認できない場合、起動処理は停止します。`cpu-partition-log.txt` と `cpu-full-status.json` を確認します。完全分離に対応しない機種で runtime を使用する場合は、解除手順を行ってから計画を選び直します
   (i7-14700 + Windows 11 の実機では動作を確認済み)
 - 万一の復旧手順: 管理者コマンドプロンプトで `bcdedit /deletevalue hypervisorschedulertype` と
   `bcdedit /deletevalue hypervisorrootproc` (Windows 自体は普通に起動します)
@@ -245,7 +245,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\cpu-console.ps1        # �
 
 | 症状 | 対処 |
 |---|---|
-| `.\cpu-partition.ps1` の現状表示が「準分割 (Edge Box の固定が効いていません …)」と出る (full) | 記録 (`cpu-partition-log.txt`) を見る。「登録 '...' が見つかりません」なら登録名の不一致 (自動で直すが、設定コンソールで対象を確認)。「割り当てられません: 0x80048007」は Edge Box 実行中に固定しようとしたもの → 『Edge Box 再起動』で停止中に固定される。それでも駄目なら CpuGroups.exe が使えない環境: [分割を解除] → 再起動 → runtime で適用 |
+| `.\cpu-partition.ps1` の現状表示が「準分割 (Edge Box の固定が効いていません …)」と出る (full) | 記録 (`cpu-partition-log.txt`) を見る。「登録 '...' が見つかりません」なら登録名の不一致。設定コンソールで対象を確認し、正しい VM 名で計画を設定し直す。「割り当てられません: 0x80048007」は Edge Box 実行中に固定しようとしたもの → 『Edge Box 再起動』で停止中に固定される。それでも駄目なら CpuGroups.exe が使えない環境: [分割を解除] → 再起動 → runtime で適用 |
 | 『Edge Box 監視』で区画に合わない色・赤い使用率が出続ける | 60 秒待ってから判断する。それでも続くなら記録の末尾に「CPU グループを作成し…」が繰り返し出ていないか確認 (固定をほどいて作り直している) → 最新版に更新 |
 | full 適用後に「反映されていません」 | 再起動したか確認。再起動済みなら、その PC では minroot が効かないため `-Undo` して runtime へ |
 | Edge Box の動きが悪くなった | Windows 側を細くしすぎていないか (Edge Box のディスク/ネットワーク処理は Windows 側コアで動く)。標準の P8+E4 なら問題ない |

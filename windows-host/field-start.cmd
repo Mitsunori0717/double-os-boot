@@ -1,16 +1,10 @@
 @echo off
+setlocal
 chcp 65001 > nul
-cd /d "%~dp0"
-
-rem Edge Box をワンクリックで起動する入口
-rem Edge Box があればそのまま起動し、無ければ作成してから起動します
-net session > nul 2>&1
-if errorlevel 1 (
-    echo 管理者として開き直します...
-    powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Process -FilePath '%~f0' -Verb RunAs"
-    exit /b
-)
-
-powershell -NoProfile -ExecutionPolicy Bypass -File "00-field-launcher.ps1"
-echo.
+pushd "%~dp0" || exit /b 1
+set "EDGEBOX_LAUNCH_DIR=%CD%"
+powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; $principal=[Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent(); if ($principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { & '.\00-field-launcher.ps1'; exit $LASTEXITCODE }; $child=Start-Process -FilePath (Join-Path $PSHOME 'powershell.exe') -WorkingDirectory $env:EDGEBOX_LAUNCH_DIR -ArgumentList '-NoProfile -ExecutionPolicy Bypass -File .\00-field-launcher.ps1' -Verb RunAs -PassThru -Wait; exit $child.ExitCode"
+set "launchExit=%errorlevel%"
+popd
 pause
+exit /b %launchExit%
