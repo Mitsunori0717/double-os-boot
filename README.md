@@ -1,6 +1,6 @@
 # Edge Box セットアップ・ストレージ復旧
 
-Windows 上の Edge Box 環境を構築するセットアップと、全領域バックアップから物理ディスクまたは隔離 Hyper-V VM に復旧するツールです。バージョンは `2026.11.18.1`。元ソースのコミットと実機検証の状態は [release.json](release.json) に記録しています。
+Windows 上の Edge Box 環境を構築するセットアップと、全領域バックアップから物理ディスクまたは隔離 Hyper-V VM に復旧するツールです。バージョンは `2026.11.19.1`。元ソースのコミットと実機検証の状態は [release.json](release.json) に記録しています。
 
 ## 最初に開くもの
 
@@ -33,8 +33,8 @@ Windows 上の Edge Box 環境を構築するセットアップと、全領域�
 `package-files.txt` が同梱ファイルの明示リストです。必須実装の不足、既存出力、シンボリックリンク・再解析ポイントは拒否します。
 
 ```powershell
-python -B tools/package.py build --output '..\EdgeBox-Recovery-2026.11.18.1.zip'
-python -B tools/package.py verify '..\EdgeBox-Recovery-2026.11.18.1.zip'
+python -B tools/package.py build --output '..\EdgeBox-Recovery-2026.11.19.1-source.zip'
+python -B tools/package.py verify '..\EdgeBox-Recovery-2026.11.19.1-source.zip'
 ```
 
 ZIP 内の `package-manifest.json` には全同梱ファイルのサイズと SHA-256 が入ります。これは破損・取り違えの検出用で、電子署名ではありません。実行用 EXE の作成は [installer/README.md](installer/README.md) を参照してください。

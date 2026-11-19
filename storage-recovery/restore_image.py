@@ -242,6 +242,10 @@ def confirm_terminal(identity, dev, image_hash):
     require(input('Confirmation: ') == text, 'DESTRUCTIVE_CONFIRMATION_CANCELLED')
 
 def physical_restore(image, manifest, target, logdir, name, expected, token=None, exclusive=False, execute=False, basic_single_disk_image_confirmed=False, larger_target_layout=False):
+    for flag, value in (('execute', execute), ('exclusive', exclusive),
+                        ('basic_single_disk_image_confirmed', basic_single_disk_image_confirmed),
+                        ('larger_target_layout', larger_target_layout)):
+        require(type(value) is bool, 'BOOLEAN_RESTORE_FLAG_REQUIRED:' + flag)
     require(re.fullmatch('[A-Za-z0-9][A-Za-z0-9_-]{0,80}', name), 'LOG_NAME_INVALID')
     oi.live_environment()  # Refuse non-Live/non-Linux execution before hashing a potentially huge image.
     with verified_image(image, manifest) as (source, m, before, image, manifest):

@@ -27,38 +27,13 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-# -VMName を明示していない場合、既定名の Edge Box が無ければ、Edge Box のディスク
-# (物理ディスクのパススルー) を持つ Edge Box を探して使う。00-field-launcher.ps1 と
-# 同じ考え方で、登録名が「EdgeBox」でなくても (旧名称のままでも) そのまま動くようにする
-if (-not $PSBoundParameters.ContainsKey("VMName") -and
-    -not (Get-VM -Name $VMName -ErrorAction SilentlyContinue)) {
-    $foundVms = @()
-    foreach ($v in @(Get-VM -ErrorAction SilentlyContinue)) {
-        $pt = @(Get-VMHardDiskDrive -VMName $v.Name -ErrorAction SilentlyContinue |
-            Where-Object { $null -ne $_.DiskNumber })
-        if ($pt.Count -gt 0) { $foundVms += $v }
-    }
-    if ($foundVms.Count -eq 1) { $VMName = $foundVms[0].Name }
+if ([string]::IsNullOrWhiteSpace($VMName) -or [Management.Automation.WildcardPattern]::ContainsWildcardCharacters($VMName)) {
+    throw '対象 VM の正確な登録名を指定してください。'
 }
 
 $Script03 = Join-Path $PSScriptRoot "03-field-display-kiosk.ps1"
 
-# CPU コア分割ツール (別フォルダ windows-cpu-partition) が full モードなら、Edge Box を起動する前に
-# 起動タスクと同じ処理を呼び、CPU グループに固定してから起動する (固定は Edge Box 停止中に確実に効く)。
-# ツールが無ければ何もしない (互いに独立。あるときだけ順番を譲る)。戻り値: 呼んだか
-function Invoke-CpuPartitionBoot {
-    try {
-        $cpuDir = Join-Path (Split-Path $PSScriptRoot -Parent) "windows-cpu-partition"
-        $cfgF = Join-Path $cpuDir "cpu-partition.json"; $ps1 = Join-Path $cpuDir "cpu-partition.ps1"
-        if (-not (Test-Path $cfgF) -or -not (Test-Path $ps1)) { return $false }
-        $c = Get-Content $cfgF -Raw -Encoding UTF8 | ConvertFrom-Json
-        if ($c.Mode -ne "full") { return $false }
-        $p = Start-Process powershell.exe -WindowStyle Hidden -PassThru `
-            -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$ps1`" -BootApply -Quiet"
-        if (-not $p.WaitForExit(240000)) { try { $p.Kill() } catch { } }
-        return $true
-    } catch { return $false }
-}
+Import-Module (Join-Path $PSScriptRoot 'cpu-boot.psm1') -ErrorAction Stop
 
 function Test-Admin {
     ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
@@ -138,8 +113,8 @@ if ($ShowOnly) {
         try { & $Script03 -VMName $VMName -ApplyResolution | Out-Null } catch { }   # 『設定』の解像度を停止中に反映
         $s11 = Join-Path $PSScriptRoot "11-io-passthrough.ps1"   # 予約された設定 (メモリの固定など) を停止中に反映
         if (Test-Path $s11) { try { & $s11 -VMName $VMName -ApplyPending | Out-Null } catch { } }
-        Invoke-CpuPartitionBoot | Out-Null   # full モードなら CPU グループに固定してから起動
-        try { Start-VM -Name $VMName -ErrorAction Stop } catch {
+        Invoke-EdgeBoxCpuPreparation -VMName $VMName | Out-Null   # full モードなら CPU グループに固定してから起動
+        try { Start-VM -VM $vm -ErrorAction Stop } catch {
             Show-Msg "Edge Box を起動できませんでした:`n$($_.Exception.Message)" "Edge Box 画面" "Warning"; exit 1
         }
     }
@@ -154,26 +129,20 @@ if (-not $NoConfirm) {
         "収集が数分止まります。`n正常にシャットダウンできない場合は、何もせずに中止します。`n`nよろしいですか?") "Edge Box 再起動"
     if (-not $ok) { exit 0 }
 }
-if ([string]$vm.State -ne "Off") {
-    try { Stop-VM -Name $VMName -ErrorAction Stop } catch {
-        Show-Msg ("Edge Box を停止できませんでした:`n$($_.Exception.Message)`n`n" +
-            "Edge Box の管理画面からシャットダウンしてから、もう一度実行してください。`n(強制電源断は行いません)") "Edge Box 再起動" "Warning"
-        exit 1
-    }
-    $deadline = (Get-Date).AddSeconds(180)
-    while ((Get-VM -Name $VMName).State -ne "Off") {
-        if ((Get-Date) -gt $deadline) {
-            Show-Msg "Edge Box が 180 秒以内に停止しませんでした。中止します (何も変更していません)。" "Edge Box 再起動" "Warning"
-            exit 1
-        }
-        Start-Sleep -Seconds 3
-    }
+Import-Module (Join-Path $PSScriptRoot 'vm-shutdown.psm1') -ErrorAction Stop
+try {
+    Wait-EdgeBoxShutdown -VMName $VMName -ExpectedVmId $vm.Id -TimeoutSec 180
+    $current = Get-VM -Id $vm.Id -ErrorAction Stop
+    if ($current.Name -ne $VMName -or $current.State -ne 'Off') { throw '停止した VM の登録情報または状態が変わりました。' }
+} catch {
+    Show-Msg $_.Exception.Message "Edge Box 再起動" "Warning"
+    exit 1
 }
 try { & $Script03 -VMName $VMName -ApplyResolution | Out-Null } catch { }   # 『設定』の解像度を停止中に反映
 $s11 = Join-Path $PSScriptRoot "11-io-passthrough.ps1"   # 予約された設定 (メモリの固定など) を停止中に反映
 if (Test-Path $s11) { try { & $s11 -VMName $VMName -ApplyPending | Out-Null } catch { } }
-Invoke-CpuPartitionBoot | Out-Null   # full モードなら、停止中のいまのうちに CPU グループへ固定してから起動
-try { Start-VM -Name $VMName -ErrorAction Stop } catch {
+Invoke-EdgeBoxCpuPreparation -VMName $VMName | Out-Null   # full モードなら、停止中のいまのうちに CPU グループへ固定してから起動
+try { Start-VM -VM $vm -ErrorAction Stop } catch {
     Show-Msg "Edge Box を起動できませんでした:`n$($_.Exception.Message)`n`n.\02-start-field-vm.ps1 -Repair で原因を確認できます。" "Edge Box 再起動" "Warning"
     exit 1
 }

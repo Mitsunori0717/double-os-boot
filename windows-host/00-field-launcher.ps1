@@ -291,7 +291,7 @@ try {
         exit 0
     }
     if($targetVm.State -ne 'Off'){throw ('VM_NOT_OFF_OR_RUNNING: '+$targetVm.State)}
-    $exitCode=Invoke-LauncherChild $Script02 @{VMName=$targetVm.Name}
+    $exitCode=Invoke-LauncherChild $Script02 @{VMName=$targetVm.Name;ExpectedVmId=([string]$targetVm.Id)}
     if($exitCode -ne 0){throw ('START_SCRIPT_FAILED: '+$exitCode)}
     Ok 'Edge Box を起動しました。'
     Warn '起動画面で Ctrl キーを押しっぱなしにしないでください (工場出荷リセットが選ばれる機種があります)。'

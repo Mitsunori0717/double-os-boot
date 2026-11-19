@@ -100,12 +100,15 @@ param(
     # --- 内部用 (自動タスクが呼ぶ) ---
     [switch]$ApplyRuntime,
     [switch]$Watch,             # 常駐: vmmem を Edge Box 用コアへ、それ以外の全プロセスを Windows 用コアへ固定し続ける
+    [switch]$PrepareOnly,       # 起動操作の呼び出し元が VM を起動する
     [switch]$BootApply,         # full モードの起動時処理: CPU グループを作り直して Edge Box を固定し、Edge Box を起動する
     [switch]$Quiet,
     [switch]$NoConfirm
 )
 
 $ErrorActionPreference = "Stop"
+
+Import-Module (Join-Path $PSScriptRoot 'cpu-tool.psm1') -ErrorAction Stop
 
 $ConfigFile  = Join-Path $PSScriptRoot "cpu-partition.json"
 $LogFile     = Join-Path $PSScriptRoot "cpu-partition-log.txt"
@@ -345,9 +348,9 @@ function Get-VmProcesses([string]$Name) {
 # --- CpuGroups.exe を探す ---
 function Find-CpuGroupsExe {
     $local = Join-Path $ToolsDir "CpuGroups.exe"
-    if (Test-Path $local) { return $local }
-    $cmd = Get-Command "CpuGroups.exe" -ErrorAction SilentlyContinue
-    if ($cmd) { return $cmd.Source }
+    if (Test-Path -LiteralPath $local) { Assert-EdgeBoxCpuTool $local; return $local }
+    $cmd = Get-Command "CpuGroups.exe" -CommandType Application -ErrorAction SilentlyContinue
+    if ($cmd) { Assert-EdgeBoxCpuTool $cmd.Source; return $cmd.Source }
     return $null
 }
 
@@ -365,11 +368,13 @@ function Get-CpuGroupsExe {
         if (-not (Test-Path $ToolsDir)) { New-Item -ItemType Directory -Path $ToolsDir | Out-Null }
         $dest = Join-Path $ToolsDir "CpuGroups.exe"
         try { [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12 } catch { }
-        Invoke-WebRequest -Uri $CpuGroupsUrl -OutFile $dest -UseBasicParsing
-        $head = [System.IO.File]::ReadAllBytes($dest)[0..1]
-        if ($head[0] -ne 0x4D -or $head[1] -ne 0x5A) {   # "MZ" = 実行ファイルの印
-            Remove-Item $dest -Force
-            throw "取得したファイルが実行ファイルではありません (リンク先が変更された可能性)"
+        $temporary = Join-Path $ToolsDir ('CpuGroups-' + [guid]::NewGuid().ToString('N') + '.exe')
+        try {
+            Invoke-WebRequest -Uri $CpuGroupsUrl -OutFile $temporary -UseBasicParsing
+            Assert-EdgeBoxCpuTool $temporary
+            [IO.File]::Move($temporary,$dest)
+        } finally {
+            if ([IO.File]::Exists($temporary)) { [IO.File]::Delete($temporary) }
         }
         Write-PinLog "CpuGroups.exe を取得: $dest"
         return $dest
@@ -389,37 +394,58 @@ function Get-GuidsInText([string]$Text) {
 # --- Edge Box がいまどの CPU グループに属しているか (GUID 小文字。無し/不明は "") ---
 # 実機の出力: "VmName VmId CpuGroupId / Edge Box CB46099F-... B0EDB0ED-..." のように
 # Edge Box 自身の ID (VmId) も GUID で出るため、それを除いた最後の GUID をグループ ID とみなす
-function Get-VmGroupId([string]$Exe, [string]$Name) {
+function Get-VmGroupId([string]$Exe, [string]$Name, [string]$ExpectedVmId = '') {
     $r = Invoke-CpuGroups $Exe @("GetVmGroup", "/VmName:$Name")
     if (-not $r.Ok) { return "" }
-    $vmid = ""
-    try { $vmid = ([string](Get-VM -Name $Name -ErrorAction Stop).Id).ToLower() } catch { }
-    $g = @(Get-GuidsInText $r.Output)
-    if ($g.Count -eq 0) { return "" }
-    $last = $g[-1]                                          # 表の最後の列 = CpuGroupId
-    if ($last -eq $NullGroupId) { return "none" }           # 照会できて「未所属」
-    if ($last -eq $vmid) { return "" }                      # 列が読めない (不明)
-    return $last
+    try { $vmid = [guid](Get-VM -Name $Name -ErrorAction Stop).Id } catch { return "" }
+    if ($ExpectedVmId -and $vmid.ToString() -ne $ExpectedVmId) { return "" }
+    $groups = @(foreach ($line in ($r.Output -split '\r?\n')) {
+        $ids = @(Get-GuidsInText $line)
+        if ($ids.Count -ge 2 -and $ids[-2] -eq $vmid.ToString()) { $ids[-1] }
+    })
+    if ($groups.Count -ne 1) { return "" }
+    if ($groups[0] -eq $NullGroupId) { return "none" }
+    return $groups[0]
 }
 
-# --- 本ツールの CPU グループが存在するか ---
-$script:GroupsLogged = $false
-function Test-OurGroupExists([string]$Exe) {
-    $r = Invoke-CpuGroups $Exe @("GetGroups")
-    if (-not $r.Ok) { return $false }
-    $found = ((@(Get-GuidsInText $r.Output)) -contains $GroupId.ToLower())
-    if (-not $found -and -not $script:GroupsLogged) {
-        $script:GroupsLogged = $true
-        Write-PinLog ("CpuGroups GetGroups (本ツールのグループが見当たらない): 出力=" + (([string]$r.Output) -replace '\s+', ' ').Trim())
+# Microsoft の表形式: CpuGroupId CpuCap LpIndexes (LP はカンマ区切り)。
+# https://learn.microsoft.com/windows-server/virtualization/hyper-v/manage/manage-hyper-v-cpugroups
+function Get-FullGroupState([string]$Exe) {
+    $r = Invoke-CpuGroups $Exe @('GetGroups', "/GroupId:$GroupId")
+    # 未作成の ID を指定したときのエラーは、全件一覧で不存在を確認する。
+    if (-not $r.Ok) { $r = Invoke-CpuGroups $Exe @('GetGroups') }
+    if (-not $r.Ok -or $r.Output -notmatch '(?m)^\s*CpuGroupId\s+CpuCap\s+LpIndexes\s*$') {
+        throw 'CPU グループの LP 一覧を確認できません。管理者権限と CpuGroups.exe GetGroups の結果を確認してください。'
     }
-    return $found
+    $rows = @()
+    foreach ($line in ($r.Output -split '\r?\n')) {
+        if ($line -notmatch [regex]::Escape($GroupId)) { continue }
+        if ($line -notmatch ('^\s*' + [regex]::Escape($GroupId) + '\s+(\d+)\s+(\d+(?:\s*,\s*\d+)*)\s*$')) {
+            throw 'CPU グループの LpIndexes を解析できません。CpuGroups.exe GetGroups の結果を確認してください。'
+        }
+        $lps = @($Matches[2] -split ',' | ForEach-Object { [int]$_.Trim() })
+        if (@($lps | Sort-Object -Unique).Count -ne $lps.Count) { throw 'CPU グループの LpIndexes が重複しています。' }
+        $rows += [pscustomobject]@{ Exists = $true; Lps = @($lps | Sort-Object) }
+    }
+    if ($rows.Count -gt 1) { throw '同一 ID の CPU グループが複数報告されています。' }
+    if ($rows.Count -eq 1) { return $rows[0] }
+    return [pscustomobject]@{ Exists = $false; Lps = @() }
+}
+
+function Get-FullPlanVM($ExpectedVM, [switch]$RequireOff) {
+    $found = @(Get-VM -Name $ExpectedVM.Name -ErrorAction Stop)
+    if ($found.Count -ne 1 -or $found[0].Name -ne $ExpectedVM.Name -or
+        -not $ExpectedVM.Id -or [string]$found[0].Id -ne [string]$ExpectedVM.Id) {
+        throw 'CPU 計画の対象 VM が変更されました。登録名と VM ID を確認してください。'
+    }
+    if ($RequireOff -and [string]$found[0].State -ne 'Off') {
+        throw 'CPU グループの変更には Edge Box の正常停止が必要です。停止後に再適用してください。'
+    }
+    return $found[0]
 }
 
 # --- CPU グループを作り直して Edge Box を固定する (何度呼んでも同じ結果になる) ---
-# 実行中の Edge Box は SetVmGroup が失敗する (実機: 0x80048007) ため、
-#   ・所属が本ツールのグループ → 何もしない
-#   ・グループはあるが所属を照会できない → 実行中なら触らない (ほどくと固定が外れる瞬間ができる)。停止中なら付け直す
-#   ・グループが無い → 作って割り当てる (実行中なら失敗することがある。次に停止したとき = 再起動時に付く)
+# 所属と実際の LP の両方を確認する。変更は停止中だけ、他 VM の使うグループは変更しない。
 # 戻り値: @{ Bound = 成立したか; Message = 説明 }
 function Invoke-FullBind([string]$Exe, [int[]]$GuestArr, $VmObj) {
     if (-not $Exe) { return [pscustomobject]@{ Bound = $false; Message = "CpuGroups.exe がありません" } }
@@ -427,42 +453,67 @@ function Invoke-FullBind([string]$Exe, [int[]]$GuestArr, $VmObj) {
         $names = @(Get-VM -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Name)
         return [pscustomobject]@{ Bound = $false; Message = ("登録 '$VMName' が見つかりません (ある登録: " + $(if ($names.Count -gt 0) { $names -join ", " } else { "なし" }) + ")") }
     }
-    $running = ([string]$VmObj.State -ne "Off")
     $lpText = ConvertTo-LpRangeText $GuestArr
-    $cur = Get-VmGroupId $Exe $VMName      # "" = 不明 / "none" = 未所属 / GUID = 所属グループ
-    if ($cur -eq $GroupId.ToLower()) {
-        return [pscustomobject]@{ Bound = $true; Message = "Edge Box は CPU グループ (CPU $lpText) に固定済み" }
-    }
-    $exists = Test-OurGroupExists $Exe
-    if ($cur -eq "" -and $exists -and $running) {
-        return [pscustomobject]@{ Bound = $true; Message = "CPU グループ (CPU $lpText) は作成済み (所属の照会は不可。実行中のため付け直しはしない)" }
-    }
-    if ($cur -ne "" -and $cur -ne "none" -and $running) {
-        # 別のグループに属している (通常は起きない)。実行中は付け替えられないので次の停止時に直す
-        return [pscustomobject]@{ Bound = $false; Message = "Edge Box が別の CPU グループ ($cur) に属しています。Edge Box の停止時に付け直します" }
-    }
-    # ここからは (未所属) か (グループが無い) か (停止中で付け直す)。
-    # 実行中の Edge Box の所属は決してほどかない (ほどいた瞬間に Windows 用コアへ載る)
-    if (-not $running -and $cur -ne "" -and $cur -ne "none") {
-        Invoke-CpuGroups $Exe @("SetVmGroup", "/VmName:$VMName", "/GroupId:$NullGroupId") | Out-Null
-    }
-    if ($exists -and -not $running) { Invoke-CpuGroups $Exe @("DeleteGroup", "/GroupId:$GroupId") | Out-Null; $exists = $false }
-    if (-not $exists) {
-        $rCreate = Invoke-CpuGroups $Exe @("CreateGroup", "/GroupId:$GroupId", "/GroupAffinity:$($GuestArr -join ',')")
-        if (-not $rCreate.Ok) {
-            return [pscustomobject]@{ Bound = $false; Message = "CPU グループを作成できません: $($rCreate.Output)" }
+    try {
+        if (-not $GuestArr.Count -or @($GuestArr | Where-Object { $_ -lt 0 }).Count -or
+            @($GuestArr | Sort-Object -Unique).Count -ne $GuestArr.Count) { throw 'CPU 計画の LP 番号が不正です。計画を作成し直してください。' }
+        $expectedLps = (@($GuestArr | Sort-Object) -join ',')
+        $VmObj = Get-FullPlanVM $VmObj
+        $cur = Get-VmGroupId $Exe $VmObj.Name ([string]$VmObj.Id)
+        if (-not $cur) { throw 'CPU グループ所属を確認できません。CpuGroups.exe GetVmGroup で対象 VM の ID を確認してください。' }
+        $group = Get-FullGroupState $Exe
+        $affinityMatches = $group.Exists -and (($group.Lps -join ',') -eq $expectedLps)
+        if ($cur -eq $GroupId -and $affinityMatches) {
+            return [pscustomobject]@{ Bound = $true; Message = "Edge Box は CPU グループ (CPU $lpText) に固定済み" }
         }
+        if ([string]$VmObj.State -ne 'Off') {
+            throw "CPU グループが計画と一致しません (所属=$cur / LpIndexes=$($group.Lps -join ',') / 計画=$expectedLps)。Edge Box を正常停止してから再適用してください。"
+        }
+        $VmObj = Get-FullPlanVM $VmObj -RequireOff
+        if ($group.Exists -and -not $affinityMatches) {
+            $members = Invoke-CpuGroups $Exe @('GetGroupVms', "/GroupId:$GroupId")
+            if (-not $members.Ok -or $members.Output -notmatch '(?m)^\s*CpuGroupId\s+VmName\s+VmId\s*$') {
+                throw 'LP 不一致ですがグループ利用者を確認できません。CpuGroups.exe GetGroupVms を確認し、停止後に再適用してください。'
+            }
+            foreach ($line in ($members.Output -split '\r?\n')) {
+                if (-not $line.Trim() -or $line -match '^\s*(CpuGroupId\s|[-\s]+$)') { continue }
+                $ids = @(Get-GuidsInText $line)
+                if ($ids.Count -lt 2 -or $ids[0] -ne $GroupId -or $ids[-1] -ne [string]$VmObj.Id) {
+                    throw 'LP 不一致の CPU グループを別の VM が使用中、または利用者が不明です。GetGroupVms の結果を確認し、他 VM の割り当てを管理者が解決してから再適用してください。'
+                }
+            }
+            if ($cur -eq $GroupId) {
+                $VmObj = Get-FullPlanVM $VmObj -RequireOff
+                $detach = Invoke-CpuGroups $Exe @('SetVmGroup', "/VmName:$($VmObj.Name)", "/GroupId:$NullGroupId")
+                if (-not $detach.Ok -or (Get-VmGroupId $Exe $VmObj.Name ([string]$VmObj.Id)) -ne 'none') {
+                    throw "古い CPU グループの解除を確認できません: $($detach.Output)"
+                }
+            }
+            $VmObj = Get-FullPlanVM $VmObj -RequireOff
+            $deleted = Invoke-CpuGroups $Exe @('DeleteGroup', "/GroupId:$GroupId")
+            if (-not $deleted.Ok) { throw "古い CPU グループを削除できません: $($deleted.Output)" }
+            $group = Get-FullGroupState $Exe
+            if ($group.Exists) { throw '古い CPU グループが残っています。GetGroups を確認して再適用してください。' }
+        }
+        if (-not $group.Exists) {
+            $VmObj = Get-FullPlanVM $VmObj -RequireOff
+            $created = Invoke-CpuGroups $Exe @('CreateGroup', "/GroupId:$GroupId", "/GroupAffinity:$($GuestArr -join ',')")
+            if (-not $created.Ok) { throw "CPU グループを作成できません: $($created.Output)" }
+            $group = Get-FullGroupState $Exe
+            if (-not $group.Exists -or ($group.Lps -join ',') -ne $expectedLps) { throw '作成した CPU グループの LP が計画と一致しません。GetGroups の LpIndexes を確認してください。' }
+        }
+        $VmObj = Get-FullPlanVM $VmObj -RequireOff
+        $bound = Invoke-CpuGroups $Exe @('SetVmGroup', "/VmName:$($VmObj.Name)", "/GroupId:$GroupId")
+        if (-not $bound.Ok) { throw "CPU グループを割り当てられません: $($bound.Output)" }
+        $group = Get-FullGroupState $Exe
+        if ((Get-VmGroupId $Exe $VmObj.Name ([string]$VmObj.Id)) -ne $GroupId -or
+            -not $group.Exists -or ($group.Lps -join ',') -ne $expectedLps) {
+            throw '割り当て後の CPU グループ所属または LP を確認できません。GetVmGroup と GetGroups を確認してください。'
+        }
+        return [pscustomobject]@{ Bound = $true; Message = "CPU グループを作成し、Edge Box を CPU $lpText に固定しました" }
+    } catch {
+        return [pscustomobject]@{ Bound = $false; Message = $_.Exception.Message }
     }
-    $rBind = Invoke-CpuGroups $Exe @("SetVmGroup", "/VmName:$VMName", "/GroupId:$GroupId")
-    if (-not $rBind.Ok) {
-        $why = $rBind.Output
-        if ($running) { $why += " (Edge Box 実行中は割り当てられません。次に停止したとき = 再起動時に自動で付きます)" }
-        return [pscustomobject]@{ Bound = $false; Message = "Edge Box を CPU グループに割り当てられません: $why" }
-    }
-    # 照会できる環境なら、結果を 1 回だけ記録に残す (出力の書式を知るため)
-    $chk = Invoke-CpuGroups $Exe @("GetVmGroup", "/VmName:$VMName")
-    Write-PinLog ("CpuGroups GetVmGroup: ok=" + $chk.Ok + " 出力=" + (([string]$chk.Output) -replace '\s+', ' ').Trim())
-    return [pscustomobject]@{ Bound = $true; Message = "CPU グループを作成し、Edge Box を CPU $lpText に固定しました" }
 }
 
 function Write-FullStatus([hashtable]$H) {
@@ -517,6 +568,20 @@ function Invoke-FullStage2([int[]]$HostArr, [int[]]$GuestArr, [bool]$Interactive
     $hostText = ConvertTo-LpRangeText $HostArr
     $guestText = ConvertTo-LpRangeText $GuestArr
     $wantRootProc = $HostArr.Count
+    $matchingVMs = @(Get-VM -ErrorAction Stop | Where-Object { $_.Name -eq $VMName })
+    if ($matchingVMs.Count -eq 0 -and $AllowMissingVM) {
+        $msg = "登録 '$VMName' は未作成です。計画を保存し、作成後に CPU グループを確認します。"
+        Write-FullStatus @{ MinrootOk = $false; Bound = $false; PendingVM = $true; Message = $msg; HostLps = $hostText; GuestLps = $guestText }
+        Say $msg 'Yellow'
+        return $false
+    }
+    if ($matchingVMs.Count -ne 1) { throw 'CPU 計画の対象 VM を一意に確認できません。登録名を確認してください。' }
+    $vm2 = $matchingVMs[0]
+    $cfg2 = Get-SavedConfig
+    if ($vm2.Name -ne $VMName -or -not $vm2.Id -or
+        ($cfg2 -and $cfg2.VMId -and $cfg2.VMName -eq $VMName -and [string]$cfg2.VMId -ne [string]$vm2.Id)) {
+        throw 'CPU 計画の VM ID と一致しません。対象 VM を確認してください。'
+    }
     $topo2 = Get-CpuTopology
     $schedNow2 = Get-HvSchedulerType
     $visibleLps = [Environment]::ProcessorCount
@@ -562,14 +627,12 @@ function Invoke-FullStage2([int[]]$HostArr, [int[]]$GuestArr, [bool]$Interactive
         elseif ($Interactive) { Write-Host "  CpuGroups.exe がありません。手動で入手する場合: $CpuGroupsUrl をブラウザで開き、tools\ に置いてください。" -ForegroundColor Yellow }
     }
 
-    $vm2 = $null
-    try { $vm2 = Get-VM -Name $VMName -ErrorAction Stop } catch { }
     # vCPU 数と Edge Box 用コア数を合わせる (停止中のみ変更可能)
     if ($vm2 -and [string]$vm2.State -eq "Off") {
         try {
-            $vcpu2 = [int](Get-VMProcessor -VMName $VMName).Count
+            $vcpu2 = [int](Get-VMProcessor -VM $vm2).Count
             if ($vcpu2 -ne $GuestArr.Count) {
-                Set-VMProcessor -VMName $VMName -Count $GuestArr.Count
+                Set-VMProcessor -VM $vm2 -Count $GuestArr.Count
                 Write-PinLog "Full: プロセッサ数を $vcpu2 → $($GuestArr.Count) に合わせました"
             }
         } catch { }
@@ -586,27 +649,37 @@ function Invoke-FullStage2([int[]]$HostArr, [int[]]$GuestArr, [bool]$Interactive
         }
         # 準分割の仕上げ: 処理能力予約 (停止中のみ設定可能)
         if (-not $NoReserve -and $vm2 -and [string]$vm2.State -eq "Off") {
-            try { Set-VMProcessor -VMName $VMName -Reserve 100; Say "  代わりに処理能力予約 (Reserve 100%) を設定しました" "Yellow" } catch { }
+            try { Set-VMProcessor -VM $vm2 -Reserve 100; Say "  代わりに処理能力予約 (Reserve 100%) を設定しました" "Yellow" } catch { }
         }
     }
 
-    $cfg2 = Get-SavedConfig
-    if ($cfg2) {
+    if ($cfg2 -and $cfg2.VMName -eq $VMName) {
+        $cfg2 | Add-Member -NotePropertyName VMId -NotePropertyValue ([string]$vm2.Id) -Force
         $cfg2 | Add-Member -NotePropertyName GroupBound -NotePropertyValue ([bool]$bind.Bound) -Force
         $cfg2 | Add-Member -NotePropertyName PendingReboot -NotePropertyValue $false -Force
         Save-Config $cfg2
     }
     Write-FullStatus @{ MinrootOk = $true; Bound = [bool]$bind.Bound; Message = $bind.Message; HostLps = $hostText; GuestLps = $guestText; Scheduler = $schedNow2; VisibleLps = $visibleLps }
+    if (-not $bind.Bound) { return $false }
 
     # 表示ツール側で予約された入出力の設定 (メモリの固定など) があれば、停止中のいまのうちに反映する
     if ($vm2 -and [string]$vm2.State -eq "Off") {
         $s11 = Join-Path (Split-Path $PSScriptRoot -Parent) "windows-host\11-io-passthrough.ps1"
         if (Test-Path $s11) { try { $r11 = & $s11 -VMName $VMName -ApplyPending -Quiet; if ($r11) { Write-PinLog ([string]$r11) } } catch { } }
     }
-    # Edge Box の自動起動を任されている場合は、固定したあとに起動する (固定できなくても止めたままにはしない)
-    if ($vm2 -and [string]$vm2.State -eq "Off" -and $cfg2 -and $cfg2.ManageVmStart) {
-        try { Start-VM -Name $VMName -ErrorAction Stop; Write-PinLog "Full: Edge Box を起動しました" }
-        catch { Write-PinLog "Full: Edge Box の起動に失敗: $($_.Exception.Message)" }
+    # 起動直前にも同一 VM の所属と実際の LP を確認する。未確認のまま起動しない。
+    if (-not $PrepareOnly -and $vm2 -and [string]$vm2.State -eq "Off" -and $cfg2 -and $cfg2.VMName -eq $VMName -and $cfg2.ManageVmStart) {
+        $vm2 = Get-FullPlanVM $vm2 -RequireOff
+        $finalBind = Invoke-FullBind $exe2 $GuestArr $vm2
+        if (-not $finalBind.Bound) {
+            $cfg2 | Add-Member -NotePropertyName GroupBound -NotePropertyValue $false -Force
+            Save-Config $cfg2
+            Write-FullStatus @{ MinrootOk = $true; Bound = $false; Message = $finalBind.Message; HostLps = $hostText; GuestLps = $guestText }
+            Write-PinLog "Full: 起動を中止しました: $($finalBind.Message)"
+            return $false
+        }
+        try { Start-VM -VM $vm2 -ErrorAction Stop; Write-PinLog "Full: Edge Box を起動しました" }
+        catch { Write-PinLog "Full: Edge Box の起動に失敗: $($_.Exception.Message)"; throw }
     }
     return [bool]$bind.Bound
 }
@@ -902,30 +975,13 @@ if (-not $PSBoundParameters.ContainsKey("VMName")) {
     if ($cfgVm -and $cfgVm.VMName) { $VMName = [string]$cfgVm.VMName }
 }
 
-# 登録名が実在しない場合 (名前を変えた・旧名のまま保存されていた等) は、Edge Box の物理ディスクを持つ
-# 登録か、1 つしかない登録を対象にする (windows-host 側と同じ考え方)。見つけたら設定ファイルも直す
-function Resolve-VMName([string]$Name) {
-    if (-not (Get-Command Get-VM -ErrorAction SilentlyContinue)) { return $Name }
-    if ($Name -and (Get-VM -Name $Name -ErrorAction SilentlyContinue)) { return $Name }
-    $all = @(Get-VM -ErrorAction SilentlyContinue)
-    $found = @()
-    foreach ($v in $all) {
-        $pt = @(Get-VMHardDiskDrive -VMName $v.Name -ErrorAction SilentlyContinue | Where-Object { $null -ne $_.DiskNumber })
-        if ($pt.Count -gt 0) { $found += $v }
+# PowerShell のパターンを対象 VM 名としてコマンドに渡さない。
+function Assert-LiteralVMName([string]$Name) {
+    if ([string]::IsNullOrWhiteSpace($Name) -or [Management.Automation.WildcardPattern]::ContainsWildcardCharacters($Name)) {
+        throw 'CPU 計画には対象 VM の登録名を指定してください。'
     }
-    $pick = $null
-    if ($found.Count -eq 1) { $pick = $found[0].Name } elseif ($all.Count -eq 1) { $pick = $all[0].Name }
-    if ($pick -and $pick -ne $Name) {
-        Write-PinLog "登録名 '$Name' が見つからないため、'$pick' を対象にします (設定ファイルも書き換え)"
-        try {
-            $c = Get-SavedConfig
-            if ($c -and [string]$c.VMName -eq $Name) { $c.VMName = $pick; Save-Config $c }
-        } catch { }
-        return $pick
-    }
-    return $Name
 }
-if (-not $PSBoundParameters.ContainsKey("VMName")) { $VMName = Resolve-VMName $VMName }
+Assert-LiteralVMName $VMName
 
 # ============================================================ -MemoryGB (Edge Box のメモリ)
 #
@@ -1014,7 +1070,10 @@ if ($MemoryGB -gt 0) {
 
 if ($BootApply) {
     $cfgB = Get-SavedConfig
-    if (-not $cfgB -or $cfgB.Mode -ne "full") { exit 0 }
+    if (-not $cfgB -or $cfgB.Mode -ne "full") { if ($PrepareOnly) { exit 1 }; exit 0 }
+    if ($PrepareOnly -and ((-not $PSBoundParameters.ContainsKey('VMName')) -or $VMName -ne $cfgB.VMName)) {
+        throw 'CPU 計画の対象 VM が変更されました。'
+    }
     if ($cfgB.VMName) { $VMName = [string]$cfgB.VMName }
     if ($cfgB.Scheduler) { $Scheduler = [string]$cfgB.Scheduler }
     # Hyper-V の管理サービスが上がるまで待つ (最大 3 分)
@@ -1024,12 +1083,13 @@ if ($BootApply) {
         Start-Sleep -Seconds 5
     }
     Start-Sleep -Seconds 3
-    $VMName = Resolve-VMName $VMName
     try {
-        Invoke-FullStage2 @([int[]]$cfgB.HostLps) @([int[]]$cfgB.GuestLps) $false | Out-Null
+        Assert-LiteralVMName $VMName
+        if (-not (Invoke-FullStage2 @([int[]]$cfgB.HostLps) @([int[]]$cfgB.GuestLps) $false)) { exit 1 }
     } catch {
         Write-PinLog "BootApply: エラー $($_.Exception.Message)"
         Write-FullStatus @{ MinrootOk = $false; Bound = $false; Message = ("起動時処理でエラー: " + $_.Exception.Message); HostLps = (ConvertTo-LpRangeText @([int[]]$cfgB.HostLps)); GuestLps = (ConvertTo-LpRangeText @([int[]]$cfgB.GuestLps)) }
+        exit 1
     }
     exit 0
 }
@@ -1056,7 +1116,7 @@ if ($Watch) {
                     Remove-Item $ContainStatusFile -Force -ErrorAction SilentlyContinue
                     exit 0
                 }
-                if ($cfgW.VMName) { $VMName = Resolve-VMName ([string]$cfgW.VMName) }
+                if ($cfgW.VMName) { $VMName = [string]$cfgW.VMName; Assert-LiteralVMName $VMName }
                 $hostArr = @([int[]]$cfgW.HostLps); $guestArr = @([int[]]$cfgW.GuestLps)
                 $hostMask = Get-LpMask $hostArr; $guestMask = Get-LpMask $guestArr
                 $except = Get-AppExceptionPids
@@ -1101,7 +1161,7 @@ if ($ApplyRuntime) {
     $cfg = Get-SavedConfig
     if (-not $cfg) { Write-PinLog "ApplyRuntime: 設定ファイルなし。何もしません"; exit 0 }
     if ($cfg.Mode -ne "runtime") { exit 0 }   # full モード時はハイパーバイザー側で固定済み
-    if ($cfg.VMName) { $VMName = Resolve-VMName ([string]$cfg.VMName) }
+    if ($cfg.VMName) { $VMName = [string]$cfg.VMName; Assert-LiteralVMName $VMName }
 
     # Edge Box 起動直後は vmmem が出そろうまで少し待つ (最大 60 秒)
     $msg = ""
@@ -1849,7 +1909,7 @@ if (-not $bcdReady) {
     }
 
     Save-Config ([pscustomobject]@{
-        Mode = "full"; VMName = $VMName
+        Mode = "full"; VMName = $VMName; VMId = [string]$vm.Id
         HostLps = $plan.HostLps; GuestLps = $plan.GuestLps
         Scheduler = $Scheduler; NoPriorityBoost = $false
         VmAutoStart = $auto; ManageVmStart = [bool]$auto
@@ -1880,7 +1940,7 @@ $bound = Invoke-FullStage2 $plan.HostLps $plan.GuestLps $true
 $cfgF = Get-SavedConfig
 if (-not $cfgF -or $cfgF.Mode -ne "full") {
     Save-Config ([pscustomobject]@{
-        Mode = "full"; VMName = $VMName
+        Mode = "full"; VMName = $VMName; VMId = [string]$vm.Id
         HostLps = $plan.HostLps; GuestLps = $plan.GuestLps
         Scheduler = $Scheduler; GroupBound = $bound; NoPriorityBoost = $false
         PendingVM = (-not $vm); PendingReboot = $false
@@ -1894,11 +1954,12 @@ if ($bound) {
     Write-Host "完全分割が成立しました (Linux 主構成の isolcpus + vcpupin 相当)。" -ForegroundColor Green
     Write-Host "  - Windows : CPU $hostText から出られません (minroot)"
     Write-Host "  - Edge Box      : CPU $guestText から出られません (CPU グループ。起動のたびに '$BootTaskName' が作り直します)"
+} elseif (-not $vm -and $AllowMissingVM) {
+    Write-Host "未作成の Edge Box 用に計画を保存しました。作成後に CPU 固定を確認します。" -ForegroundColor Yellow
 } else {
-    Write-Host "準分割で適用しました。" -ForegroundColor Yellow
-    Write-Host "  - Windows : CPU $hostText から出られません (minroot) ← ここは完全"
-    Write-Host "  - Edge Box      : 空いている CPU $guestText 上でほぼ実行されます (ハイパーバイザー任せ + 予約で保証)"
-    Write-Host "  - 起動タスク '$BootTaskName' が 5 分ごとに固定を試し直します。Edge Box 停止中に効くこともあります"
+    Write-Host "完全分割を確認できません。CPU 計画による自動起動は保留しました。" -ForegroundColor Yellow
+    Write-Host "  - 上記の理由を確認し、Edge Box を正常停止してから再適用してください。"
+    Write-Host "  - 起動タスク '$BootTaskName' も 5 分ごとに固定を再確認します。"
 }
 Write-Host ""
 Write-Host "確認: 『Edge Box 監視』の区画ごとの色 (Windows 用に緑・Edge Box 用に青が載らないこと)、または .\cpu-partition.ps1 -Verify" -ForegroundColor Cyan

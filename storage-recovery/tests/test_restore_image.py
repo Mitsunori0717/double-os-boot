@@ -115,6 +115,15 @@ class RestoreTests(unittest.TestCase):
                 with self.assertRaisesRegex(ri.oi.SafetyError,'EXPLICIT_DESTRUCTIVE_CONFIRMATION_REQUIRED'):
                     ri.physical_restore(p/'image',p/'manifest',target,p,'run',{},'wrong',True,True,True)
             self.assertFalse(target.exists())
+    def test_restore_permission_flags_require_booleans_before_environment_access(self):
+        for flag in ('execute', 'exclusive', 'basic_single_disk_image_confirmed', 'larger_target_layout'):
+            for value in ('false', 'true', 0, 1, None):
+                with self.subTest(flag=flag, value=value), \
+                     patch.object(ri.oi, 'live_environment', side_effect=AssertionError('must not inspect live environment')) as live:
+                    with self.assertRaisesRegex(ri.oi.SafetyError, 'BOOLEAN_RESTORE_FLAG_REQUIRED:'+flag):
+                        ri.physical_restore('unused-image', 'unused-manifest', 'unused-target',
+                                            'unused-logdir', 'run', {}, **{flag: value})
+                    live.assert_not_called()
     def test_read_lease_failure_prevents_image_use(self):
         with patch.object(ri,'locked_source',side_effect=ri.oi.SafetyError('READ_LEASE_FAILED')):
             with self.assertRaisesRegex(ri.oi.SafetyError,'READ_LEASE_FAILED'):

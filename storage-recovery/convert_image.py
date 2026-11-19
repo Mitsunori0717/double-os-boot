@@ -305,12 +305,18 @@ def _convert_locked(raw, output, executable, names, m, manifest, manifest_before
     lock_fd = os.open(names[3], os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
     os.close(lock_fd)
     work = None
+    log = None
     def record(state, details):
-        with open(names[2], 'a', encoding='utf-8') as log:
-            log.write(json.dumps({'Utc': utc(), 'State': state, **details}, ensure_ascii=False)+'\n')
-            log.flush()
-            os.fsync(log.fileno())
+        if log is None:
+            raise ConversionError('EVENT_LOG_UNAVAILABLE')
+        log.write(json.dumps({'Utc': utc(), 'State': state, **details}, ensure_ascii=False)+'\n')
+        log.flush()
+        os.fsync(log.fileno())
     try:
+        # Reserve the log atomically and keep its handle throughout conversion.
+        # A prior existence check alone cannot prevent appending to a newly
+        # created artifact (or following a substituted symlink) in this slot.
+        log = open(names[2], 'x', encoding='utf-8')
         record('partial', {'Stage':'validate-source','Source':str(raw),'Output':str(output),'ExpectedBytes':size})
         with locked_source(raw) as source:
             before = os.fstat(source.fileno())
@@ -364,7 +370,8 @@ def _convert_locked(raw, output, executable, names, m, manifest, manifest_before
     finally:
         # Never clean partial data automatically. Lock is a durable run marker;
         # use a fresh output name for retries and inspect logs/partials.
-        pass
+        if log is not None:
+            log.close()
 
 
 def main(argv=None):

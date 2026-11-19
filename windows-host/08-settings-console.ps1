@@ -69,7 +69,7 @@ if ($Setup) {
     # 管理者権限付きのタスクとして登録し、アイコンはそのタスクを起動するだけにする
     $taskName = "EdgeBox-Settings-Console"
     $action = New-ScheduledTaskAction -Execute "powershell.exe" `
-        -Argument "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$PSCommandPath`""
+        -Argument "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$PSCommandPath`" -VMName `"$VMName`""
     # 時間制限なし + 多重起動可 (設定コンソールから表示処理を呼ぶと常駐プロセスが残るため。理由は 10-restart-edgebox.ps1 の -Setup を参照)
     $ts = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -MultipleInstances Parallel -ExecutionTimeLimit (New-TimeSpan -Seconds 0)
     Register-ScheduledTask -TaskName $taskName -Action $action -Settings $ts -RunLevel Highest -Force | Out-Null

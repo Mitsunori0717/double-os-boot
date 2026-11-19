@@ -75,6 +75,11 @@ if ($NoConfirm -and ([string]::IsNullOrWhiteSpace($ExpectedUniqueId) -or -not $E
 }
 $disk=Get-EdgeBoxCreateDisk -DiskNumber $DiskNumber -ExpectedUniqueId $ExpectedUniqueId -ExpectedSize $ExpectedSize -ExpectedSerialNumber $ExpectedSerialNumber
 $selectedDisk=[pscustomobject]@{Number=$disk.Number;UniqueId=[string]$disk.UniqueId;Size=[UInt64]$disk.Size;SerialNumber=[string]$disk.SerialNumber;IsOffline=[bool]$disk.IsOffline}
+function ConvertTo-CreateNicGuid([string]$Value) {
+    $parsed=[guid]::Empty
+    if (-not [guid]::TryParse($Value,[ref]$parsed)) { throw '物理 LAN の GUID を確認できません。' }
+    $parsed.ToString('D')
+}
 
 # --- ネットワーク NIC の確認 (ディスクに触れる前に済ませる) ---
 # 名前・IP アドレス・説明のどれで指定されても、実際のアダプター名に解決する
@@ -123,7 +128,7 @@ function Get-SwitchByPhysicalNic($Nic) {
     if ([string]::IsNullOrWhiteSpace([string]$Nic.InterfaceGuid)) { throw '物理 LAN の ID を確認できません。' }
     $matching=@(Get-VMSwitch -SwitchType External -ErrorAction Stop | Where-Object {
         $guids=@($_.NetAdapterInterfaceGuid)+@($_.NetAdapterInterfaceGuids)
-        [string]$Nic.InterfaceGuid -in @($guids | ForEach-Object { [string]$_ })
+        (ConvertTo-CreateNicGuid ([string]$Nic.InterfaceGuid)) -in @($guids | Where-Object { $_ } | ForEach-Object { ConvertTo-CreateNicGuid ([string]$_) })
     })
     if ($matching.Count -gt 1) { throw '物理 LAN の所属スイッチを一意に確認できません。' }
     if ($matching.Count) { return $matching[0] }
@@ -232,8 +237,8 @@ if ($createFrom) {
     if ($ExpectedSwitchId) { throw '選択済みの既存スイッチを、新規スイッチで置き換えません。' }
     $nic=@(Get-NetAdapter -Physical -ErrorAction Stop | Where-Object Name -eq $createFrom)
     if ($nic.Count -ne 1 -or [string]::IsNullOrWhiteSpace([string]$nic[0].InterfaceGuid)) { throw '作成先の物理 LAN を一意に確認できません。' }
-    $selectedNicGuid=[string]$nic[0].InterfaceGuid
-    if ($ExpectedNetAdapterGuid -and $selectedNicGuid -ne $ExpectedNetAdapterGuid) { throw '選択時から物理 LAN の ID が変わりました。' }
+    $selectedNicGuid=ConvertTo-CreateNicGuid ([string]$nic[0].InterfaceGuid)
+    if ($ExpectedNetAdapterGuid -and $selectedNicGuid -ne (ConvertTo-CreateNicGuid $ExpectedNetAdapterGuid)) { throw '選択時から物理 LAN の ID が変わりました。' }
     if (@(Get-VMSwitch -ErrorAction Stop | Where-Object Name -eq $useSwitch).Count) { throw '作成予定と同名のスイッチが既にあります。' }
 } else {
     $selectedSwitch=@(Get-VMSwitch -ErrorAction Stop | Where-Object Name -eq $useSwitch)
@@ -242,7 +247,7 @@ if ($createFrom) {
     if ($ExpectedSwitchId -and $selectedSwitchId -ne $ExpectedSwitchId) { throw '選択時から外部スイッチの ID が変わりました。' }
     if ($ExpectedNetAdapterGuid) {
         $nicGuids=@($selectedSwitch[0].NetAdapterInterfaceGuid)+@($selectedSwitch[0].NetAdapterInterfaceGuids)
-        if ($ExpectedNetAdapterGuid -notin @($nicGuids | ForEach-Object { [string]$_ })) { throw '外部スイッチの物理 LAN が選択時と一致しません。' }
+        if ((ConvertTo-CreateNicGuid $ExpectedNetAdapterGuid) -notin @($nicGuids | Where-Object { $_ } | ForEach-Object { ConvertTo-CreateNicGuid ([string]$_) })) { throw '外部スイッチの物理 LAN が選択時と一致しません。' }
     }
 }
 Write-Host "対象ディスク:" -ForegroundColor Cyan
@@ -266,7 +271,7 @@ try {
     if (@(Get-VM -ErrorAction Stop | Where-Object Name -eq $VMName).Count) { throw '確認後に同名の VM が作成されました。' }
     # --- ネットワークスイッチ (必要な場合のみ新規作成) ---
     if ($createFrom) {
-        $freshNic=@(Get-NetAdapter -Physical -ErrorAction Stop | Where-Object { $_.Name -eq $createFrom -and [string]$_.InterfaceGuid -eq $selectedNicGuid })
+        $freshNic=@(Get-NetAdapter -Physical -ErrorAction Stop | Where-Object { $_.Name -eq $createFrom -and (ConvertTo-CreateNicGuid ([string]$_.InterfaceGuid)) -eq $selectedNicGuid })
         if ($freshNic.Count -ne 1) { throw '確認後に物理 LAN が変わりました。' }
         Write-Host "外部スイッチ '$useSwitch' を作成しています (NIC: $createFrom)..." -ForegroundColor Cyan
         Write-Host "  ※ 作成の瞬間、ネットワークが数秒切断されます。"

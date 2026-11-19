@@ -59,12 +59,14 @@ function Get-EdgeBoxRequiredFiles {
       'windows-host/04-reboot-to-field-native.ps1','windows-host/05-shutdown-all.ps1','windows-host/07-boot-appearance.ps1','windows-host/08-settings-console.ps1',
       'windows-host/09-rename-to-edgebox.ps1','windows-host/10-restart-edgebox.ps1','windows-host/11-io-passthrough.ps1','windows-host/99-fix-black-screen.ps1',
       'windows-host/build-startup-cover.ps1','windows-host/field-start.cmd','windows-host/fix-black-screen.cmd',
-      'windows-cpu-partition/cpu-apps.ps1','windows-cpu-partition/cpu-monitor.ps1','windows-cpu-partition/console.cmd','windows-cpu-partition/setup.cmd')
+      'windows-cpu-partition/cpu-apps.ps1','windows-cpu-partition/cpu-monitor.ps1','windows-cpu-partition/console.cmd','windows-cpu-partition/setup.cmd',
+      'windows-host/cpu-boot.psm1','windows-cpu-partition/cpu-tool.psm1')
     @('README.md','CHANGELOG.md','VALIDATION.md','release.json','package-files.txt',
       'docs/FRESH-INSTALL.md','docs/HARDWARE-ACCEPTANCE.md','tools/package.py','tests/run-all.ps1','tests/test_package.py','tests/test_qemu_integration.py',
       'installer/bootstrap.cs','installer/bootstrap.manifest','installer/build-installer.cmd','installer/build-installer.ps1',
       'installer/install.cmd','installer/install.ps1','installer/package-safety.psm1','installer/README.md','installer/tests/run-tests.ps1',
       'setup/tests/run-tests.ps1','setup/tests/test-safety.ps1','setup/tests/test-vm-create-safety.ps1','windows-host/tests/test-launcher-safety.ps1',
+      'windows-host/tests/test-start-safety.ps1','windows-host/tests/test-cpu-preparation.ps1',
       'storage-recovery/tests/run-all.ps1','storage-recovery/tests/run-tests.ps1','storage-recovery/tests/test-hyperv-recovery.ps1',
       'storage-recovery/tests/test-hyperv-v2.ps1','storage-recovery/tests/test-hyperv-wiring.ps1','storage-recovery/tests/test-windows-expanded-plan.ps1',
       'storage-recovery/tests/test-windows-integration.ps1','storage-recovery/tests/test-windows-inventory.ps1','storage-recovery/tests/test-windows-plan.ps1',

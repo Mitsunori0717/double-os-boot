@@ -48,18 +48,8 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-# -VMName を明示していない場合、既定名の Edge Box が無ければ、Edge Box のディスク
-# (物理ディスクのパススルー) を持つ Edge Box を探して使う。00-field-launcher.ps1 と
-# 同じ考え方で、登録名が「EdgeBox」でなくても (旧名称のままでも) そのまま動くようにする
-if (-not $PSBoundParameters.ContainsKey("VMName") -and -not ($Splash -or $Backdrop -or $Notice -or $EscWatcher -or $ConsoleCloser -or $LeftGuard -or $UrlRetry) -and
-    -not (Get-VM -Name $VMName -ErrorAction SilentlyContinue)) {
-    $foundVms = @()
-    foreach ($v in @(Get-VM -ErrorAction SilentlyContinue)) {
-        $pt = @(Get-VMHardDiskDrive -VMName $v.Name -ErrorAction SilentlyContinue |
-            Where-Object { $null -ne $_.DiskNumber })
-        if ($pt.Count -gt 0) { $foundVms += $v }
-    }
-    if ($foundVms.Count -eq 1) { $VMName = $foundVms[0].Name }
+if ([string]::IsNullOrWhiteSpace($VMName) -or [Management.Automation.WildcardPattern]::ContainsWildcardCharacters($VMName)) {
+    throw '対象 VM の正確な登録名を指定してください。'
 }
 $TaskName = "EdgeBox-Display-Kiosk"
 $ConfigFile = Join-Path $PSScriptRoot "display-config.json"
@@ -92,22 +82,7 @@ function Set-Status([string]$m) {
     try { Set-Content -Path $StatusFile -Value $m -Encoding UTF8 -ErrorAction SilentlyContinue } catch { }
 }
 
-# CPU コア分割ツール (別フォルダ windows-cpu-partition) が full モードなら、Edge Box を起動する前に
-# 起動タスクと同じ処理を呼び、CPU グループに固定してから起動する (固定は Edge Box 停止中に確実に効く)。
-# ツールが無ければ何もしない (互いに独立。あるときだけ順番を譲る)。戻り値: 呼んだか
-function Invoke-CpuPartitionBoot {
-    try {
-        $cpuDir = Join-Path (Split-Path $PSScriptRoot -Parent) "windows-cpu-partition"
-        $cfgF = Join-Path $cpuDir "cpu-partition.json"; $ps1 = Join-Path $cpuDir "cpu-partition.ps1"
-        if (-not (Test-Path $cfgF) -or -not (Test-Path $ps1)) { return $false }
-        $c = Get-Content $cfgF -Raw -Encoding UTF8 | ConvertFrom-Json
-        if ($c.Mode -ne "full") { return $false }
-        $p = Start-Process powershell.exe -WindowStyle Hidden -PassThru `
-            -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$ps1`" -BootApply -Quiet"
-        if (-not $p.WaitForExit(240000)) { try { $p.Kill() } catch { } }
-        return $true
-    } catch { return $false }
-}
+Import-Module (Join-Path $PSScriptRoot 'cpu-boot.psm1') -ErrorAction Stop
 # URL の先に 1 回だけ接続を試す (TCP が開くか)
 function Test-UrlOnce([string]$u) {
     try {
@@ -1851,13 +1826,14 @@ if ($vm -and $vm.State -eq "Off") {
     $s11 = Join-Path $PSScriptRoot "11-io-passthrough.ps1"
     if (Test-Path $s11) { try { $r11 = & $s11 -VMName $VMName -ApplyPending -Quiet; if ($r11) { Log ([string]$r11) } } catch { } }
     # CPU コア分割ツール (full モード) があれば、Edge Box を CPU グループに固定してから起動する
-    if (Invoke-CpuPartitionBoot) { Log "CPU コア分割 (full): Edge Box を CPU グループに固定する処理を先に行いました。" }
-    $vm = Get-VM -Name $VMName -ErrorAction SilentlyContinue
-    if ($vm -and $vm.State -eq "Running") {
-        Log "Edge Box は起動済みです (コア分割の処理で起動)。"
+    if (Invoke-EdgeBoxCpuPreparation -VMName $VMName) { Log "CPU コア分割 (full): Edge Box を CPU グループに固定する処理を先に行いました。" }
+    $vm = Get-VM -Id $vm.Id -ErrorAction Stop
+    if ($vm.Name -ne $VMName) { throw '起動準備中に対象 VM の登録名が変わりました。' }
+    if ($vm.State -eq "Running") {
+        Log "Edge Box は起動済みです。"
     } else {
         Log "Edge Box が起動していないため、ここで起動します。"
-        try { Start-VM -Name $VMName -ErrorAction Stop } catch { Log "警告: Edge Box を起動できませんでした: $($_.Exception.Message)" }
+        try { Start-VM -VM $vm -ErrorAction Stop } catch { Log "Edge Box を起動できませんでした: $($_.Exception.Message)"; throw }
     }
 }
 $sw = [System.Diagnostics.Stopwatch]::StartNew()

@@ -100,6 +100,35 @@ class ConversionTests(unittest.TestCase):
             if args[0]=='compare':self.output.write_bytes(b'concurrent protected')
             return result
         self.assertRaises(FileExistsError,self.convert,runner=runner);self.assertEqual(self.output.read_bytes(),b'concurrent protected')
+    def test_concurrent_log_creation_is_preserved_and_prevents_conversion(self):
+        event_log = Path(str(self.output)+'.events.jsonl')
+        run_lock = Path(str(self.output)+'.conversion.lock')
+        original_open = c.os.open
+        def create_competing_log(path, flags, *args, **kwargs):
+            fd = original_open(path, flags, *args, **kwargs)
+            if Path(path) == run_lock:
+                event_log.write_text('concurrent protected log', encoding='utf-8')
+            return fd
+        with mock.patch.object(c.os, 'open', side_effect=create_competing_log):
+            with self.assertRaises(FileExistsError): self.convert()
+        self.assertEqual(event_log.read_text(encoding='utf-8'), 'concurrent protected log')
+        self.assertFalse(self.calls)
+        self.assertFalse(self.output.exists())
+        self.assertFalse(Path(str(self.output)+'.manifest.json').exists())
+
+    @unittest.skipUnless(sys.platform.startswith('linux'), 'Linux pathname replacement semantics')
+    def test_replaced_log_path_is_not_reopened_or_modified(self):
+        event_log = Path(str(self.output)+'.events.jsonl')
+        moved_log = self.root/'original-events.jsonl'
+        def runner(exe, args, timeout, record):
+            if args[0] == '--version':
+                event_log.rename(moved_log)
+                event_log.write_text('replacement protected log', encoding='utf-8')
+            return self.runner(exe, args, timeout, record)
+        self.convert(runner=runner)
+        self.assertEqual(event_log.read_text(encoding='utf-8'), 'replacement protected log')
+        events = [json.loads(line) for line in moved_log.read_text(encoding='utf-8').splitlines()]
+        self.assertEqual(events[-1]['State'], 'verified')
     def test_unsafe_paths(self):
         for p in ['\\\\.\\PhysicalDrive0','\\\\server\\share\\raw','//server/share/raw']:
             with self.subTest(path=p):self.assertRaises(c.ConversionError,c.safe_path,p)

@@ -1,7 +1,9 @@
 # 新しい PC への導入
 
+完成版 ZIP を展開し、Windows の一括導入には同梱の `EdgeBox-Setup-2026.11.19.1.exe` を開きます。EXE は管理者権限でファイルを配置してセットアップを開始します。手動で導入するときは、内側の `EdgeBox-Recovery-2026.11.19.1-source.zip` を展開して次の手順に進みます。
+
 1. [ルート README](../README.md) の必要環境と [セットアップ詳細](../setup/README.md) を確認します。FSBP 導入済みディスク、対象 LAN、正常終了できる保守時間を用意します。
-2. 改修版 ZIP 全体をローカルディスクの新しいフォルダーへ展開します。`setup`、`windows-host`、`windows-cpu-partition` を分離しません。別 PC の `settings.json` をコピーしません。
+2. ソース ZIP 全体をローカルディスクの新しいフォルダーへ展開します。`setup`、`windows-host`、`windows-cpu-partition` を分離しません。別 PC の `settings.json` をコピーしません。
 3. `setup/check-status.cmd` で状態を確認します。「確認不能」の場合は管理者として確認します。
 4. `setup-all.cmd` を実行します。必要ファイルの不足や保存機器 ID の不一致は設定変更前に解消します。既存 VM を再利用する場合は [明示選択の手順](../setup/README.md) に従います。
 5. 再起動を自動で行う一括実行と、自分で再起動する番号別実行を使い分けます。VM が正常終了できないときは作業を止め、強制終了しません。

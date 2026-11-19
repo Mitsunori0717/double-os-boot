@@ -27,15 +27,15 @@ function Get-SetupRequiredFiles([string]$Step='All') {
         '02'=@()
         '05'=@('windows-host\01-create-field-vm.ps1','windows-host\vm-create-safety.psm1')
         '06'=@('windows-host\06-auto-logon.ps1')
-        '09'=@('windows-host\03-field-display-kiosk.ps1','windows-host\build-startup-cover.ps1','windows-host\startup-cover.cs')
-        '10'=@('windows-cpu-partition\cpu-partition.ps1','setup\cpu-topology.cs')
+        '09'=@('windows-host\03-field-display-kiosk.ps1','windows-host\build-startup-cover.ps1','windows-host\startup-cover.cs','windows-host\cpu-boot.psm1')
+        '10'=@('windows-cpu-partition\cpu-partition.ps1','windows-cpu-partition\cpu-tool.psm1','setup\cpu-topology.cs')
         '11'=@('windows-host\00-field-launcher.ps1','windows-host\01-create-field-vm.ps1','windows-host\02-start-field-vm.ps1','windows-host\03-field-display-kiosk.ps1','windows-host\build-startup-cover.ps1','windows-host\startup-cover.cs','windows-host\08-settings-console.ps1','windows-host\05-shutdown-all.ps1','windows-host\vm-shutdown.psm1','windows-host\10-restart-edgebox.ps1','windows-host\11-io-passthrough.ps1','windows-cpu-partition\cpu-console.ps1','windows-cpu-partition\cpu-monitor.ps1','windows-cpu-partition\cpu-partition.ps1','windows-cpu-partition\cpu-apps.ps1','windows-cpu-partition\cpu-ui-theme.ps1')
         '12'=@('windows-host\12-windows-update.ps1')
         '13'=@('windows-host\13-quiet-windows.ps1')
     }
     $required=@('setup\setup-all.ps1','setup\setup-engine.psm1','setup\run-child.ps1')
     foreach ($id in $files.Keys) { if ($Step -eq 'All' -or $Step -eq $id) { $required+=@($files[$id]) } }
-    if ($Step -eq 'All' -or $Step -eq '11') { $required+='windows-host\vm-create-safety.psm1' }
+    if ($Step -eq 'All' -or $Step -eq '11') { $required+=@('windows-host\vm-create-safety.psm1','windows-host\cpu-boot.psm1','windows-cpu-partition\cpu-tool.psm1') }
     $required | Sort-Object -Unique
 }
 function Get-SetupMissingFiles([string]$Step='All') {
@@ -57,9 +57,15 @@ function Get-SetupTask([string]$Name) {
 function Test-SetupTask([string]$Name, [string]$Script, [string]$Argument = '', [switch]$Logon) {
     $t = Get-SetupTask $Name
     if (-not $t -or -not $t.Settings.Enabled -or [string]$t.Principal.RunLevel -notin @('Highest','1')) { return $false }
+    $scriptPath=Join-Path $script:Root $Script
+    $fileValue='"'+[regex]::Escape($scriptPath)+'"'
+    if ($scriptPath -notmatch '\s') { $fileValue+='|'+[regex]::Escape($scriptPath) }
+    $filePattern='(?i)(?:^|\s)-File\s+(?:'+$fileValue+')(?=\s|$)'
+    $allowedExecutables=@('powershell.exe',(Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'),(Join-Path $PSHOME 'powershell.exe'))
     $a = @($t.Actions | Where-Object {
-        ([string]$_.Arguments).IndexOf((Join-Path $script:Root $Script), [StringComparison]::OrdinalIgnoreCase) -ge 0 -and
-        (-not $Argument -or ([string]$_.Arguments).Contains($Argument))
+        [Environment]::ExpandEnvironmentVariables([string]$_.Execute) -in $allowedExecutables -and
+        [string]$_.Arguments -match $filePattern -and
+        (-not $Argument -or [string]$_.Arguments -match ('(?i)(?:^|\s)'+[regex]::Escape($Argument)+'(?=\s|$)'))
     })
     if (-not $a.Count) { return $false }
     if ($Logon) {
@@ -106,13 +112,19 @@ function Test-SetupMountedPartition($Partition) {
     }
     return $false
 }
+function ConvertTo-SetupNicGuid([string]$Value) {
+    $parsed=[guid]::Empty
+    if (-not [guid]::TryParse($Value,[ref]$parsed)) { throw '物理 LAN の GUID を確認できません。' }
+    $parsed.ToString('D')
+}
 function Assert-SetupSwitchIdentity($Switch) {
     if ($script:Settings.SwitchId -and [string]$Switch.Id -ne [string]$script:Settings.SwitchId) {
         throw '接続先の外部スイッチが選択済み SwitchId と一致しません。接続先を自動変更しません。'
     }
     if ($script:Settings.NetAdapterGuid) {
         $guids=@($Switch.NetAdapterInterfaceGuid) + @($Switch.NetAdapterInterfaceGuids)
-        $matches=@($guids | Where-Object { [string]$_ -eq [string]$script:Settings.NetAdapterGuid })
+        $expected=ConvertTo-SetupNicGuid ([string]$script:Settings.NetAdapterGuid)
+        $matches=@($guids | Where-Object { $_ -and (ConvertTo-SetupNicGuid ([string]$_)) -eq $expected })
         if (-not $matches.Count) { throw '外部スイッチの物理 LAN が選択済み NetAdapterGuid と一致することを確認できません。' }
     }
 }
@@ -130,6 +142,20 @@ function Get-SetupScheduler {
     $boot = (Get-CimInstance Win32_OperatingSystem -ErrorAction Stop).LastBootUpTime
     if ($ev.TimeCreated -lt $boot.AddSeconds(-5)) { throw '今回の起動の Hyper-V イベントを確認できません。' }
     switch ([int]$ev.Properties[0].Value) { 1 {'classic'} 2 {'classic'} 3 {'core'} 4 {'root'} default {'unknown'} }
+}
+function Get-SetupCpuGroupOutput([string]$Exe,[string]$VMName) {
+    Import-Module (Join-Path $script:Root 'windows-cpu-partition\cpu-tool.psm1') -ErrorAction Stop
+    Assert-EdgeBoxCpuTool $Exe
+    $output=& $Exe GetVmGroup ("/VmName:"+$VMName) 2>&1 | Out-String
+    [pscustomobject]@{Output=$output;ExitCode=$LASTEXITCODE}
+}
+function Get-SetupVmGroupId([string]$Output,[guid]$VMId) {
+    $groups=@(foreach ($line in ($Output -split '\r?\n')) {
+        $ids=@([regex]::Matches($line,'[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}') | ForEach-Object { $_.Value.ToLowerInvariant() })
+        if ($ids.Count -ge 2 -and $ids[-2] -eq $VMId.ToString('D')) { $ids[-1] }
+    })
+    if ($groups.Count -eq 1) { return $groups[0] }
+    return ''
 }
 function Get-SetupCpuState {
     $cfg = Get-SetupCpuConfig
@@ -159,8 +185,9 @@ function Get-SetupCpuState {
     $fresh = $st -and $st.At -and ([datetime]$st.At -ge $boot.AddSeconds(-5)) -and $st.MinrootOk -and $st.Bound
     $exe = Join-Path $script:Root 'windows-cpu-partition\tools\CpuGroups.exe'
     if (-not (Test-Path -LiteralPath $exe)) { return (New-SetupState NeedsWork 'CpuGroups.exe がありません。') }
-    $group = & $exe GetVmGroup ("/VmName:" + $vm.Name) 2>&1 | Out-String
-    if ($LASTEXITCODE -ne 0 -or $group -notmatch '(?i)b0edb0ed-c01e-4a11-8000-0000000000e1' -or -not $fresh) {
+    $groupResult=Get-SetupCpuGroupOutput $exe $vm.Name
+    $group=Get-SetupVmGroupId $groupResult.Output ([guid]$vm.Id)
+    if ($groupResult.ExitCode -ne 0 -or $group -ne 'b0edb0ed-c01e-4a11-8000-0000000000e1' -or -not $fresh) {
         return (New-SetupState NeedsWork 'CPU 固定の現在の成立を確認できません。cpu-full-status.json と CPU グループを再確認します。')
     }
     if ($cfg.ManageVmStart -and [string]$vm.AutomaticStartAction -ne 'Nothing') { return (New-SetupState NeedsWork 'CPU 固定前に VM が起動する設定です。起動順を修復します。') }
@@ -220,6 +247,7 @@ function Get-SetupStepState([string]$Id) {
             }
             '10' { return (Get-SetupCpuState) }
             '11' {
+                $vm=Get-SetupVM; $name=if($vm){$vm.Name}else{'EdgeBox'}
                 $defs=@(
                     @('EdgeBox-Launcher','windows-host\00-field-launcher.ps1','Edge Box 起動.lnk'),
                     @('EdgeBox-Settings-Console','windows-host\08-settings-console.ps1','設定.lnk'),
@@ -231,7 +259,7 @@ function Get-SetupStepState([string]$Id) {
                 )
                 $shell=New-Object -ComObject WScript.Shell
                 foreach ($d in $defs) {
-                    if (-not (Test-SetupTask $d[0] $d[1])) { return (New-SetupState NeedsWork ("タスク不足・配置先相違: " + $d[0])) }
+                    if (-not (Test-SetupTask $d[0] $d[1] ('-VMName '+(ConvertTo-SetupArgument $name)))) { return (New-SetupState NeedsWork ("タスク不足・配置先または対象 VM 相違: " + $d[0])) }
                     $path=Join-Path ([Environment]::GetFolderPath('Desktop')) $d[2]
                     if (-not (Test-Path -LiteralPath $path)) { return (New-SetupState NeedsWork ('アイコン不足: '+$d[2])) }
                     $lnk=$shell.CreateShortcut($path)
@@ -317,9 +345,10 @@ function Resolve-SetupSwitch {
     }
     $eligible=$sw
     if ($script:Settings.NetAdapterGuid) {
+        $expectedNic=ConvertTo-SetupNicGuid ([string]$script:Settings.NetAdapterGuid)
         $eligible=@($sw | Where-Object {
             $guidValues=@($_.NetAdapterInterfaceGuid) + @($_.NetAdapterInterfaceGuids)
-            @($guidValues | Where-Object { [string]$_ -eq [string]$script:Settings.NetAdapterGuid }).Count -gt 0
+            @($guidValues | Where-Object { $_ -and (ConvertTo-SetupNicGuid ([string]$_)) -eq $expectedNic }).Count -gt 0
         })
     }
     if ($eligible.Count) {
@@ -330,7 +359,8 @@ function Resolve-SetupSwitch {
     }
     $nics=@(Get-NetAdapter -Physical -ErrorAction Stop | Where-Object Status -eq Up)
     if ($script:Settings.NetAdapterGuid) {
-        $nic=$nics | Where-Object { [string]$_.InterfaceGuid -eq $script:Settings.NetAdapterGuid }
+        $expectedNic=ConvertTo-SetupNicGuid ([string]$script:Settings.NetAdapterGuid)
+        $nic=$nics | Where-Object { (ConvertTo-SetupNicGuid ([string]$_.InterfaceGuid)) -eq $expectedNic }
         if (-not $nic) { throw '選択済み LAN ポートが未接続です。接続を確認してください。' }
     } else {
         if (-not $nics.Count) { throw '接続中の物理 LAN がありません。ライン側ケーブルを接続してください。' }
