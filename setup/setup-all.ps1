@@ -12,7 +12,7 @@ $ErrorActionPreference = 'Stop'
 if (-not $Status -and -not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
     try {
         $arguments='-NoProfile -ExecutionPolicy Bypass -File "'+$PSCommandPath+'" -Step '+$Step
-        foreach ($flag in @('NoConfirm','RestartIfNeeded','Resume','NoPause')) { if ($PSBoundParameters[$flag]) { $arguments+=' -'+$flag } }
+        foreach ($flag in @('NoConfirm','Resume','NoPause')) { if ($PSBoundParameters[$flag]) { $arguments+=' -'+$flag } }
         $p=Start-Process powershell.exe -Verb RunAs -ArgumentList $arguments -Wait -PassThru
         exit $p.ExitCode
     } catch {

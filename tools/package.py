@@ -29,6 +29,8 @@ REQUIRED_GROUPS = {
                      '03-field-display-kiosk.ps1', '05-shutdown-all.ps1', '06-auto-logon.ps1',
                      '08-settings-console.ps1', '10-restart-edgebox.ps1', '11-io-passthrough.ps1',
                      '12-windows-update.ps1', '13-quiet-windows.ps1', 'build-startup-cover.ps1',
+                     'host-restart-policy.psm1', 'service-restart-policy.psm1', 'service-restart-policy.cs',
+                     'tests/test-service-restart-policy.ps1', 'shutdown-diagnostics.ps1',
                      'startup-cover.cs', 'tests/test-launcher-safety.ps1'),
     'windows-cpu-partition': ('cpu-console.ps1', 'cpu-monitor.ps1', 'cpu-apps.ps1',
                              'cpu-ui-theme.ps1', 'setup.cmd', 'console.cmd'),

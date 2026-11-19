@@ -1,16 +1,16 @@
 ﻿<#
 .SYNOPSIS
-    終業用ワンクリック: Edge Box を正しく終了してから、Windows もシャットダウンします。
+    Edge Box を正常終了し、選択した場合は Windows のシャットダウン・再起動を行います。
 
 .DESCRIPTION
     1. Edge Box に ACPI シャットダウン要求を送る (物理機の電源ボタン短押しと同じ)
        → Edge Box 自身が正規の終了処理を実行する
     2. 完全に停止するのを待つ (最大3分)
-    3. Windows をシャットダウンする
+    3. Windows のシャットダウン・再起動を選んだ場合は、他の VM の停止も確かめて実行する
 
 .EXAMPLE
     .\05-shutdown-all.ps1              # 確認あり
-    .\05-shutdown-all.ps1 -NoConfirm   # 確認なし (ショートカット用)
+    .\05-shutdown-all.ps1 -NoConfirm   # 操作選択を省略し、Windows のシャットダウンを要求
     .\05-shutdown-all.ps1 -Setup       # デスクトップに『全部シャットダウン』ショートカットを作成
 #>
 [CmdletBinding()]
@@ -46,25 +46,52 @@ if ($Setup) {
     $lnk.WorkingDirectory = $PSScriptRoot
     $lnk.WindowStyle  = 7   # 最小化 (schtasks の黒い窓を見せない)
     $lnk.IconLocation = "shell32.dll,27"
-    $lnk.Description  = "Edge Box を正しく終了してから Windows もシャットダウン"
+    $lnk.Description  = "Edge Box を正常終了し、Windows のシャットダウン・再起動または Edge Box のみ終了を選択"
     $lnk.Save()
     Write-Host "デスクトップに『全部シャットダウン』ショートカットを作成しました (UAC 確認なしで実行できます)。" -ForegroundColor Green
     exit 0
 }
 
-Add-Type -AssemblyName System.Windows.Forms
-$shutdownWindows = $true
-if (-not $NoConfirm) {
-    $msg = "Edge Box を終了します。`n`nWindows もシャットダウンしますか?`n`n" +
-           "[はい]      Edge Box を終了 → Windows もシャットダウン`n" +
-           "[いいえ]    Edge Box だけ終了 (Windows はこのまま使う)`n" +
-           "[キャンセル] 何もしない"
-    $res = [System.Windows.Forms.MessageBox]::Show($msg, "Edge Box の終了",
-        [System.Windows.Forms.MessageBoxButtons]::YesNoCancel,
-        [System.Windows.Forms.MessageBoxIcon]::Question)
-    if ($res -eq [System.Windows.Forms.DialogResult]::Cancel) { exit 0 }
-    $shutdownWindows = ($res -eq [System.Windows.Forms.DialogResult]::Yes)
+Add-Type -AssemblyName System.Windows.Forms,System.Drawing
+function Select-ShutdownAction {
+    [Windows.Forms.Application]::EnableVisualStyles()
+    $form=[Windows.Forms.Form]::new()
+    try {
+        $form.Text='Edge Box の終了'
+        $form.FormBorderStyle='FixedDialog'
+        $form.StartPosition='CenterScreen'
+        $form.AutoScaleMode='Dpi'
+        $form.MaximizeBox=$false
+        $form.MinimizeBox=$false
+        $form.ClientSize=[Drawing.Size]::new(390,233)
+        $label=[Windows.Forms.Label]::new()
+        $label.Text='Edge Box の正常終了後に行う操作を選んでください。'
+        $label.SetBounds(16,15,360,24)
+        $form.Controls.Add($label)
+        $choices=[ordered]@{
+            Shutdown='Windows をシャットダウン'
+            Restart='Windows を再起動'
+            GuestOnly='Edge Box だけ終了'
+            Cancel='キャンセル'
+        }
+        $y=44
+        foreach ($key in $choices.Keys) {
+            $button=[Windows.Forms.Button]::new()
+            $button.Text=$choices[$key]
+            $button.Tag=$key
+            $button.SetBounds(16,$y,358,37)
+            $button.Add_Click({$window=$this.FindForm(); $window.Tag=$this.Tag; $window.Close()})
+            $form.Controls.Add($button)
+            $y+=45
+            if ($key -eq 'Cancel') { $form.CancelButton=$button; $form.ActiveControl=$button }
+        }
+        $null=$form.ShowDialog()
+        return $form.Tag
+    } finally { $form.Dispose() }
 }
+$shutdownChoice=if ($NoConfirm) { 'Shutdown' } else { Select-ShutdownAction }
+if ($shutdownChoice -notin @('Shutdown','Restart','GuestOnly')) { exit 0 }
+$shutdownWindows=$shutdownChoice -in @('Shutdown','Restart')
 
 Import-Module (Join-Path $PSScriptRoot 'vm-shutdown.psm1') -Force
 $shutdownLog = Join-Path $PSScriptRoot 'shutdown-log.txt'
@@ -84,11 +111,16 @@ function Assert-ShutdownTargetOff([string]$ExpectedVmId,[switch]$WholeHost) {
         throw '選択した Edge Box の停止を再確認できません。Windows の終了を中止します。'
     }
 }
-function Invoke-ConfirmedWindowsShutdown([string]$ExpectedVmId) {
+function Invoke-ConfirmedWindowsShutdown([string]$ExpectedVmId,[switch]$Restart) {
     Assert-ShutdownTargetOff $ExpectedVmId -WholeHost
-    Write-ShutdownLog 'Windows へ通常のシャットダウンを要求（追加の 10 秒待ちは省略）。'
-    # /t > 0 implicitly forces applications closed; use zero delay and no /f.
-    shutdown.exe /s /t 0 /c "Edge Box の終了を確認しました。Windows をシャットダウンします。"
+    # /t > 0 は強制終了を伴うため、手動で選択した操作を待ち時間 0 で要求する。
+    if ($Restart) {
+        Write-ShutdownLog 'Windows へ手動の再起動を要求します。'
+        shutdown.exe /r /t 0 /c "Edge Box の停止を確認しました。保守担当者が Windows の再起動を選択しました。"
+    } else {
+        Write-ShutdownLog 'Windows へ通常のシャットダウンを要求します。'
+        shutdown.exe /s /t 0 /c "Edge Box の停止を確認しました。Windows をシャットダウンします。"
+    }
     if ($LASTEXITCODE -ne 0) { throw ('Windows の終了要求に失敗。終了コード: '+$LASTEXITCODE) }
 }
 Write-ShutdownLog '===== 終了開始 ====='
@@ -114,8 +146,12 @@ function Close-ShutdownConsole($VM) {
     }
 }
 try {
-    $nextAction=if ($shutdownWindows) {'停止を確認すると Windows をシャットダウンします。'} else {'停止を確認すると完了を表示します。Windows は引き続き使えます。'}
-    $shutdownVmId=Wait-EdgeBoxShutdown -VMName $VMName -TimeoutSec $TimeoutSec -PassThruId -ManualStop:(-not $shutdownWindows) -NextAction $nextAction -Log {param($m) Write-ShutdownLog $m} -AfterRequest {param($target) Close-ShutdownConsole $target}
+    $nextAction=switch ($shutdownChoice) {
+        Shutdown { '停止を確認すると Windows をシャットダウンします。' }
+        Restart  { '停止を確認すると Windows を再起動します。' }
+        GuestOnly { '停止を確認すると完了を表示します。Windows は引き続き使えます。' }
+    }
+    $shutdownVmId=Wait-EdgeBoxShutdown -VMName $VMName -TimeoutSec $TimeoutSec -PassThruId -ManualStop -NextAction $nextAction -Log {param($m) Write-ShutdownLog $m} -AfterRequest {param($target) Close-ShutdownConsole $target}
     Assert-ShutdownTargetOff $shutdownVmId
 } catch {
     Write-ShutdownLog ('失敗: '+$_.Exception.Message)
@@ -156,8 +192,7 @@ try {
 
 if ($shutdownWindows) {
     Write-ShutdownLog ('開始から Windows 終了要求直前まで: {0:N1} 秒' -f $operationTime.Elapsed.TotalSeconds)
-    Write-Host "Windows をシャットダウンします..."
-    try { Invoke-ConfirmedWindowsShutdown $shutdownVmId }
+    try { Invoke-ConfirmedWindowsShutdown $shutdownVmId -Restart:($shutdownChoice -eq 'Restart') }
     catch {
         Write-ShutdownLog ('失敗: '+$_.Exception.Message)
         [System.Windows.Forms.MessageBox]::Show($_.Exception.Message, 'Edge Box の終了を中止しました', 'OK', 'Warning') | Out-Null

@@ -7,6 +7,9 @@ Windows 上の Edge Box 環境を構築するセットアップと、全領域�
 | 目的 | 入口 |
 |---|---|
 | 新しい Windows PC に Edge Box を構築 | [導入手順](docs/FRESH-INSTALL.md)、`setup-all.cmd` |
+| データ収集中の自動再起動を禁止 | 管理者で手順 12 を実行。Windows Update、システム障害、サービス回復、再起動タスクの適用結果は手順 12 の状態表示で確認 |
+| Edge Box を終了し、Windows を手動で終了・再起動 | デスクトップの「全部シャットダウン」 |
+| Windows の終了に時間がかかった理由を確認 | Windows PowerShell で「windows-host/shutdown-diagnostics.ps1」を実行。管理者で実行するとサービス別の記録も参照可能 |
 | 現在のセットアップ状態だけを確認 | `setup/check-status.cmd` |
 | OS・アプリ・データを全領域バックアップ | [復旧機能の対応表](storage-recovery/README.md) |
 | RAW から交換 SSD へ復元 | [物理復元](storage-recovery/PHYSICAL-RESTORE.md) |

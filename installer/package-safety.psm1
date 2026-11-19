@@ -48,6 +48,7 @@ function Get-EdgeBoxRequiredFiles {
     @('start.cmd','setup-all.cmd','setup/setup-all.ps1','setup/setup-engine.psm1','setup/run-child.ps1','setup/cpu-topology.cs',
       'windows-host/01-create-field-vm.ps1','windows-host/06-auto-logon.ps1','windows-host/vm-shutdown.psm1',
       'windows-host/12-windows-update.ps1','windows-host/13-quiet-windows.ps1','windows-host/startup-cover.cs',
+      'windows-host/host-restart-policy.psm1','windows-host/service-restart-policy.psm1','windows-host/service-restart-policy.cs','windows-host/tests/test-service-restart-policy.ps1','windows-host/shutdown-diagnostics.ps1',
       'windows-cpu-partition/cpu-partition.ps1','windows-cpu-partition/cpu-console.ps1','windows-cpu-partition/cpu-ui-theme.ps1',
       'windows-cpu-partition/fonts/Michroma-Regular.ttf','windows-cpu-partition/fonts/OFL.txt','windows-cpu-partition/images/app-icon.png','windows-cpu-partition/images/app-icon.ico',
       'storage-recovery/offline_image.py','storage-recovery/convert_image.py','storage-recovery/restore_image.py','storage-recovery/backup_set.py','storage-recovery/larger_disk_layout.py',
@@ -243,7 +244,7 @@ function Invoke-EdgeBoxInstall {
         Write-Host ('Edge Box 一式を配置します: '+$InstallDir)
         Install-EdgeBoxPayload -PayloadPath $PayloadPath -InstallDir $InstallDir
         $setup=Join-Path $InstallDir 'setup\setup-all.ps1'
-        $code=Start-EdgeBoxInstallProcess -Script $setup -ScriptArguments @('-RestartIfNeeded','-NoPause')
+        $code=Start-EdgeBoxInstallProcess -Script $setup -ScriptArguments @('-NoPause')
         if ($code -notin @(0,3010)) {Write-Warning ('未完了の設定があります。'+$InstallDir+'\setup\logs を確認してください。')}
         if (-not $NoPause) {Read-Host 'Enter キーで閉じます'|Out-Null}
         return $code

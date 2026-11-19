@@ -151,11 +151,14 @@ try {
             . ([scriptblock]::Create($helper[0].Extent.Text))
         }
         $script:ShutdownCalls=0;$script:ShutdownExit=0
-        function shutdown.exe { $script:ShutdownCalls++; $global:LASTEXITCODE=$script:ShutdownExit }
+        function shutdown.exe { $script:ShutdownArgs=@($args); $script:ShutdownCalls++; $global:LASTEXITCODE=$script:ShutdownExit }
         function Write-ShutdownLog {}
         $VMName='Selected';$script:MockVm.Name=$VMName;$script:MockVm.State='Off'
         Invoke-ConfirmedWindowsShutdown 'original-vm'
         Assert ($script:ShutdownCalls -eq 1) 'confirmed original VM Off may request normal host shutdown'
+        Assert ($script:ShutdownArgs[0] -eq '/s' -and '/f' -notin $script:ShutdownArgs) 'shutdown choice must never force applications closed'
+        Invoke-ConfirmedWindowsShutdown 'original-vm' -Restart
+        Assert ($script:ShutdownArgs[0] -eq '/r' -and ($script:ShutdownArgs[1..2] -join ' ') -eq '/t 0' -and '/f' -notin $script:ShutdownArgs) 'manual restart must use zero additional delay after confirmed stop'
         foreach ($scenario in @('restarted','same-name-replacement','renamed','missing')) {
             $script:ShutdownCalls=0
             $script:MockVm=[pscustomobject]@{Id='original-vm';Name=$VMName;State='Off'}
@@ -315,13 +318,224 @@ try {
         function Register-ScheduledTask { param($TaskName,$Action,$Trigger,$Principal,$Settings,[switch]$Force) $script:ResumeArguments=$Action.Arguments }
         Register-SetupResume 'All'
         Assert ($script:ResumeArguments -notmatch '-RestartIfNeeded') 'real resume task arguments must preserve manual restart mode'
-        Register-SetupResume 'All' -RestartIfNeeded
-        Assert ($script:ResumeArguments -match '-RestartIfNeeded') 'explicit automatic restart mode must remain supported'
-        Write-Host 'PASS: real resume task arguments preserve restart preference'
+        Write-Host 'PASS: logon resumes setup without any unattended restart argument'
     } $project
+    $restartPolicy=Import-Module (Join-Path $project 'windows-host\host-restart-policy.psm1') -PassThru -Force
+    & $restartPolicy {
+        $script:value=1;$script:writes=0;$script:ignoreWrite=$false
+        function Get-ItemProperty { [pscustomobject]@{AutoReboot=$script:value} }
+        function New-ItemProperty($LiteralPath,$Name,$PropertyType,$Value,[switch]$Force) {
+            if ($LiteralPath -ne 'HKLM:\SYSTEM\CurrentControlSet\Control\CrashControl' -or
+                $Name -ne 'AutoReboot' -or $PropertyType -ne 'DWord' -or $Value -ne 0) { throw 'Unexpected crash setting' }
+            $script:writes++
+            if (-not $script:ignoreWrite) { $script:value=$Value }
+        }
+        if (Test-EdgeBoxCrashRestartBlocked) { throw 'Initially enabled crash restart must be detected' }
+        Set-EdgeBoxCrashRestartPolicy
+        Set-EdgeBoxCrashRestartPolicy
+        if (-not (Test-EdgeBoxCrashRestartBlocked) -or $script:writes -ne 1) { throw 'Crash restart prevention must be verified and idempotent' }
+        $script:value=$null;$script:ignoreWrite=$true;$failed=$false
+        try { Set-EdgeBoxCrashRestartPolicy } catch { $failed=$true }
+        if (-not $failed) { throw 'An ineffective registry write must fail the postcheck' }
+        Write-Host 'PASS: crash restart prevention, idempotence and readback with mocked registry'
+    }
+    Remove-Module $restartPolicy
+    & {
+        $fixture=Join-Path $temp 'shutdown-diagnostics.ps1'
+        Copy-Item (Join-Path $project 'windows-host\shutdown-diagnostics.ps1') $fixture
+        Set-Content (Join-Path $temp 'shutdown-log.txt') @('2026-02-01 01:02:00 Edge Box の停止を確認: 9.5 秒','personal text MUST_NOT_LEAK') -Encoding UTF8
+        function New-TestEvent($Record,[int]$Id,[string]$Provider,[int]$Second) {
+            [pscustomobject]@{RecordId=$Record;Id=$Id;ProviderName=$Provider;TimeCreated=([datetime]'2026-02-01').AddSeconds($Second)}
+        }
+        $kernel='Microsoft-Windows-Kernel-General'
+        $events=@(
+            New-TestEvent 1 12 $kernel 0
+            New-TestEvent 2 1074 'User32' 10
+            New-TestEvent 3 13 $kernel 22
+            New-TestEvent 4 12 $kernel 33
+            New-TestEvent 5 1074 'User32' 42
+            New-TestEvent 6 1074 'User32' 44
+            New-TestEvent 7 13 $kernel 65
+            New-TestEvent 8 12 $kernel 80
+            New-TestEvent 9 1074 'User32' 85
+            New-TestEvent 10 13 $kernel 94
+            New-TestEvent 11 12 $kernel 99
+            New-TestEvent 12 6008 'EventLog' 105
+            New-TestEvent 13 1074 'User32' 106
+            New-TestEvent 14 1075 'User32' 109
+            New-TestEvent 15 13 $kernel 160
+            New-TestEvent 16 12 $kernel 185
+        )
+        $diag=@(foreach ($id in @(200,203)) {
+            $body=if ($id -eq 200) { '<Data Name="ShutdownStartTime">2026-02-01T00:00:00Z</Data><Data Name="ShutdownServicesTime">9000</Data>' }
+                else { '<Data Name="StartTime">2026-02-01T00:00:00Z</Data><Data Name="Name">vmms</Data><Data Name="TotalTime">8200</Data><Data Name="Path">MUST_NOT_LEAK</Data>' }
+            $record=[pscustomobject]@{Id=$id;TimeCreated=[datetime]'2026-02-01';Body=$body}
+            $record | Add-Member ScriptMethod ToXml { '<Event><EventData>'+$this.Body+'</EventData></Event>' }
+            $record
+        })
+        $deny=$false
+        function Get-WinEvent($ListLog,$FilterHashtable) {
+            if ($ListLog) {
+                if ($deny -and $ListLog -ne 'System') { throw [UnauthorizedAccessException]::new() }
+                return [pscustomobject]@{IsEnabled=$true}
+            }
+            if ($FilterHashtable.LogName -eq 'System') { return $events }
+            return $diag
+        }
+        $text=(& $fixture 3>&1 | Out-String)
+        if ($text -notmatch 'カーネル終了まで 12[,.]0 秒' -or $text -match 'カーネル終了まで 54[,.]0 秒' -or $text -notmatch '複数' -or $text -notmatch '異常終了の記録' -or
+            $text -notmatch 'サービス終了 9[,.]0秒' -or $text -notmatch 'vmms' -or $text -notmatch '停止を確認 9.5 秒' -or $text -match 'MUST_NOT_LEAK') {
+            throw 'Shutdown diagnostics failed interval, diagnostic phase, service or privacy check'
+        }
+        $deny=$true
+        $text=(& $fixture 3>&1 | Out-String)
+        if ($text -notmatch '読み取り権限' -or $text -notmatch '停止を確認 9.5 秒') { throw 'Inaccessible channel must preserve independent diagnostics' }
+        Write-Host 'PASS: shutdown diagnostics, boot boundaries, dirty and ambiguous cycles, protected logs and private fields'
+    }
 } finally {
     if ($module) { Remove-Module $module -ErrorAction SilentlyContinue }
     $resolved=[IO.Path]::GetFullPath($temp)
     $tempRoot=[IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\')+'\'
     if ($resolved.StartsWith($tempRoot,[StringComparison]::OrdinalIgnoreCase) -and (Split-Path $resolved -Leaf) -like 'EdgeBoxSafetyTests_*') { Remove-Item -LiteralPath $resolved -Recurse -Force }
+}
+
+# Run the production update predicates and apply/manual/restore paths with no OS writes.
+& {
+    $source=Join-Path $project 'windows-host\12-windows-update.ps1'
+    $tree=[Management.Automation.Language.Parser]::ParseFile($source,[ref]$null,[ref]$null)
+    foreach ($function in $tree.FindAll({param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst]},$false)) {
+        . ([scriptblock]::Create($function.Extent.Text))
+    }
+    function Check($condition,$message) { if (-not $condition) { throw "UPDATE TEST FAILED: $message" } }
+    & {
+        $WatchFiles=@('12-windows-update.ps1','host-restart-policy.psm1','service-restart-policy.psm1','service-restart-policy.cs')
+        $dir=Join-Path ([IO.Path]::GetTempPath()) ('EdgeBoxWatchFixture_'+[guid]::NewGuid().ToString('N'))
+        $null=[IO.Directory]::CreateDirectory($dir)
+        try {
+            $Source=Join-Path $dir 'distribution'
+            $null=[IO.Directory]::CreateDirectory($Source)
+            & {
+                function Get-Acl {
+                    $fixtureAcl=[Security.AccessControl.DirectorySecurity]::new()
+                    $fixtureAcl.SetSecurityDescriptorSddlForm($sddl)
+                    return $fixtureAcl
+                }
+                $sddl='O:BAG:BAD:P(A;;FA;;;BA)(A;;FA;;;SY)(A;;FR;;;BU)'
+                Assert-UpdateWatchPath $Source
+                foreach ($sddl in @('O:BAG:BAD:P(A;;FA;;;BA)(A;;FW;;;BU)','O:BUG:BAD:P(A;;FA;;;BA)(A;;FR;;;BU)')) {
+                    $failed=$false; try { Assert-UpdateWatchPath $Source } catch { $failed=$true }
+                    Check $failed 'a writable or untrusted-owner SYSTEM payload must be rejected'
+                }
+            }
+            $ProgramRoot=Join-Path $dir 'program-files'
+            $admin=([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+            if (-not $admin) {
+                # CI users cannot assign an Administrators owner. Exercise publication with a synthetic ACL.
+                function New-UpdateWatchDirectory($Path) { $null=[IO.Directory]::CreateDirectory($Path) }
+                function Assert-UpdateWatchPath($Path) { if (-not (Test-Path -LiteralPath $Path)) { throw 'fixture path missing' } }
+                function Get-Acl { [Security.AccessControl.FileSecurity]::new() }
+                function Set-Acl {}
+            }
+            New-UpdateWatchDirectory $ProgramRoot
+            $WatchRoot=Join-Path $ProgramRoot 'EdgeBox-WindowsUpdate-Lock'
+            foreach ($name in $WatchFiles) { [IO.File]::WriteAllText((Join-Path $Source $name),'original fixture') }
+            [IO.File]::WriteAllText((Join-Path $Source 'device-private.json'),'fixture only')
+            $WatchVersion=Get-UpdateWatchVersion $Source
+            $WatchDirectory=Join-Path $WatchRoot $WatchVersion
+            Install-UpdateWatchPayload $Source
+            Check (Test-UpdateWatchPayload) 'published payload must match source hashes and protected destination'
+            Check (@(Get-ChildItem -LiteralPath $WatchDirectory -Force).Count -eq $WatchFiles.Count) 'watchdog must copy only four allowlisted sources'
+            $first=$WatchDirectory
+            [IO.File]::WriteAllText((Join-Path $Source $WatchFiles[1]),'updated fixture')
+            $WatchVersion=Get-UpdateWatchVersion $Source; $WatchDirectory=Join-Path $WatchRoot $WatchVersion
+            Check ($first -ne $WatchDirectory -and -not (Test-UpdateWatchPayload)) 'dependency changes must require a new protected version'
+            $Quiet=$true; $failed=$false
+            try { Install-UpdateWatchPayload $Source } catch { $failed=$true }
+            Check ($failed -and -not (Test-Path -LiteralPath $WatchDirectory)) 'SYSTEM maintenance cannot publish an uninstalled version'
+            $Quiet=$false; Install-UpdateWatchPayload $Source
+            Check ((Test-UpdateWatchPayload) -and [IO.File]::ReadAllText((Join-Path $first $WatchFiles[1])) -eq 'original fixture') 'upgrades publish atomically and preserve running version'
+            if ($admin) {
+                $acl=Get-Acl -LiteralPath $WatchDirectory
+                $rule=[Security.AccessControl.FileSystemAccessRule]::new([Security.Principal.SecurityIdentifier]::new('S-1-5-32-545'),'Modify','Allow')
+                $acl.AddAccessRule($rule); Set-Acl -LiteralPath $WatchDirectory -AclObject $acl
+                $failed=$false; try { Test-UpdateWatchPayload | Out-Null } catch { $failed=$true }
+                Check $failed 'user-writable watchdog paths must be rejected'
+            }
+        } finally {
+            $parent=[IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\')
+            if ([IO.Path]::GetDirectoryName([IO.Path]::GetFullPath($dir)) -eq $parent -and [IO.Path]::GetFileName($dir) -match '^EdgeBoxWatchFixture_[0-9a-f]{32}$') {
+                Remove-Item -LiteralPath $dir -Recurse -Force
+            }
+        }
+    }
+    Write-Host 'PASS: protected SYSTEM watchdog publication, versioned dependencies and read-only maintenance'
+    function Write-UpdateLog {}
+    $AU='au'; $WU='wu'; $MDM='mdm'; $WatchTask='EdgeBox-WindowsUpdate-Lock'; $WatchExe='fixture.exe'; $WatchArgs='fixture -Quiet'
+    $RequiredAU=[ordered]@{NoAutoUpdate=1;AUOptions=2;NoAutoRebootWithLoggedOnUsers=1;AlwaysAutoRebootAtScheduledTime=0}
+    $keys=@{au=([pscustomobject]$RequiredAU);wu=([pscustomobject]@{});mdm=([pscustomobject]@{})}
+    $fixture=[pscustomobject]@{Pending=$false;Crash=$true;Denied=$false;Opens=0;Installs=0;SetCalls=0;Removes=@();WatchValid=$true;ApplyWrites=@()}
+    $watch=[pscustomobject]@{TaskName=$WatchTask;TaskPath='\';State='Ready';Settings=@{Enabled=$true};
+        Principal=@{UserId='S-1-5-18';RunLevel='Highest';LogonType='ServiceAccount'};Actions=@(@{Execute=$WatchExe;Arguments=$WatchArgs});
+        Triggers=@([pscustomobject]@{Enabled=$true;CimClass=@{CimClassName='MSFT_TaskBootTrigger'}},[pscustomobject]@{Enabled=$true;DaysInterval=1;CimClass=@{CimClassName='MSFT_TaskDailyTrigger'}})}
+    $restartTask=[pscustomobject]@{TaskName='Reboot_AC';TaskPath='\Microsoft\Windows\UpdateOrchestrator\';State='Disabled'}
+    $service=[pscustomobject]@{StartType='Disabled';Status='Stopped'}
+    $recovery=[pscustomobject]@{Compliant=$true;RebootServices=@();UnreadableServices=@();Errors=@();ReviewTasks=@()}
+    function Read-UpdateKey($Path) { $keys[$Path] }
+    function Test-EdgeBoxCrashRestartBlocked { $fixture.Crash }
+    function Get-EdgeBoxServiceRestartPolicy { $recovery }
+    function Get-Service { $service }
+    function Get-ScheduledTask { @($watch,$restartTask) }
+    function Test-Path { $fixture.Pending }
+    function Install-UpdateWatchPayload { if ($Quiet) { throw 'quiet must not publish or copy source files' } }
+    function Test-UpdateWatchPayload { $true }
+    function Set-EdgeBoxCrashRestartPolicy { $fixture.SetCalls++ }
+    function Set-EdgeBoxServiceRestartPolicy { param([switch]$PreviouslyVerifiedOnly)
+        Check ([bool]$PreviouslyVerifiedOnly -eq [bool]$Quiet) 'SYSTEM maintenance may repair only previously verified services and tasks'
+        $recovery
+    }
+    function Set-UpdateValue($Path,$Name,$Value) { $fixture.ApplyWrites+=@("$Path/$Name=$Value") }
+    function Register-UpdateWatch { throw 'unexpected task registration' }
+    function Disable-ScheduledTask { param($InputObject) if ($fixture.Denied) {throw 'access denied'}; $InputObject.State='Disabled' }
+    function Set-Service { throw 'unexpected service write' }
+    function Stop-Service { throw 'unexpected service stop' }
+    function Get-Item { [IO.FileInfo]::new((Join-Path $project 'fixture.msu')) }
+    function Add-WindowsPackage { [CmdletBinding()]param([switch]$Online,$PackagePath,[switch]$NoRestart,[switch]$PreventPending)
+        Check ($Online -and $NoRestart -and $PreventPending) 'manual installation must retain restart and pending-operation protection'
+        $fixture.Installs++; [pscustomobject]@{RestartNeeded=$true}
+    }
+    function Start-Process { param($FilePath) Check ($FilePath -eq 'https://www.catalog.update.microsoft.com/') 'only the update catalog may open'; $fixture.Opens++ }
+    function Remove-ItemProperty { param($LiteralPath,$Name) $fixture.Removes+=$Name }
+    Check ((Get-UpdateLockState).State -eq 'Done') 'verified lock and both watchdog triggers'
+    $watch.Actions[0].Arguments='-Restore'
+    Check ((Get-UpdateLockState).State -eq 'NeedsWork') 'a watchdog invoking the wrong mode must fail verification'
+    $watch.Actions[0].Arguments=$WatchArgs
+    $restartTask.State='Ready'; $fixture.Denied=$true
+    $failed=$false; try { Set-UpdateLock } catch {$failed=$true}
+    Check ($failed -and (Get-UpdateLockState).State -eq 'NeedsWork') 'a protected restart task must be reported and left to its administrator'
+    $fixture.Denied=$false; Set-UpdateLock
+    $fixture.Crash=$false
+    Check ((Get-UpdateLockState).State -ne 'Done') 'crash restart enabled'
+    $fixture.Crash=$true
+    $UpdateNow=$true; $Restore=$false; $PackagePath='fixture.msu'
+    foreach ($entry in @(@('mdm','ConfigureDeadlineForQualityUpdates',0),@('mdm','AllowAutoUpdate',4),@('wu','SetComplianceDeadlineForFU',1))) {
+        $key=$keys[$entry[0]]; $key | Add-Member NoteProperty $entry[1] $entry[2]
+        $state=Get-UpdateLockState
+        Check ($state.State -eq 'Unknown' -and $state.Detail.Contains($entry[1])) 'managed deadlines and conflicting MDM policy must name the blocker'
+        $failed=$false; try { Invoke-UpdateLockMode } catch {$failed=$true}
+        Check ($failed -and $fixture.Installs -eq 0) 'never start manual installation with a conflicting policy'
+        $key.PSObject.Properties.Remove($entry[1])
+    }
+    $fixture.Pending=$true
+    Check ((Get-UpdateLockState).State -eq 'Unknown') 'existing restart pending must be reported'
+    $fixture.Pending=$false
+    Check ((Invoke-UpdateLockMode) -eq 3010 -and $fixture.Installs -eq 1) 'manual .msu requests manual restart only'
+    $PackagePath=''
+    Check ((Invoke-UpdateLockMode) -eq 0 -and $fixture.Opens -eq 1) 'manual catalog keeps update lock'
+    $UpdateNow=$false; $Restore=$true
+    $keys.wu | Add-Member NoteProperty TargetReleaseVersionInfo 'fixture'
+    Check ((Invoke-UpdateLockMode) -eq 0 -and ($fixture.Removes -join ',') -eq 'TargetReleaseVersionInfo') 'restore only releases version/deferral policies'
+    Check ('au/NoAutoUpdate=1' -in $fixture.ApplyWrites -and 'au/NoAutoUpdate=0' -notin $fixture.ApplyWrites) 'all modes retain automatic-update protection'
+    $Quiet=$true; $Restore=$false
+    Check ((Invoke-UpdateLockMode) -eq 0) 'maintenance must not republish the payload or authorize new service changes'
+    Write-Host 'PASS: update lock, deadline and MDM conflicts, protected tasks, restart pending, catalog/NoRestart servicing and guarded restore'
 }

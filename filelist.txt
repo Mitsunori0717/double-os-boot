@@ -184,9 +184,14 @@ windows-host/build-startup-cover.ps1
 windows-host/cpu-boot.psm1
 windows-host/field-start.cmd
 windows-host/fix-black-screen.cmd
+windows-host/host-restart-policy.psm1
+windows-host/service-restart-policy.cs
+windows-host/service-restart-policy.psm1
+windows-host/shutdown-diagnostics.ps1
 windows-host/startup-cover.cs
 windows-host/tests/test-cpu-preparation.ps1
 windows-host/tests/test-launcher-safety.ps1
+windows-host/tests/test-service-restart-policy.ps1
 windows-host/tests/test-start-safety.ps1
 windows-host/vm-create-safety.psm1
 windows-host/vm-shutdown.psm1

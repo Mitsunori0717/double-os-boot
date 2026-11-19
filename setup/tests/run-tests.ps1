@@ -25,8 +25,8 @@ try {
         }
         function Register-SetupResume { param($Step,[switch]$RestartIfNeeded) $script:Registered=$true; $script:RegisteredRestart=[bool]$RestartIfNeeded }
         function Unregister-ScheduledTask { $script:Removed=$true }
-        function Restart-Computer { throw 'Tests must never restart the PC' }
-        function Restart-SetupHost([bool]$HyperVFirstBoot) { $script:FirstBoot=$HyperVFirstBoot; throw 'fixture: VM unavailable' }
+        function Restart-Computer { $script:RestartCalls++; throw 'Tests must never restart the PC' }
+        function Invoke-EdgeBoxHostRestart { $script:RestartCalls++; throw 'unexpected setup restart' }
         function Get-SetupBootId { 'boot-current' }
         function Write-SetupLog([string]$Message) { if ($script:RunDir) {Add-Content (Join-Path $script:RunDir 'summary.txt') $Message -Encoding UTF8} }
         function Reset-Fixture {
@@ -65,16 +65,17 @@ try {
         Assert ($s.State -eq 'Unknown' -and $script:Applied.Count -eq 0) 'unreadable state must not be treated as missing'
 
         Reset-Fixture
+        $script:RestartCalls=0
         $script:MockStates['02']='RebootRequired'
         $rc=Invoke-EdgeBoxSetup -NoConfirm
         Assert ($rc -eq 3010 -and $script:Registered) 'pending reboot must register resumption and return 3010'
         Assert (-not $script:RegisteredRestart) 'manual restart preference must survive resumption'
         $state=Join-Path $script:FixtureSetupDir 'resume-state.json'
         $rc=Invoke-EdgeBoxSetup -NoConfirm -RestartIfNeeded
-        Assert ($rc -eq 3010 -and $script:FirstBoot -and (Read-SetupJson $state).AutoReboots -eq 0) 'blocked first boot must preserve resume and the reboot budget'
+        Assert ($rc -eq 3010 -and $script:RestartCalls -eq 0 -and -not $script:RegisteredRestart) 'legacy restart flags must only register resume after Hyper-V setup'
         $script:MockStates['02']='Done'; $script:MockStates['10']='RebootRequired'
         $rc=Invoke-EdgeBoxSetup -NoConfirm -RestartIfNeeded
-        Assert ($rc -eq 3010 -and -not $script:FirstBoot -and (Read-SetupJson $state).AutoReboots -eq 0) 'CPU-only reboot must require the management API'
+        Assert ($rc -eq 3010 -and $script:RestartCalls -eq 0 -and -not $script:RegisteredRestart) 'CPU setup must never stop a guest or reboot the host'
         $script:MockStates['02']='RebootRequired'; $script:MockStates['10']='Done'
         @{BootId='boot-previous';Pending=@('02');AutoReboots=1}|ConvertTo-Json|Set-Content $state -Encoding UTF8
         $rc=Invoke-EdgeBoxSetup -Resume -NoConfirm
@@ -83,7 +84,7 @@ try {
         $script:MockStates['10']='RebootRequired'
         @{BootId='boot-previous';Pending=@('02');AutoReboots=2}|ConvertTo-Json|Set-Content $state -Encoding UTF8
         $rc=Invoke-EdgeBoxSetup -Resume -NoConfirm -RestartIfNeeded
-        Assert ($rc -eq 1 -and -not $script:Registered) 'automatic reboots must be bounded'
+        Assert ($rc -eq 3010 -and $script:Registered -and $script:RestartCalls -eq 0 -and -not $script:RegisteredRestart) 'a legacy resume task must wait for the operator even after prior reboots'
         Reset-Fixture
         $script:MockStates['05']='NeedsWork'
         $rc=Invoke-EdgeBoxSetup -Step '05' -NoConfirm
@@ -187,23 +188,8 @@ try {
         Assert-Blocked { Invoke-EdgeBoxHostRestart -VMName 'Custom Box' -BeforeRestart { $script:guest.State='Running' } } 'guest restarting before host restart blocks the host'
         Assert-Blocked { Invoke-EdgeBoxHostRestart } 'an unrelated running VM cannot be implicitly stopped'
         Assert ($script:stopCount -eq 1) 'an unrelated VM must receive no stop request'
-        $script:apiDown=$true; $script:hypervisor=$true; $script:workers=@()
-        function Get-CimInstance { param($ClassName,$Filter)
-            switch ($ClassName) {
-                'Win32_ComputerSystem' { [pscustomobject]@{HypervisorPresent=$script:hypervisor} }
-                'Win32_Process' { $script:workers }
-                'Win32_Service' {}
-                default { throw "unexpected class: $ClassName" }
-            }
-        }
-        function Get-WindowsOptionalFeature { [pscustomobject]@{State='EnablePending'} }
-        Assert-Blocked { Invoke-EdgeBoxHostRestart } 'an unavailable management API blocks normal reboot'
-        $script:workers=@('worker')
-        Assert-Blocked { Invoke-EdgeBoxHostRestart -HyperVFirstBoot } 'pending Hyper-V installation cannot hide a VM worker'
-        Assert-Blocked { Invoke-EdgeBoxHostRestart -VMName 'Custom Box' -HyperVFirstBoot } 'first boot cannot bypass a selected identity'
-        $script:workers=@()
-        Invoke-EdgeBoxHostRestart -HyperVFirstBoot
-        Assert ($script:restartCount -eq 1) 'initial enable-pending installation with no active service or worker can restart'
+        $script:apiDown=$true
+        Assert-Blocked { Invoke-EdgeBoxHostRestart } 'an unavailable management API blocks manual restart'
 
         $nativePath=Join-Path $ProjectRoot 'windows-host\04-reboot-to-field-native.ps1'
         $nativeAst=[Management.Automation.Language.Parser]::ParseFile($nativePath,[ref]$null,[ref]$null)
@@ -235,7 +221,7 @@ try {
         $script:guestStartsDuringBcd=$false
         Invoke-EdgeBoxNativeRestart $entry 'Custom Box' original
         Assert ($script:restartCount -eq 1 -and $script:queue.Count -eq 1 -and $script:queue[0] -eq $entry) 'native boot with a confirmed stopped VM must request exactly one restart'
-        Write-Host 'PASS: host restart, first Hyper-V boot, custom VM identity and native boot rollback with mocked OS calls'
+        Write-Host 'PASS: manual host restart, custom VM identity and native boot rollback with mocked OS calls'
     } $project
     Remove-Module $shutdown
     Write-Host 'All tests passed.' -ForegroundColor Green

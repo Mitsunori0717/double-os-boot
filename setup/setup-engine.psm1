@@ -30,8 +30,8 @@ function Get-SetupRequiredFiles([string]$Step='All') {
         '09'=@('windows-host\03-field-display-kiosk.ps1','windows-host\build-startup-cover.ps1','windows-host\startup-cover.cs','windows-host\cpu-boot.psm1','windows-host\vm-shutdown.psm1')
         '10'=@('windows-cpu-partition\cpu-partition.ps1','windows-cpu-partition\cpu-tool.psm1','setup\cpu-topology.cs')
         '11'=@('windows-host\00-field-launcher.ps1','windows-host\01-create-field-vm.ps1','windows-host\02-start-field-vm.ps1','windows-host\03-field-display-kiosk.ps1','windows-host\build-startup-cover.ps1','windows-host\startup-cover.cs','windows-host\08-settings-console.ps1','windows-host\05-shutdown-all.ps1','windows-host\vm-shutdown.psm1','windows-host\10-restart-edgebox.ps1','windows-host\11-io-passthrough.ps1','windows-cpu-partition\cpu-console.ps1','windows-cpu-partition\cpu-monitor.ps1','windows-cpu-partition\cpu-partition.ps1','windows-cpu-partition\cpu-apps.ps1','windows-cpu-partition\cpu-ui-theme.ps1')
-        '12'=@('windows-host\12-windows-update.ps1')
-        '13'=@('windows-host\13-quiet-windows.ps1')
+        '12'=@('windows-host\12-windows-update.ps1','windows-host\host-restart-policy.psm1','windows-host\service-restart-policy.psm1','windows-host\service-restart-policy.cs')
+        '13'=@('windows-host\13-quiet-windows.ps1','windows-host\host-restart-policy.psm1')
     }
     $required=@('setup\setup-all.ps1','setup\setup-engine.psm1','setup\run-child.ps1')
     foreach ($id in $files.Keys) { if ($Step -eq 'All' -or $Step -eq $id) { $required+=@($files[$id]) } }
@@ -284,12 +284,13 @@ function Get-SetupStepState([string]$Id) {
                 return (New-SetupState Done '操作アイコンと実行タスクが現在の配置先を参照しています。')
             }
             '12' {
-                $au=Get-ItemProperty 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU' -ErrorAction SilentlyContinue
-                $svc=Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Services\wuauserv' -ErrorAction Stop
-                if ($au.NoAutoUpdate -eq 1 -and $au.NoAutoRebootWithLoggedOnUsers -eq 1 -and $svc.Start -eq 4 -and (Test-SetupTask 'EdgeBox-WindowsUpdate-Lock' 'windows-host\12-windows-update.ps1')) { return (New-SetupState Done '自動更新抑止ポリシー・サービス・維持タスクを確認しました。') }
-                return (New-SetupState NeedsWork '自動更新・再起動抑止の設定が不足しています。')
+                $lock=& (Join-Path $script:Root 'windows-host\12-windows-update.ps1') -Inspect
+                if ($lock.State -notin @('Done','NeedsWork','Unknown') -or -not $lock.Detail) { throw 'Windows Update の抑止状態を確認できません。' }
+                return (New-SetupState $lock.State $lock.Detail)
             }
             '13' {
+                Import-Module (Join-Path $script:Root 'windows-host\host-restart-policy.psm1') -ErrorAction Stop
+                if (-not (Test-EdgeBoxCrashRestartBlocked)) { return (New-SetupState NeedsWork 'システム障害時の自動再起動禁止が未設定です。') }
                 $a=Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\UserProfileEngagement' -ErrorAction SilentlyContinue
                 $b=Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\PushNotifications' -ErrorAction SilentlyContinue
                 $power=& powercfg.exe /getactivescheme 2>&1 | Out-String
@@ -568,10 +569,9 @@ function Invoke-SetupOne($Definition, [switch]$Status) {
     }
     $s
 }
-function Register-SetupResume([string]$Step, [switch]$RestartIfNeeded) {
+function Register-SetupResume([string]$Step) {
     $file=Join-Path $PSScriptRoot 'setup-all.ps1'
     $arguments='-NoProfile -ExecutionPolicy Bypass -File '+(ConvertTo-SetupArgument $file)+' -Step '+$Step+' -Resume -NoConfirm'
-    if ($RestartIfNeeded) { $arguments+=' -RestartIfNeeded' }
     $action=New-ScheduledTaskAction -Execute (Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe') -Argument $arguments
     $user=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value
     $principal=New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Highest
@@ -580,16 +580,10 @@ function Register-SetupResume([string]$Step, [switch]$RestartIfNeeded) {
     $settings=New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Hours 2) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
     Register-ScheduledTask -TaskName $script:TaskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force -ErrorAction Stop | Out-Null
 }
-function Restart-SetupHost([bool]$HyperVFirstBoot) {
-    if ($script:SettingsLoadError) { throw $script:SettingsLoadError }
-    Import-Module (Join-Path $script:Root 'windows-host\vm-shutdown.psm1') -ErrorAction Stop
-    $target=@{}
-    if ($script:Settings.VMId) { $target=@{VMName=$script:Settings.VMName;ExpectedVmId=$script:Settings.VMId} }
-    Invoke-EdgeBoxHostRestart @target -HyperVFirstBoot:$HyperVFirstBoot
-}
 function Invoke-EdgeBoxSetup {
     [CmdletBinding()]
     param([string]$Step='All',[switch]$Status,[switch]$NoConfirm,[switch]$RestartIfNeeded,[switch]$Resume,[switch]$NoPause)
+    # 旧版の再開タスクが渡す -RestartIfNeeded は互換用に受け取り、再起動は要求しない。
     $script:RunDir=$null; $script:ResumeMode=[bool]$Resume; $script:Settings=@{}; $script:SettingsLoadError=''
     $saved=$null
     try {
@@ -602,6 +596,7 @@ function Invoke-EdgeBoxSetup {
     catch { $saved=$null; $script:SettingsLoadError='settings.json を読めません: '+$_.Exception.Message+'。内容を修正するか退避して、05-create-edgebox.cmd を再実行してください。' }
     if ($saved) { foreach ($p in $saved.PSObject.Properties) { $script:Settings[$p.Name]=$p.Value } }
     $steps=@(Get-SetupSteps | Where-Object { $Step -eq 'All' -or $_.Id -eq $Step })
+    if ($Step -eq 'All') { $steps=@($steps | Where-Object Id -eq '12') + @($steps | Where-Object Id -ne '12') }
     if (-not $steps.Count) { throw "不明な手順番号です: $Step" }
     $missing=@(Get-SetupMissingFiles $Step)
     if ($missing.Count) {
@@ -625,7 +620,7 @@ function Invoke-EdgeBoxSetup {
                 try {
                     $previous=Read-SetupJson $statePath
                     if ($Resume -and -not $previous) { throw '再開情報がありません。' }
-                    if ($previous -and ($previous -isnot [pscustomobject] -or -not $previous.BootId -or -not @($previous.Pending).Count -or $null -eq $previous.AutoReboots -or [int]$previous.AutoReboots -lt 0)) { throw '再開情報の形式が不正です。' }
+                    if ($previous -and ($previous -isnot [pscustomobject] -or -not $previous.BootId -or -not @($previous.Pending).Count)) { throw '再開情報の形式が不正です。' }
                 } catch {
                     Write-SetupLog ('resume-state.json を確認できないため設定変更前に停止します: '+$_.Exception.Message+'。このファイルを確認し、一括セットアップを手動で再実行してください。')
                     Unregister-ScheduledTask -TaskName $script:TaskName -Confirm:$false -ErrorAction SilentlyContinue
@@ -635,7 +630,7 @@ function Invoke-EdgeBoxSetup {
             if (-not $NoConfirm -and -not $Resume) {
                 Write-Host '未完了の設定を適用します。ディスクと LAN は候補を確認し、パスワードは必要な場合に入力します。'
                 Write-Host '対象: Hyper-V、VM、自動サインイン、CPU 分離、アイコン、自動更新・通知・スリープの抑止。'
-                if ($RestartIfNeeded) { Write-Host '必要なときは正常終了で PC を再起動します。作業を保存してください。自動再起動は最大 2 回です。' }
+                Write-Host '再起動が必要な場合は記録して待機します。保守時間に手動で再起動してください。'
                 [void](Read-Host 'Enter キーで開始（中止は Ctrl+C）')
             }
         }
@@ -660,31 +655,22 @@ function Invoke-EdgeBoxSetup {
         if ($pending.Count) {
             $boot=Get-SetupBootId
             $samePending=@($pending | Where-Object { $previous -and $_.Number -in $previous.Pending -and $previous.BootId -ne $boot })
-            if ($samePending.Count -or ($RestartIfNeeded -and $previous.AutoReboots -ge 2)) {
-                Write-SetupLog '再起動後も反映されない設定が残りました。自動再起動を止めます。該当番号のログを確認してください。'
-                foreach ($row in $pending) { $row.State='Failed'; $row.Cause='再起動後も設定が反映されない、または自動再起動回数の上限に達しました。'+$row.Cause }
+            if ($samePending.Count) {
+                Write-SetupLog '手動再起動後も反映されない設定が残りました。自動再開を終了します。該当番号のログを確認してください。'
+                foreach ($row in $pending) { $row.State='Failed'; $row.Cause='再起動後も設定が反映されません。'+$row.Cause }
                 $rows | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $script:RunDir 'results.json') -Encoding UTF8
                 Unregister-ScheduledTask -TaskName $script:TaskName -Confirm:$false -ErrorAction SilentlyContinue
                 return 1
             }
-            $count=if($previous){[int]$previous.AutoReboots}else{0}
-            try { Register-SetupResume $Step -RestartIfNeeded:$RestartIfNeeded }
+            try { Register-SetupResume $Step }
             catch {
                 Write-SetupLog ('再開タスクを登録できません: '+$_.Exception.Message+'。再起動後に setup-all.cmd を再実行してください。')
                 return 1
             }
-            $resumeState=@{BootId=$boot;Pending=@($pending | ForEach-Object Number);AutoReboots=($count+[int][bool]$RestartIfNeeded)}
+            $resumeState=@{BootId=$boot;Pending=@($pending | ForEach-Object Number);AutoReboots=0}
             $resumeState | ConvertTo-Json | Set-Content -LiteralPath $statePath -Encoding UTF8
             Write-SetupLog '再起動後、このユーザーのサインイン時に管理者タスクで再判定します。パスワードが未設定なら最初のサインインは手動です。'
-            if ($RestartIfNeeded) {
-                Write-SetupLog '対象の Edge Box を正常終了し、VM の停止を確認して Windows を再起動します。'
-                try { Restart-SetupHost ('02' -in $resumeState.Pending) }
-                catch {
-                    Write-SetupLog ('自動再起動を保留しました: '+$_.Exception.Message+'。VM の状態を確認して setup-all.cmd を再実行してください。')
-                    $resumeState.AutoReboots=$count
-                    $resumeState | ConvertTo-Json | Set-Content -LiteralPath $statePath -Encoding UTF8
-                }
-            }
+            Write-SetupLog '収集を終えた保守時間に、Edge Box を正常終了してから Windows を手動で再起動してください。'
             return 3010
         }
         Unregister-ScheduledTask -TaskName $script:TaskName -Confirm:$false -ErrorAction SilentlyContinue

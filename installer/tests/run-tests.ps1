@@ -184,7 +184,7 @@ try {
     & $module {$script:Admin=$true;$script:ProcessFailure=$false;$script:ProcessCode=23}
     Check ((Invoke-EdgeBoxInstall @params) -eq 23) 'setup child exit preserved'
     Check ((& $module {$script:InstallCalls}) -eq 1) 'admin path installs once before mocked setup'
-    Check ((& $module {$script:Arguments}) -match '-RestartIfNeeded') 'setup behavior retained'
+    Check ((& $module {$script:Arguments}) -notmatch '-RestartIfNeeded') 'installer must leave restarts to the operator'
     & $module {$script:ProcessCode=0}
     Check ((Invoke-EdgeBoxInstall @params) -eq 0) 'successful mocked setup returns zero'
     Check ((& $module {ConvertTo-EdgeBoxProcessArgument 'D:\Edge Box\'}) -ceq '"D:\Edge Box\\"') 'trailing backslash quoted correctly'

@@ -122,31 +122,12 @@ function Wait-EdgeBoxShutdown {
         }
     }
 }
-function Get-EdgeBoxRestartInventory([switch]$HyperVFirstBoot) {
-    try {
-        $vms=@(Get-VM -ErrorAction Stop)
-    } catch {
-        if (-not $HyperVFirstBoot) { throw }
-        # During first installation the management API can be unavailable. Only
-        # proceed with independent evidence that Hyper-V cannot be running a VM.
-        $system=Get-CimInstance Win32_ComputerSystem -ErrorAction Stop
-        if ($system.HypervisorPresent -is [bool] -and -not $system.HypervisorPresent) { return }
-        $feature=Get-WindowsOptionalFeature -Online -FeatureName Microsoft-Hyper-V-All -ErrorAction Stop
-        if ([string]$feature.State -eq 'EnablePending' -and
-            -not @(Get-CimInstance Win32_Process -Filter "Name='vmwp.exe'" -ErrorAction Stop).Count -and
-            -not @(Get-CimInstance Win32_Service -Filter "Name='vmms' AND State <> 'Stopped'" -ErrorAction Stop).Count) { return }
-        throw 'Hyper-V の VM 一覧を取得できず、稼働中の VM がないことを確認できません。'
-    }
-    $vms
-}
-
 function Invoke-EdgeBoxHostRestart {
     [CmdletBinding()]
-    param([string]$VMName, [string]$ExpectedVmId, [switch]$HyperVFirstBoot,
+    param([string]$VMName, [string]$ExpectedVmId,
           [scriptblock]$BeforeRestart={})
     if ($ExpectedVmId -and -not $VMName) { throw '再起動前に停止対象の VM 名を確認してください。' }
-    $firstBoot=$HyperVFirstBoot -and -not $VMName
-    $vms=@(Get-EdgeBoxRestartInventory -HyperVFirstBoot:$firstBoot)
+    $vms=@(Get-VM -ErrorAction Stop)
     $targetId=$null
     if ($VMName) {
         $target=@($vms | Where-Object Name -eq $VMName)
@@ -161,7 +142,7 @@ function Invoke-EdgeBoxHostRestart {
     }
     if ($targetId) { Wait-EdgeBoxShutdown -VMName $VMName -ExpectedVmId $targetId -NextAction '停止を確認すると Windows を再起動します。' }
     & $BeforeRestart
-    $vms=@(Get-EdgeBoxRestartInventory -HyperVFirstBoot:$firstBoot)
+    $vms=@(Get-VM -ErrorAction Stop)
     if (($targetId -and @($vms | Where-Object { $_.Name -eq $VMName -and [string]$_.Id -eq $targetId }).Count -ne 1) -or
         @($vms | Where-Object { $_.State -ne 'Off' }).Count) { throw 'Windows の再起動直前に VM の停止を再確認できません。' }
     Restart-Computer -ErrorAction Stop
