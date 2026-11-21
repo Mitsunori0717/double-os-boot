@@ -870,6 +870,11 @@ $grpMode.Controls.Add($script:cmbVm)
 $script:lblVm = New-UiLabel "" 420 58 562 "body"
 $script:lblVm.Anchor = "Top,Left,Right"
 $grpMode.Controls.Add($script:lblVm)
+$script:btnNativeBoot = New-UiButton "単独起動" 150
+$script:btnNativeBoot.Name = "NativeBoot"
+$script:btnNativeBoot.Location = New-Object System.Drawing.Point(832, 12)
+$script:btnNativeBoot.Anchor = "Top,Right"
+$grpMode.Controls.Add($script:btnNativeBoot)
 # 方式は「完全分離」固定 (選択肢は出さない)
 
 # --- メモリの割り当て ---
@@ -1057,6 +1062,7 @@ function Get-Selection {
 
 # 対象の Edge Box の状態 (Settings の「対象」に出す)
 function Update-Header {
+    $script:btnNativeBoot.Enabled = (@($script:Vm).Count -eq 1 -and [bool]$script:Vm.Id)
     if ($script:Vm) {
         $script:lblVm.Text = "状態: {0}    プロセッサ: {1}    メモリ: {2} GB{3}" -f $script:Vm.State, $script:Vcpu,
             $script:MemVmGB, $(if ($script:MemDynamic) { " (動的)" } else { "" })
@@ -1265,6 +1271,30 @@ function Refresh-All {
     Sync-MemoryControl
     Update-Validation
 }
+
+$script:btnNativeBoot.Add_Click({
+    $name = ([string]$script:cmbVm.Text).Trim()
+    $vm = $script:Vm
+    if (@($vm).Count -ne 1 -or -not $vm.Id -or $vm.Name -ne $name) {
+        Show-Info "対象の Edge Box を確認できません。" "Warning"
+        return
+    }
+    $path = Join-Path (Split-Path $PSScriptRoot -Parent) 'windows-host\04-reboot-to-field-native.ps1'
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+        Show-Info "単独起動のスクリプトが見つかりません。" "Warning"
+        return
+    }
+    $form.Enabled = $false
+    try {
+        $id = ([guid]$vm.Id).ToString('D')
+        $exe = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+        $arguments = '-NoProfile -STA -ExecutionPolicy Bypass -File "{0}" -FromCpuConsole -ExpectedVmId {1}' -f $path, $id
+        $process = Start-Process -FilePath $exe -ArgumentList $arguments -WindowStyle Hidden -PassThru -Wait -ErrorAction Stop
+        if ($process.ExitCode -ne 0) { Refresh-All }
+    } catch {
+        Show-Info ("単独起動を開けませんでした: " + $_.Exception.Message) "Warning"
+    } finally { $form.Enabled = $true }
+})
 
 $script:btnApps.Add_Click({ Show-AppsDialog })
 

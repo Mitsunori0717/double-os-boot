@@ -23,10 +23,13 @@ param(
     [ValidatePattern('^[^"\r\n]+$')][string]$VMName = "EdgeBox",
     [string]$ExpectedVmId,
     [switch]$Setup,
-    [switch]$NoConfirm
+    [switch]$NoConfirm,
+    [switch]$FromCpuConsole
 )
 
 $ErrorActionPreference = "Stop"
+
+if ($FromCpuConsole -and ($Setup -or $NoConfirm)) { throw '単独起動の引数が正しくありません。' }
 
 $ConfFile = Join-Path $PSScriptRoot "field-boot-entry.conf"
 
@@ -35,6 +38,25 @@ $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIden
 if (-not $isAdmin) {
     Write-Error "管理者権限で実行してください (ショートカットからの起動なら自動で管理者になります)。"
     exit 1
+}
+
+function Get-NativeBootTaskArguments([string]$ScriptPath, [string]$TargetName, [string]$TargetId) {
+    '-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "{0}" -VMName "{1}" -ExpectedVmId {2}' -f $ScriptPath, $TargetName, $TargetId
+}
+
+# field-boot-entry.conf only contains an entry GUID. Do not assume it belongs to the selected VM.
+function Assert-NativeBootConsoleTarget([string]$ScriptPath, [string]$TargetName, [string]$TargetId) {
+    $id = [guid]::Empty
+    if (-not [guid]::TryParse($TargetId, [ref]$id) -or $id -eq [guid]::Empty) {
+        throw '対象の Edge Box を確認できません。'
+    }
+    $task = Get-ScheduledTask -TaskPath '\' -TaskName 'EdgeBox-Native-Boot' -ErrorAction SilentlyContinue
+    $actions = @($task.Actions)
+    $expected = Get-NativeBootTaskArguments $ScriptPath $TargetName ($id.ToString('D'))
+    if (-not $task -or $task.State -eq 'Disabled' -or $actions.Count -ne 1 -or
+        $actions[0].Execute -ne 'powershell.exe' -or $actions[0].Arguments -cne $expected) {
+        throw '選択した Edge Box の単独起動が設定されていません。'
+    }
 }
 
 # --- UEFI のファームウェア起動エントリを列挙する ---
@@ -54,7 +76,17 @@ function Get-FirmwareEntries {
     return $entries
 }
 
-if (-not $Setup -and -not (Test-Path $ConfFile)) {
+function Get-NativeBootConsoleEntry([string]$ScriptPath, [string]$TargetName, [string]$TargetId, [string]$ConfigPath) {
+    Assert-NativeBootConsoleTarget $ScriptPath $TargetName $TargetId
+    if (-not (Test-Path -LiteralPath $ConfigPath -PathType Leaf)) { throw '単独起動が設定されていません。' }
+    $entry = ([guid]::Parse((Get-Content -LiteralPath $ConfigPath -First 1).Trim())).ToString('B')
+    if ($entry -eq [guid]::Empty.ToString('B') -or $entry -notin @(Get-FirmwareEntries | ForEach-Object Guid)) {
+        throw '単独起動先を確認できません。'
+    }
+    $entry
+}
+
+if (-not $Setup -and -not $FromCpuConsole -and -not (Test-Path $ConfFile)) {
     Add-Type -AssemblyName System.Windows.Forms
     [System.Windows.Forms.MessageBox]::Show(
         "初期設定がまだ済んでいません。`n管理者 PowerShell で次を実行してください:`n`n.\04-reboot-to-field-native.ps1 -Setup",
@@ -105,7 +137,7 @@ if ($Setup) {
     # --- UAC 確認なしで実行できるよう、管理者権限付きタスク + それを起動するアイコンを作成 ---
     $taskName = "EdgeBox-Native-Boot"
     $action = New-ScheduledTaskAction -Execute "powershell.exe" `
-        -Argument "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$PSCommandPath`" -VMName `"$VMName`" -ExpectedVmId $ExpectedVmId"
+        -Argument (Get-NativeBootTaskArguments $PSCommandPath $VMName $ExpectedVmId)
     $ts = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -ExecutionTimeLimit (New-TimeSpan -Hours 1)
     Register-ScheduledTask -TaskName $taskName -Action $action -Settings $ts -RunLevel Highest -Force | Out-Null
 
@@ -124,7 +156,28 @@ if ($Setup) {
     if ($Setup) { exit 0 }
 }
 
-$guid = ([guid]::Parse((Get-Content $ConfFile -First 1).Trim())).ToString('B')
+if ($FromCpuConsole) {
+    Add-Type -AssemblyName System.Windows.Forms
+    try {
+        $selectedId = [guid]::Empty
+        if (-not [guid]::TryParse($ExpectedVmId, [ref]$selectedId) -or $selectedId -eq [guid]::Empty) {
+            throw '対象の Edge Box を確認できません。'
+        }
+        $selected = @(Get-VM -Id $selectedId -ErrorAction Stop)
+        if ($selected.Count -ne 1 -or $selected[0].Id -ne $selectedId) { throw '対象の Edge Box を確認できません。' }
+        $VMName = [string]$selected[0].Name
+        $guid = Get-NativeBootConsoleEntry $PSCommandPath $VMName $ExpectedVmId $ConfFile
+    } catch {
+        [System.Windows.Forms.MessageBox]::Show($_.Exception.Message, 'Edge Box 単独起動', 'OK', 'Warning') | Out-Null
+        exit 1
+    }
+    $r = [System.Windows.Forms.MessageBox]::Show(
+        "Windows を再起動して『$VMName』を単独起動しますか？", 'Edge Box 単独起動',
+        'YesNo', 'Warning', 'Button2')
+    if ($r -ne [System.Windows.Forms.DialogResult]::Yes) { exit 0 }
+} else {
+    $guid = ([guid]::Parse((Get-Content $ConfFile -First 1).Trim())).ToString('B')
+}
 
 Write-Host "==============================================" -ForegroundColor Yellow
 Write-Host " Edge Box を単独起動します (Windows は終了)"
@@ -132,7 +185,7 @@ Write-Host "  - 実行中の作業は保存してください"
 Write-Host "  - Edge Box の利用終了後、次に電源を入れると Windows に戻ります"
 Write-Host "==============================================" -ForegroundColor Yellow
 Add-Type -AssemblyName System.Windows.Forms
-if (-not $NoConfirm) {
+if (-not $NoConfirm -and -not $FromCpuConsole) {
     $r = [System.Windows.Forms.MessageBox]::Show(
         "Edge Box を単独起動します (Windows は終了して再起動します)。`n`n" +
         "・実行中の作業は保存してください`n" +
@@ -178,7 +231,12 @@ function Invoke-EdgeBoxNativeRestart([string]$BootEntry,[string]$TargetName,[str
     }
 }
 Import-Module (Join-Path $PSScriptRoot 'vm-shutdown.psm1') -ErrorAction Stop
-try { Invoke-EdgeBoxNativeRestart $guid $VMName $ExpectedVmId }
+try {
+    if ($FromCpuConsole -and $guid -ne (Get-NativeBootConsoleEntry $PSCommandPath $VMName $ExpectedVmId $ConfFile)) {
+        throw '確認中に単独起動先が変更されました。'
+    }
+    Invoke-EdgeBoxNativeRestart $guid $VMName $ExpectedVmId
+}
 catch {
     [System.Windows.Forms.MessageBox]::Show($_.Exception.Message,'Edge Box 単独起動','OK','Warning') | Out-Null
     exit 1

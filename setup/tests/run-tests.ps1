@@ -167,7 +167,7 @@ try {
         Write-Host 'PASS: shutdown, already off, missing/saved VM, real timeout, no forced power-off'
     }
     & $shutdown {
-        param($ProjectRoot)
+        param($ProjectRoot,$NativeBootTestDir)
         function Assert($ok,[string]$why) { if (-not $ok) { throw "TEST FAILED: $why" } }
         function Assert-Blocked([scriptblock]$Action,[string]$why) {
             $blocked=$false
@@ -193,12 +193,38 @@ try {
 
         $nativePath=Join-Path $ProjectRoot 'windows-host\04-reboot-to-field-native.ps1'
         $nativeAst=[Management.Automation.Language.Parser]::ParseFile($nativePath,[ref]$null,[ref]$null)
-        foreach ($name in @('Get-NativeBootSequence','Invoke-EdgeBoxNativeRestart')) {
+        foreach ($name in @('Get-NativeBootSequence','Invoke-EdgeBoxNativeRestart','Get-NativeBootTaskArguments','Assert-NativeBootConsoleTarget','Get-NativeBootConsoleEntry')) {
             $node=$nativeAst.Find({param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq $name},$true)
             . ([scriptblock]::Create($node.Extent.Text))
         }
         $script:apiDown=$false; $script:guest.State='Off'; $script:restartCount=0
         $entry='{aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa}'
+        $vmGuid='12345678-1234-1234-1234-123456789abc'
+        $taskArguments='-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "{0}" -VMName "Custom Box" -ExpectedVmId {1}' -f $nativePath,$vmGuid
+        Assert ((Get-NativeBootTaskArguments $nativePath 'Custom Box' $vmGuid) -ceq $taskArguments) 'native setup still writes the existing task format'
+        $script:taskFixture=[pscustomobject]@{
+            State='Ready'
+            Actions=@([pscustomobject]@{Execute='powershell.exe';Arguments=$taskArguments})
+        }
+        function Get-ScheduledTask {
+            param($TaskPath,$TaskName)
+            if ($TaskPath -ne '\' -or $TaskName -ne 'EdgeBox-Native-Boot') { throw 'wrong task lookup' }
+            $script:taskFixture
+        }
+        $script:firmwareFixture=@([pscustomobject]@{Guid=$entry})
+        function Get-FirmwareEntries { $script:firmwareFixture }
+        $bootConfig=Join-Path $NativeBootTestDir 'native-boot-fixture.conf'
+        $entry | Set-Content -LiteralPath $bootConfig -Encoding ASCII
+        Assert ((Get-NativeBootConsoleEntry $nativePath 'Custom Box' $vmGuid $bootConfig) -eq $entry) 'existing setup identifies the same VM and firmware entry'
+        Assert-Blocked { Get-NativeBootConsoleEntry $nativePath 'Other VM' $vmGuid $bootConfig } 'another selected VM cannot borrow this boot entry'
+        Assert-Blocked { Get-NativeBootConsoleEntry $nativePath 'Custom Box' '87654321-1234-1234-1234-123456789abc' $bootConfig } 'VM recreated with the same name cannot borrow the old entry'
+        Assert-Blocked { Get-NativeBootConsoleEntry ($nativePath+'.old') 'Custom Box' $vmGuid $bootConfig } 'task from a different checkout cannot supply the entry'
+        Assert-Blocked { Get-NativeBootConsoleEntry $nativePath 'Custom Box' $vmGuid ($bootConfig+'.missing') } 'missing boot config cannot start native boot'
+        $script:taskFixture.State='Disabled'
+        Assert-Blocked { Get-NativeBootConsoleEntry $nativePath 'Custom Box' $vmGuid $bootConfig } 'disabled task cannot authorize console boot'
+        $script:taskFixture.State='Ready'; $script:firmwareFixture=@()
+        Assert-Blocked { Get-NativeBootConsoleEntry $nativePath 'Custom Box' $vmGuid $bootConfig } 'missing firmware entry is rejected before any VM shutdown'
+        Assert ($script:restartCount -eq 0 -and $script:stopCount -eq 1) 'console target validation never changes VM or host state'
         $prior=@('{bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb}','{cccccccc-cccc-cccc-cccc-cccccccccccc}')
         $script:queue=$prior; $script:bcdFail=$true; $script:guestStartsDuringBcd=$true
         function bcdedit.exe {
@@ -222,7 +248,7 @@ try {
         Invoke-EdgeBoxNativeRestart $entry 'Custom Box' original
         Assert ($script:restartCount -eq 1 -and $script:queue.Count -eq 1 -and $script:queue[0] -eq $entry) 'native boot with a confirmed stopped VM must request exactly one restart'
         Write-Host 'PASS: manual host restart, custom VM identity and native boot rollback with mocked OS calls'
-    } $project
+    } $project $temp
     Remove-Module $shutdown
     Write-Host 'All tests passed.' -ForegroundColor Green
 } finally {
