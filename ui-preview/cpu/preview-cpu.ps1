@@ -231,6 +231,7 @@ function Show-PreviewConsole {
         $script:lblApps.Text='登録: 3 件 (プレビュー)'
         $script:btnMon.Add_Click({Show-PreviewMonitor})
         $script:btnApps.Add_Click({Show-AppsDialog})
+        $script:btnNativeBoot.Add_Click({ $script:NativeBootPreviewClicked = $true })
         $script:btnApply.Add_Click({Show-Info 'この内容をプレビュー内で確認しました。'})
         # Same confirmation as the console; the preview never runs the engine and leaves the tiles as they are.
         $script:btnUndo.Add_Click({
@@ -259,6 +260,20 @@ function Show-PreviewConsole {
             $script:btnMon.PerformClick()
             Show-Page 'settings'
             [System.Windows.Forms.Application]::DoEvents()
+            $script:NativeBootPreviewClicked = $false
+            $script:btnNativeBoot.PerformClick()
+            if (-not $script:NativeBootPreviewClicked) { throw 'Native boot preview button unavailable' }
+            function Assert-NativeBootLayout {
+                $card = $script:btnNativeBoot.Parent
+                if ($script:btnNativeBoot.Text -ne '単独起動' -or
+                    $script:btnNativeBoot.Bottom -ge $script:cmbVm.Top -or
+                    $script:btnNativeBoot.Right -gt $card.ClientSize.Width -or
+                    $script:btnNativeBoot.Left -lt 150) { throw 'Native boot button overlaps other controls or leaves the card' }
+            }
+            Assert-NativeBootLayout
+            $form.Size = $form.MinimumSize
+            [System.Windows.Forms.Application]::DoEvents()
+            Assert-NativeBootLayout
             $script:btnApps.PerformClick()
             $form.Close()
         }else{[void](Show-PreviewWindow $form 'cpu-console-core')}

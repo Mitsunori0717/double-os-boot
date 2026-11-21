@@ -167,7 +167,7 @@ try {
         Write-Host 'PASS: shutdown, already off, missing/saved VM, real timeout, no forced power-off'
     }
     & $shutdown {
-        param($ProjectRoot)
+        param($ProjectRoot,$NativeBootTestDir)
         function Assert($ok,[string]$why) { if (-not $ok) { throw "TEST FAILED: $why" } }
         function Assert-Blocked([scriptblock]$Action,[string]$why) {
             $blocked=$false
@@ -193,12 +193,48 @@ try {
 
         $nativePath=Join-Path $ProjectRoot 'windows-host\04-reboot-to-field-native.ps1'
         $nativeAst=[Management.Automation.Language.Parser]::ParseFile($nativePath,[ref]$null,[ref]$null)
-        foreach ($name in @('Get-NativeBootSequence','Invoke-EdgeBoxNativeRestart')) {
+        foreach ($name in @('Get-NativeBootSequence','Invoke-EdgeBoxNativeRestart','ConvertFrom-FirmwareEntries','Get-NativeBootConsoleEntry')) {
             $node=$nativeAst.Find({param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq $name},$true)
             . ([scriptblock]::Create($node.Extent.Text))
         }
         $script:apiDown=$false; $script:guest.State='Off'; $script:restartCount=0
         $entry='{aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa}'
+        $vmGuid=[guid]'12345678-1234-1234-1234-123456789abc'
+        $otherEntry='{dddddddd-dddd-dddd-dddd-dddddddddddd}'
+        $rawFirmware=@"
+Firmware Boot Manager
+identifier              {fwbootmgr}
+displayorder            $otherEntry
+
+Windows Boot Manager
+identifier              {9dea862c-5cdd-4e70-acc1-f32b344d4795}
+description             fixture translated Windows Boot Manager name
+
+Firmware Application
+identifier              $entry
+description             Edge Box
+
+ファームウェア アプリケーション
+識別子                  $otherEntry
+説明                    UEFI OS
+"@
+        $script:firmwareFixture=@(ConvertFrom-FirmwareEntries $rawFirmware)
+        Assert ($script:firmwareFixture.Count -eq 2 -and $script:firmwareFixture[0].Guid -eq $entry -and $script:firmwareFixture[1].Guid -eq $otherEntry) 'firmware parser reads English/Japanese identifiers and does not accept a display-order ID or the Windows boot manager'
+        function Get-FirmwareEntries { $script:firmwareFixture }
+        $bootConfig=Join-Path $NativeBootTestDir 'native-boot-fixture.conf'
+        $entry | Set-Content -LiteralPath $bootConfig -Encoding ASCII
+        Assert-Blocked { Get-NativeBootConsoleEntry $vmGuid $bootConfig } 'legacy GUID cannot silently become a verified binding'
+        $binding='VM={0};UEFI={1}' -f $vmGuid,$entry
+        @($entry,$binding) | Set-Content -LiteralPath $bootConfig -Encoding ASCII
+        Assert ((Get-NativeBootConsoleEntry $vmGuid $bootConfig) -eq $entry) 'explicit setup binds the same VM and firmware entry'
+        Assert-Blocked { Get-NativeBootConsoleEntry '87654321-1234-1234-1234-123456789abc' $bootConfig } 'a different VM cannot borrow an entry'
+        Assert-Blocked { Get-NativeBootConsoleEntry $vmGuid ($bootConfig+'.missing') } 'missing boot config cannot start native boot'
+        @($otherEntry,$binding) | Set-Content -LiteralPath $bootConfig -Encoding ASCII
+        Assert-Blocked { Get-NativeBootConsoleEntry $vmGuid $bootConfig } 'another valid firmware GUID cannot replace the confirmed entry'
+        @($entry,$binding) | Set-Content -LiteralPath $bootConfig -Encoding ASCII
+        $script:firmwareFixture=@()
+        Assert-Blocked { Get-NativeBootConsoleEntry $vmGuid $bootConfig } 'missing firmware entry is rejected before any VM shutdown'
+        Assert ($script:restartCount -eq 0 -and $script:stopCount -eq 1) 'console target validation never changes VM or host state'
         $prior=@('{bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb}','{cccccccc-cccc-cccc-cccc-cccccccccccc}')
         $script:queue=$prior; $script:bcdFail=$true; $script:guestStartsDuringBcd=$true
         function bcdedit.exe {
@@ -222,7 +258,7 @@ try {
         Invoke-EdgeBoxNativeRestart $entry 'Custom Box' original
         Assert ($script:restartCount -eq 1 -and $script:queue.Count -eq 1 -and $script:queue[0] -eq $entry) 'native boot with a confirmed stopped VM must request exactly one restart'
         Write-Host 'PASS: manual host restart, custom VM identity and native boot rollback with mocked OS calls'
-    } $project
+    } $project $temp
     Remove-Module $shutdown
     Write-Host 'All tests passed.' -ForegroundColor Green
 } finally {

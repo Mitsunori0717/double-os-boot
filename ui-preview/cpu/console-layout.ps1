@@ -333,6 +333,11 @@ $grpMode.Controls.Add($script:cmbVm)
 $script:lblVm = New-UiLabel "" 420 58 562 "body"
 $script:lblVm.Anchor = "Top,Left,Right"
 $grpMode.Controls.Add($script:lblVm)
+$script:btnNativeBoot = New-UiButton "単独起動" 150
+$script:btnNativeBoot.Name = "NativeBoot"
+$script:btnNativeBoot.Location = New-Object System.Drawing.Point(832, 12)
+$script:btnNativeBoot.Anchor = "Top,Right"
+$grpMode.Controls.Add($script:btnNativeBoot)
 # 方式は「完全分離」固定 (選択肢は出さない)
 
 # --- メモリの割り当て ---
