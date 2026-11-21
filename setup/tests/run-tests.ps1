@@ -193,37 +193,47 @@ try {
 
         $nativePath=Join-Path $ProjectRoot 'windows-host\04-reboot-to-field-native.ps1'
         $nativeAst=[Management.Automation.Language.Parser]::ParseFile($nativePath,[ref]$null,[ref]$null)
-        foreach ($name in @('Get-NativeBootSequence','Invoke-EdgeBoxNativeRestart','Get-NativeBootTaskArguments','Assert-NativeBootConsoleTarget','Get-NativeBootConsoleEntry')) {
+        foreach ($name in @('Get-NativeBootSequence','Invoke-EdgeBoxNativeRestart','ConvertFrom-FirmwareEntries','Get-NativeBootConsoleEntry')) {
             $node=$nativeAst.Find({param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq $name},$true)
             . ([scriptblock]::Create($node.Extent.Text))
         }
         $script:apiDown=$false; $script:guest.State='Off'; $script:restartCount=0
         $entry='{aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa}'
-        $vmGuid='12345678-1234-1234-1234-123456789abc'
-        $taskArguments='-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "{0}" -VMName "Custom Box" -ExpectedVmId {1}' -f $nativePath,$vmGuid
-        Assert ((Get-NativeBootTaskArguments $nativePath 'Custom Box' $vmGuid) -ceq $taskArguments) 'native setup still writes the existing task format'
-        $script:taskFixture=[pscustomobject]@{
-            State='Ready'
-            Actions=@([pscustomobject]@{Execute='powershell.exe';Arguments=$taskArguments})
-        }
-        function Get-ScheduledTask {
-            param($TaskPath,$TaskName)
-            if ($TaskPath -ne '\' -or $TaskName -ne 'EdgeBox-Native-Boot') { throw 'wrong task lookup' }
-            $script:taskFixture
-        }
-        $script:firmwareFixture=@([pscustomobject]@{Guid=$entry})
+        $vmGuid=[guid]'12345678-1234-1234-1234-123456789abc'
+        $otherEntry='{dddddddd-dddd-dddd-dddd-dddddddddddd}'
+        $rawFirmware=@"
+Firmware Boot Manager
+identifier              {fwbootmgr}
+displayorder            $otherEntry
+
+Windows Boot Manager
+identifier              {9dea862c-5cdd-4e70-acc1-f32b344d4795}
+description             fixture translated Windows Boot Manager name
+
+Firmware Application
+identifier              $entry
+description             Edge Box
+
+ファームウェア アプリケーション
+識別子                  $otherEntry
+説明                    UEFI OS
+"@
+        $script:firmwareFixture=@(ConvertFrom-FirmwareEntries $rawFirmware)
+        Assert ($script:firmwareFixture.Count -eq 2 -and $script:firmwareFixture[0].Guid -eq $entry -and $script:firmwareFixture[1].Guid -eq $otherEntry) 'firmware parser reads English/Japanese identifiers and does not accept a display-order ID or the Windows boot manager'
         function Get-FirmwareEntries { $script:firmwareFixture }
         $bootConfig=Join-Path $NativeBootTestDir 'native-boot-fixture.conf'
         $entry | Set-Content -LiteralPath $bootConfig -Encoding ASCII
-        Assert ((Get-NativeBootConsoleEntry $nativePath 'Custom Box' $vmGuid $bootConfig) -eq $entry) 'existing setup identifies the same VM and firmware entry'
-        Assert-Blocked { Get-NativeBootConsoleEntry $nativePath 'Other VM' $vmGuid $bootConfig } 'another selected VM cannot borrow this boot entry'
-        Assert-Blocked { Get-NativeBootConsoleEntry $nativePath 'Custom Box' '87654321-1234-1234-1234-123456789abc' $bootConfig } 'VM recreated with the same name cannot borrow the old entry'
-        Assert-Blocked { Get-NativeBootConsoleEntry ($nativePath+'.old') 'Custom Box' $vmGuid $bootConfig } 'task from a different checkout cannot supply the entry'
-        Assert-Blocked { Get-NativeBootConsoleEntry $nativePath 'Custom Box' $vmGuid ($bootConfig+'.missing') } 'missing boot config cannot start native boot'
-        $script:taskFixture.State='Disabled'
-        Assert-Blocked { Get-NativeBootConsoleEntry $nativePath 'Custom Box' $vmGuid $bootConfig } 'disabled task cannot authorize console boot'
-        $script:taskFixture.State='Ready'; $script:firmwareFixture=@()
-        Assert-Blocked { Get-NativeBootConsoleEntry $nativePath 'Custom Box' $vmGuid $bootConfig } 'missing firmware entry is rejected before any VM shutdown'
+        Assert-Blocked { Get-NativeBootConsoleEntry $vmGuid $bootConfig } 'legacy GUID cannot silently become a verified binding'
+        $binding='VM={0};UEFI={1}' -f $vmGuid,$entry
+        @($entry,$binding) | Set-Content -LiteralPath $bootConfig -Encoding ASCII
+        Assert ((Get-NativeBootConsoleEntry $vmGuid $bootConfig) -eq $entry) 'explicit setup binds the same VM and firmware entry'
+        Assert-Blocked { Get-NativeBootConsoleEntry '87654321-1234-1234-1234-123456789abc' $bootConfig } 'a different VM cannot borrow an entry'
+        Assert-Blocked { Get-NativeBootConsoleEntry $vmGuid ($bootConfig+'.missing') } 'missing boot config cannot start native boot'
+        @($otherEntry,$binding) | Set-Content -LiteralPath $bootConfig -Encoding ASCII
+        Assert-Blocked { Get-NativeBootConsoleEntry $vmGuid $bootConfig } 'another valid firmware GUID cannot replace the confirmed entry'
+        @($entry,$binding) | Set-Content -LiteralPath $bootConfig -Encoding ASCII
+        $script:firmwareFixture=@()
+        Assert-Blocked { Get-NativeBootConsoleEntry $vmGuid $bootConfig } 'missing firmware entry is rejected before any VM shutdown'
         Assert ($script:restartCount -eq 0 -and $script:stopCount -eq 1) 'console target validation never changes VM or host state'
         $prior=@('{bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb}','{cccccccc-cccc-cccc-cccc-cccccccccccc}')
         $script:queue=$prior; $script:bcdFail=$true; $script:guestStartsDuringBcd=$true

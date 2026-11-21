@@ -40,50 +40,45 @@ if (-not $isAdmin) {
     exit 1
 }
 
-function Get-NativeBootTaskArguments([string]$ScriptPath, [string]$TargetName, [string]$TargetId) {
-    '-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "{0}" -VMName "{1}" -ExpectedVmId {2}' -f $ScriptPath, $TargetName, $TargetId
-}
-
-# field-boot-entry.conf only contains an entry GUID. Do not assume it belongs to the selected VM.
-function Assert-NativeBootConsoleTarget([string]$ScriptPath, [string]$TargetName, [string]$TargetId) {
-    $id = [guid]::Empty
-    if (-not [guid]::TryParse($TargetId, [ref]$id) -or $id -eq [guid]::Empty) {
-        throw '対象の Edge Box を確認できません。'
-    }
-    $task = Get-ScheduledTask -TaskPath '\' -TaskName 'EdgeBox-Native-Boot' -ErrorAction SilentlyContinue
-    $actions = @($task.Actions)
-    $expected = Get-NativeBootTaskArguments $ScriptPath $TargetName ($id.ToString('D'))
-    if (-not $task -or $task.State -eq 'Disabled' -or $actions.Count -ne 1 -or
-        $actions[0].Execute -ne 'powershell.exe' -or $actions[0].Arguments -cne $expected) {
-        throw '選択した Edge Box の単独起動が設定されていません。'
-    }
-}
-
 # --- UEFI のファームウェア起動エントリを列挙する ---
-function Get-FirmwareEntries {
-    $raw = (bcdedit /enum firmware | Out-String) -split "(\r?\n){2,}"
-    $entries = @()
-    foreach ($block in $raw) {
-        if ($block -notmatch '\{[0-9a-fA-F]{8}-[0-9a-fA-F-]{27}\}') { continue }
-        $guid = [regex]::Match($block, '\{[0-9a-fA-F]{8}-[0-9a-fA-F-]{27}\}').Value
-        $desc = ""
-        foreach ($line in ($block -split "\r?\n")) {
-            if ($line -match '^(description|説明)\s+(.+)$') { $desc = $Matches[2].Trim(); break }
-        }
-        if ($desc -match 'Windows Boot Manager') { continue }
-        $entries += [pscustomobject]@{ Guid = $guid; Description = $desc }
+function ConvertFrom-FirmwareEntries([string]$Text) {
+    $guidPattern = '\{[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}\}'
+    foreach ($block in ($Text -split '(?:\r?\n){2,}')) {
+        # An entry ID must be the identifier, not a GUID from displayorder or another property.
+        $identity = [regex]::Match($block, "(?im)^[ \t]*(?:identifier|識別子)[ \t]+($guidPattern)[ \t]*\r?$")
+        if (-not $identity.Success) { continue }
+        $id = ([guid]::Parse($identity.Groups[1].Value)).ToString('B')
+        if ($id -in @('{00000000-0000-0000-0000-000000000000}', '{9dea862c-5cdd-4e70-acc1-f32b344d4795}', '{a5a30fa2-3d06-4e9f-b5f4-a01df9d1fcba}')) { continue }
+        $description = [regex]::Match($block, '(?im)^[ \t]*(?:description|説明)[ \t]+([^\r\n]+)')
+        $desc = $description.Groups[1].Value.Trim()
+        if ($desc -match '^Windows Boot Manager$') { continue }
+        [pscustomobject]@{ Guid = $id; Description = $desc }
     }
-    return $entries
 }
 
-function Get-NativeBootConsoleEntry([string]$ScriptPath, [string]$TargetName, [string]$TargetId, [string]$ConfigPath) {
-    Assert-NativeBootConsoleTarget $ScriptPath $TargetName $TargetId
-    if (-not (Test-Path -LiteralPath $ConfigPath -PathType Leaf)) { throw '単独起動が設定されていません。' }
-    $entry = ([guid]::Parse((Get-Content -LiteralPath $ConfigPath -First 1).Trim())).ToString('B')
-    if ($entry -eq [guid]::Empty.ToString('B') -or $entry -notin @(Get-FirmwareEntries | ForEach-Object Guid)) {
-        throw '単独起動先を確認できません。'
+function Get-FirmwareEntries {
+    $raw = (& bcdedit.exe /enum firmware | Out-String)
+    if ($LASTEXITCODE -ne 0) { throw 'UEFI の起動先を確認できません。' }
+    ConvertFrom-FirmwareEntries $raw
+}
+
+# The first line remains compatible with the desktop shortcut. The second binds both IDs;
+# it is written only after selecting the actual Edge Box firmware entry in -Setup.
+function Get-NativeBootConsoleEntry([guid]$TargetId, [string]$ConfigPath) {
+    if (-not (Test-Path -LiteralPath $ConfigPath -PathType Leaf)) { throw '単独起動先を設定してください。' }
+    $lines = @(Get-Content -LiteralPath $ConfigPath -TotalCount 2)
+    $entryId = [guid]::Empty
+    if ($TargetId -eq [guid]::Empty -or $lines.Count -ne 2 -or
+        -not [guid]::TryParse($lines[0], [ref]$entryId) -or $entryId -eq [guid]::Empty) {
+        throw '単独起動先を設定してください。'
     }
-    $entry
+    $id = $entryId.ToString('B')
+    if ($lines[1] -ne ('VM={0};UEFI={1}' -f $TargetId.ToString('D'), $id)) {
+        throw '選択した Edge Box の単独起動先を設定してください。'
+    }
+    $entries = @(Get-FirmwareEntries | Where-Object Guid -eq $id)
+    if ($entries.Count -ne 1) { throw '単独起動先を確認できません。' }
+    $id
 }
 
 if (-not $Setup -and -not $FromCpuConsole -and -not (Test-Path $ConfFile)) {
@@ -102,13 +97,13 @@ if ($Setup) {
         throw '対象の Edge Box を一意に確認できません。登録名を -VMName で指定してください。'
     }
     $ExpectedVmId=([guid]$selected[0].Id).ToString('D')
-    if (Test-Path $ConfFile) {
-        # すでに選択済みなら聞き直さない (アイコン・タスクの作り直しだけ行う)
-        Write-Host "起動先は選択済みのため、そのまま使います: $((Get-Content $ConfFile -First 1).Trim())" -ForegroundColor Cyan
-        Write-Host "  (選び直したい場合は field-boot-entry.conf を削除してから -Setup を実行)"
+    $configuredEntry = $null
+    try { $configuredEntry = Get-NativeBootConsoleEntry ([guid]$ExpectedVmId) $ConfFile } catch { }
+    if ($configuredEntry) {
+        Write-Host "起動先は選択済みのため、そのまま使います: $configuredEntry" -ForegroundColor Cyan
     } else {
         Write-Host "UEFI の起動エントリから Edge Box のものを選択します。" -ForegroundColor Cyan
-        $entries = Get-FirmwareEntries
+        $entries = @(Get-FirmwareEntries)
         if ($entries.Count -eq 0) {
             Write-Error "ファームウェア起動エントリが見つかりません。'bcdedit /enum firmware' の出力を確認してください。"
             exit 1
@@ -124,20 +119,22 @@ if ($Setup) {
         $entry = $null
         while (-not $entry) {
             $sel = (Read-Host "Edge Box の番号 (0-$($entries.Count - 1))").Trim()
-            if ($sel -match '^\d+$' -and [int]$sel -lt $entries.Count) {
-                $entry = $entries[[int]$sel]
+            $index = 0
+            if ([int]::TryParse($sel, [ref]$index) -and $index -ge 0 -and $index -lt $entries.Count) {
+                $entry = $entries[$index]
             } else {
                 Write-Host "  0 から $($entries.Count - 1) の番号を入力してください。" -ForegroundColor Yellow
             }
         }
-        $entry.Guid | Set-Content -Path $ConfFile -Encoding ASCII
+        @($entry.Guid, ('VM={0};UEFI={1}' -f $ExpectedVmId, $entry.Guid)) |
+            Set-Content -LiteralPath $ConfFile -Encoding ASCII
         Write-Host "保存しました: $($entry.Description) $($entry.Guid)" -ForegroundColor Green
     }
 
     # --- UAC 確認なしで実行できるよう、管理者権限付きタスク + それを起動するアイコンを作成 ---
     $taskName = "EdgeBox-Native-Boot"
     $action = New-ScheduledTaskAction -Execute "powershell.exe" `
-        -Argument (Get-NativeBootTaskArguments $PSCommandPath $VMName $ExpectedVmId)
+        -Argument "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$PSCommandPath`" -VMName `"$VMName`" -ExpectedVmId $ExpectedVmId"
     $ts = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -ExecutionTimeLimit (New-TimeSpan -Hours 1)
     Register-ScheduledTask -TaskName $taskName -Action $action -Settings $ts -RunLevel Highest -Force | Out-Null
 
@@ -166,7 +163,7 @@ if ($FromCpuConsole) {
         $selected = @(Get-VM -Id $selectedId -ErrorAction Stop)
         if ($selected.Count -ne 1 -or $selected[0].Id -ne $selectedId) { throw '対象の Edge Box を確認できません。' }
         $VMName = [string]$selected[0].Name
-        $guid = Get-NativeBootConsoleEntry $PSCommandPath $VMName $ExpectedVmId $ConfFile
+        $guid = Get-NativeBootConsoleEntry $selectedId $ConfFile
     } catch {
         [System.Windows.Forms.MessageBox]::Show($_.Exception.Message, 'Edge Box 単独起動', 'OK', 'Warning') | Out-Null
         exit 1
@@ -232,7 +229,7 @@ function Invoke-EdgeBoxNativeRestart([string]$BootEntry,[string]$TargetName,[str
 }
 Import-Module (Join-Path $PSScriptRoot 'vm-shutdown.psm1') -ErrorAction Stop
 try {
-    if ($FromCpuConsole -and $guid -ne (Get-NativeBootConsoleEntry $PSCommandPath $VMName $ExpectedVmId $ConfFile)) {
+    if ($FromCpuConsole -and $guid -ne (Get-NativeBootConsoleEntry $selectedId $ConfFile)) {
         throw '確認中に単独起動先が変更されました。'
     }
     Invoke-EdgeBoxNativeRestart $guid $VMName $ExpectedVmId
