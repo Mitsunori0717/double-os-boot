@@ -153,6 +153,7 @@ if ($Setup) {
     if ($Setup) { exit 0 }
 }
 
+$boundTargetId = [guid]::Empty
 if ($FromCpuConsole) {
     Add-Type -AssemblyName System.Windows.Forms
     try {
@@ -163,7 +164,8 @@ if ($FromCpuConsole) {
         $selected = @(Get-VM -Id $selectedId -ErrorAction Stop)
         if ($selected.Count -ne 1 -or $selected[0].Id -ne $selectedId) { throw '対象の Edge Box を確認できません。' }
         $VMName = [string]$selected[0].Name
-        $guid = Get-NativeBootConsoleEntry $selectedId $ConfFile
+        $boundTargetId = $selectedId
+        $guid = Get-NativeBootConsoleEntry $boundTargetId $ConfFile
     } catch {
         [System.Windows.Forms.MessageBox]::Show($_.Exception.Message, 'Edge Box 単独起動', 'OK', 'Warning') | Out-Null
         exit 1
@@ -173,7 +175,20 @@ if ($FromCpuConsole) {
         'YesNo', 'Warning', 'Button2')
     if ($r -ne [System.Windows.Forms.DialogResult]::Yes) { exit 0 }
 } else {
-    $guid = ([guid]::Parse((Get-Content $ConfFile -First 1).Trim())).ToString('B')
+    $lines = @(Get-Content -LiteralPath $ConfFile -TotalCount 2)
+    if ($lines.Count -gt 1) {
+        # A stale shortcut may still target a different VM if setup was interrupted.
+        $selected = @(Get-VM -ErrorAction Stop | Where-Object Name -eq $VMName)
+        if ($selected.Count -ne 1 -or -not $selected[0].Id -or
+            ($ExpectedVmId -and [string]$selected[0].Id -ne $ExpectedVmId)) {
+            throw '対象の Edge Box を確認できません。'
+        }
+        $boundTargetId = [guid]$selected[0].Id
+        $ExpectedVmId = $boundTargetId.ToString('D')
+        $guid = Get-NativeBootConsoleEntry $boundTargetId $ConfFile
+    } else {
+        $guid = ([guid]::Parse($lines[0])).ToString('B')
+    }
 }
 
 Write-Host "==============================================" -ForegroundColor Yellow
@@ -229,7 +244,7 @@ function Invoke-EdgeBoxNativeRestart([string]$BootEntry,[string]$TargetName,[str
 }
 Import-Module (Join-Path $PSScriptRoot 'vm-shutdown.psm1') -ErrorAction Stop
 try {
-    if ($FromCpuConsole -and $guid -ne (Get-NativeBootConsoleEntry $selectedId $ConfFile)) {
+    if ($boundTargetId -ne [guid]::Empty -and $guid -ne (Get-NativeBootConsoleEntry $boundTargetId $ConfFile)) {
         throw '確認中に単独起動先が変更されました。'
     }
     Invoke-EdgeBoxNativeRestart $guid $VMName $ExpectedVmId
